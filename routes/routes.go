@@ -1,15 +1,30 @@
 package routes
 
 import (
+	"time"
+
 	"github.com/KubeOrchestra/core/handlers"
+	"github.com/KubeOrchestra/core/middleware"
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )
 
 func SetupRouter() *gin.Engine {
-	r := gin.Default()
+	r := gin.New()
+	r.Use(gin.Recovery())
+
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:  []string{"*"}, // TODO(naman): restrict this to specific origins
+		AllowMethods:  []string{"GET", "POST", "PUT", "DELETE", "PATCH"},
+		AllowHeaders:  []string{"Origin", "Content-Type", "Authorization"},
+		ExposeHeaders: []string{"Content-Length"},
+		MaxAge:        12 * time.Hour,
+	}))
 
 	v1 := r.Group("/v1")
 	{
+
+		v1.Use(middleware.LogsMiddleware())
 		v1.GET("/", handlers.HelloHandler)
 	}
 

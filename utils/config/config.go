@@ -1,7 +1,9 @@
 package config
 
 import (
-	"github.com/sirupsen/logrus"
+	"os"
+
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 )
 
@@ -16,7 +18,7 @@ func Load() error {
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-			logrus.Info("No config file found, using environment variables")
+			log.Info("No config file found, using environment variables")
 		} else {
 			return err
 		}
@@ -30,4 +32,8 @@ func GetPort() string {
 
 func GetGinMode() string {
 	return viper.GetString("GIN_MODE")
+}
+
+func GetEnv(key string) string {
+	return os.Getenv(key)
 }
