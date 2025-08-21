@@ -5,4 +5,4 @@
 PORT: 3000
 
 # Gin mode: debug, release, test
-GIN_MODE: debug
+GIN_MODE: release

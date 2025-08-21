@@ -4,6 +4,7 @@ import (
 	"github.com/KubeOrchestra/core/routes"
 	"github.com/KubeOrchestra/core/utils/config"
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 	"github.com/sirupsen/logrus"
 )
 
@@ -11,6 +12,7 @@ func main() {
 	if err := config.Load(); err != nil {
 		logrus.Fatalf("Failed to load configuration: %v", err)
 	}
+	logrus.SetFormatter(&logrus.JSONFormatter{})
 
 	port := config.GetPort()
 	ginMode := config.GetGinMode()
@@ -22,4 +24,8 @@ func main() {
 	if err := router.Run(":" + port); err != nil {
 		logrus.Fatal("Failed to start server:", err)
 	}
+}
+
+func init() {
+	godotenv.Load()
 }
