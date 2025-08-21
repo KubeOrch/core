@@ -27,5 +27,7 @@ func main() {
 }
 
 func init() {
-	godotenv.Load()
+	if err := godotenv.Load(); err != nil {
+		logrus.Error("Failed loading .env file, will use environment variables")
+	}
 }

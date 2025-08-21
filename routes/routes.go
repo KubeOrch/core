@@ -11,6 +11,7 @@ import (
 
 func SetupRouter() *gin.Engine {
 	r := gin.New()
+	r.Use(gin.Recovery())
 
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:  []string{"*"}, // TODO(naman): restrict this to specific origins
