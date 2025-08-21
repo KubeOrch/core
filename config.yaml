@@ -1,0 +1,8 @@
+# KubeOrchestra Configuration
+# You can override these values with environment variables
+
+# Server port
+PORT: 3000
+
+# Gin mode: debug, release, test
+GIN_MODE: debug
