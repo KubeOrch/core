@@ -30,8 +30,8 @@ jobs:
             const tasksPath = path.join(process.env.GITHUB_WORKSPACE, 'docs', 'tasks.md');
             const tasksContent = fs.readFileSync(tasksPath, 'utf8');
             
-            // Parse tasks from the markdown file
-            const taskRegex = /### (CORE-\d+): (.+?)\n[\s\S]*?\*\*Description\*\*: (.+?)(?:\n- [\s\S]*?)?\*\*Deliverables\*\*: (.+?)(?=\n\n|\n###|$)/g;
+            // Parse tasks from the markdown file - updated regex to capture bullet points
+            const taskRegex = /### (CORE-\d+): (.+?)\n[\s\S]*?\*\*Description\*\*: (.+?(?:\n- .+?)*)\n\*\*Deliverables\*\*: (.+?)(?=\n\n|\n###|$)/g;
             const tasks = [];
             let match;
             
@@ -72,19 +72,128 @@ jobs:
               return;
             }
             
+            // Get milestone (if exists)
+            let milestoneNumber = null;
+            try {
+              const milestones = await github.rest.issues.listMilestones({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open'
+              });
+              // Use the first open milestone or search for specific one
+              if (milestones.data.length > 0) {
+                milestoneNumber = milestones.data[0].number;
+              }
+            } catch (error) {
+              console.log('No milestone found:', error.message);
+            }
+            
             // Create issues for selected tasks
             for (const task of tasksToCreate) {
               try {
-                const issueBody = `**Description**: ${task.description}\n\n**Deliverables**: ${task.deliverables}`;
+                // Format the description properly with bullet points on new lines
+                const formattedDescription = task.description.trim();
+                const issueBody = `**Description**: ${formattedDescription}\n\n**Deliverables**: ${task.deliverables}`;
                 
-                const issue = await github.rest.issues.create({
+                const issueData = {
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   title: task.title,
                   body: issueBody
-                });
+                };
+                
+                // Add milestone if available
+                if (milestoneNumber) {
+                  issueData.milestone = milestoneNumber;
+                }
+                
+                const issue = await github.rest.issues.create(issueData);
                 
                 console.log(`Created issue #${issue.data.number}: ${task.title}`);
+                
+                // Add to project and set custom fields using GraphQL
+                try {
+                  // Use GraphQL to add to Projects v2 and set custom fields
+                  const projectQuery = await github.graphql(`
+                    query {
+                      organization(login: "KubeOrchestra") {
+                        projectsV2(first: 10) {
+                          nodes {
+                            id
+                            title
+                            fields(first: 20) {
+                              nodes {
+                                ... on ProjectV2Field {
+                                  id
+                                  name
+                                }
+                                ... on ProjectV2SingleSelectField {
+                                  id
+                                  name
+                                  options {
+                                    id
+                                    name
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  `);
+                  
+                  const project = projectQuery.organization.projectsV2.nodes.find(p => 
+                    p.title === 'KubeOrchestra Development'
+                  );
+                  
+                  if (project) {
+                    // Add issue to project
+                    const addResult = await github.graphql(`
+                      mutation {
+                        addProjectV2ItemById(input: {
+                          projectId: "${project.id}"
+                          contentId: "${issue.data.node_id}"
+                        }) {
+                          item {
+                            id
+                          }
+                        }
+                      }
+                    `);
+                    
+                    const itemId = addResult.addProjectV2ItemById.item.id;
+                    
+                    // Find the Type field and Feature option
+                    const typeField = project.fields.nodes.find(f => f.name === 'Type');
+                    if (typeField && typeField.options) {
+                      const featureOption = typeField.options.find(o => o.name === 'Feature');
+                      if (featureOption) {
+                        // Set the Type field to Feature
+                        await github.graphql(`
+                          mutation {
+                            updateProjectV2ItemFieldValue(input: {
+                              projectId: "${project.id}"
+                              itemId: "${itemId}"
+                              fieldId: "${typeField.id}"
+                              value: {
+                                singleSelectOptionId: "${featureOption.id}"
+                              }
+                            }) {
+                              projectV2Item {
+                                id
+                              }
+                            }
+                          }
+                        `);
+                        console.log('Set Type to Feature in project');
+                      }
+                    }
+                    console.log(`Added issue to project: ${project.title}`);
+                  }
+                } catch (error) {
+                  console.log('Could not add to project or set custom fields:', error.message);
+                }
                 
                 // Add a small delay to avoid rate limiting
                 await new Promise(resolve => setTimeout(resolve, 1000));
