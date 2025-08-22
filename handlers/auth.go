@@ -9,12 +9,21 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-var (
-	users    = make(map[string]models.User)
-	usersMux = sync.RWMutex{}
-	nextID   = uint(1)
-	idMux    = sync.Mutex{}
-)
+type UserStore struct {
+	users    map[string]models.User
+	usersMux sync.RWMutex
+	nextID   uint
+	idMux    sync.Mutex
+}
+
+func NewUserStore() *UserStore {
+	return &UserStore{
+		users:  make(map[string]models.User),
+		nextID: 1,
+	}
+}
+
+var userStore = NewUserStore()
 
 func RegisterHandler(c *gin.Context) {
 	var req models.RegisterRequest
@@ -25,11 +34,10 @@ func RegisterHandler(c *gin.Context) {
 		return
 	}
 
-	usersMux.RLock()
-	_, exists := users[req.Email]
-	usersMux.RUnlock()
+	userStore.usersMux.Lock()
+	defer userStore.usersMux.Unlock()
 
-	if exists {
+	if _, exists := userStore.users[req.Email]; exists {
 		c.JSON(http.StatusConflict, gin.H{
 			"error": "User already exists",
 		})
@@ -44,10 +52,10 @@ func RegisterHandler(c *gin.Context) {
 		return
 	}
 
-	idMux.Lock()
-	userID := nextID
-	nextID++
-	idMux.Unlock()
+	userStore.idMux.Lock()
+	userID := userStore.nextID
+	userStore.nextID++
+	userStore.idMux.Unlock()
 
 	user := models.User{
 		ID:       userID,
@@ -56,15 +64,11 @@ func RegisterHandler(c *gin.Context) {
 		Password: hashedPassword,
 	}
 
-	usersMux.Lock()
-	users[req.Email] = user
-	usersMux.Unlock()
+	userStore.users[req.Email] = user
 
 	token, err := utils.GenerateJWTToken(user.ID, user.Email)
 	if err != nil {
-		usersMux.Lock()
-		delete(users, req.Email)
-		usersMux.Unlock()
+		delete(userStore.users, req.Email)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Registration failed",
 		})
@@ -86,9 +90,9 @@ func LoginHandler(c *gin.Context) {
 		return
 	}
 
-	usersMux.RLock()
-	user, exists := users[req.Email]
-	usersMux.RUnlock()
+	userStore.usersMux.RLock()
+	user, exists := userStore.users[req.Email]
+	userStore.usersMux.RUnlock()
 
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{

@@ -9,6 +9,12 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+var jwtSecret string
+
+func init() {
+	jwtSecret = os.Getenv("JWT_SECRET")
+}
+
 type JWTClaims struct {
 	UserID uint   `json:"user_id"`
 	Email  string `json:"email"`
@@ -26,7 +32,6 @@ func CheckPasswordHash(password, hash string) bool {
 }
 
 func GenerateJWTToken(userID uint, email string) (string, error) {
-	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
 		return "", errors.New("JWT_SECRET environment variable not set")
 	}
@@ -46,7 +51,6 @@ func GenerateJWTToken(userID uint, email string) (string, error) {
 }
 
 func ValidateJWTToken(tokenString string) (*JWTClaims, error) {
-	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
 		return nil, errors.New("JWT_SECRET environment variable not set")
 	}

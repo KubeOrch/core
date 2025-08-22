@@ -8,6 +8,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+type contextKey string
+
+const (
+	UserIDKey    contextKey = "user_id"
+	UserEmailKey contextKey = "user_email"
+)
+
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
@@ -38,8 +45,8 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		c.Set("user_id", claims.UserID)
-		c.Set("user_email", claims.Email)
+		c.Set(string(UserIDKey), claims.UserID)
+		c.Set(string(UserEmailKey), claims.Email)
 
 		c.Next()
 	}
