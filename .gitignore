@@ -26,7 +26,27 @@ go.work.sum
 
 # env file
 .env
+.env.local
+.env.*.local
 
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Build artifacts
+kubeorchestra
+kubeorchestra.exe
+*.exe
+
+# Logs
+*.log
+logs/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
