@@ -28,5 +28,12 @@ func SetupRouter() *gin.Engine {
 		v1.GET("/", handlers.HelloHandler)
 	}
 
+	// Auth routes
+	auth := r.Group("/api/auth")
+	{
+		auth.POST("/register", handlers.RegisterHandler)
+		auth.POST("/login", handlers.LoginHandler)
+	}
+
 	return r
 }
