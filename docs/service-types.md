@@ -1,5 +1,107 @@
 # KubeOrchestra - Comprehensive Service Types Catalog
 
+## Overview
+This catalog is divided into two main categories:
+1. **Kubernetes Infrastructure Components** - Essential cluster infrastructure (Phase 1)
+2. **Application Services** - User-deployable applications (Phase 2)
+
+# Part 1: Kubernetes Infrastructure Components
+
+## 1. Networking Components
+
+### Ingress Controllers
+- **NGINX Ingress Controller** - Production-grade ingress
+- **Traefik** - Modern reverse proxy with auto-discovery
+- **HAProxy Ingress** - High-performance ingress
+- **Kong Ingress** - API Gateway ingress
+- **Contour** - Envoy-based ingress
+
+### Load Balancers
+- **MetalLB** - Bare metal load balancer
+- **kube-vip** - Virtual IP and load balancer
+- **PureLB** - Service load balancer
+
+### CNI Plugins
+- **Calico** - Network policies and security
+- **Flannel** - Simple overlay network
+- **Weave Net** - Automatic network mesh
+- **Cilium** - eBPF-based networking
+
+### Service Mesh
+- **Istio** - Complete service mesh
+- **Linkerd** - Lightweight service mesh
+- **Consul Connect** - Service mesh and discovery
+
+## 2. Storage Components
+
+### Storage Provisioners
+- **local-path-provisioner** - Local storage for development
+- **nfs-subdir-external-provisioner** - NFS dynamic provisioning
+- **rook-ceph** - Cloud-native storage orchestrator
+- **longhorn** - Distributed block storage
+- **openebs** - Container attached storage
+
+### CSI Drivers
+- **csi-driver-nfs** - NFS CSI driver
+- **csi-driver-smb** - SMB/CIFS CSI driver
+- **democratic-csi** - Multiple storage backends
+
+## 3. DNS & Discovery
+
+- **CoreDNS** - Kubernetes DNS server
+- **external-dns** - Automatic DNS record management
+- **k8s_gateway** - DNS gateway for external access
+
+## 4. Security Components
+
+### Certificate Management
+- **cert-manager** - Automatic TLS certificates
+- **trust-manager** - Trust bundle distribution
+
+### Secret Management
+- **sealed-secrets** - Encrypted secrets
+- **external-secrets-operator** - Sync external secrets
+- **secrets-store-csi-driver** - Mount secrets as volumes
+
+### Policy Engines
+- **Open Policy Agent (OPA)** - Policy enforcement
+- **Gatekeeper** - OPA for Kubernetes
+- **Kyverno** - Kubernetes native policies
+- **Polaris** - Best practices validation
+
+## 5. Monitoring & Observability Infrastructure
+
+### Metrics
+- **metrics-server** - Resource metrics API
+- **kube-state-metrics** - Cluster state metrics
+- **node-exporter** - Node metrics
+- **prometheus-operator** - Prometheus management
+
+### Logging Infrastructure
+- **fluentd** - Log collector
+- **fluent-bit** - Lightweight log forwarder
+- **promtail** - Loki log collector
+
+## 6. Cluster Management
+
+### Autoscaling
+- **cluster-autoscaler** - Node autoscaling
+- **karpenter** - Just-in-time node provisioning
+- **KEDA** - Event-driven autoscaling
+
+### Backup & Restore
+- **velero** - Cluster backup and restore
+- **etcd-backup-operator** - etcd backup automation
+
+### Operators & Controllers
+- **reloader** - ConfigMap/Secret reload trigger
+- **descheduler** - Pod eviction for better scheduling
+- **node-problem-detector** - Node issue detection
+
+---
+
+# Part 2: Application Services (User Deployable)
+
 ## 1. Web Applications & APIs
 
 ### Frontend Services
@@ -305,23 +407,39 @@
 
 ## Implementation Priorities
 
-### Phase 1: Core Services (Must Have)
-1. Web Applications (nginx, Node.js, Python)
-2. Databases (PostgreSQL, MongoDB, Redis)
-3. Load Balancers (NGINX, Traefik)
-4. Basic Monitoring (Prometheus, Grafana)
+### Phase 1: Kubernetes Infrastructure Components (Must Have First)
+1. **Networking**
+   - Ingress Controller (NGINX Ingress)
+   - Load Balancer (MetalLB for bare metal)
+   - CNI Plugin (Calico or Flannel)
+2. **Storage**
+   - local-path-provisioner (development)
+   - NFS provisioner (shared storage)
+3. **DNS & Discovery**
+   - CoreDNS configuration
+   - external-dns (optional)
+4. **Security**
+   - cert-manager (TLS certificates)
+   - sealed-secrets (secret management)
+5. **Monitoring**
+   - metrics-server (HPA/VPA support)
+   - kube-state-metrics (cluster metrics)
 
-### Phase 2: Essential Services
-1. Message Queues (RabbitMQ, Kafka)
-2. Object Storage (MinIO)
-3. Logging Stack (ELK or Loki)
-4. Ingress Controllers
+### Phase 2: Application Services (User Applications)
+1. **Core Applications**
+   - Web Applications (nginx, Node.js, Python)
+   - Databases (PostgreSQL, MongoDB, Redis)
+   - Message Queues (RabbitMQ, Kafka)
+2. **Supporting Services**
+   - Object Storage (MinIO)
+   - Caching (Redis, Memcached)
+   - Search (Elasticsearch)
 
-### Phase 3: Advanced Services
-1. Service Mesh (Istio)
-2. CI/CD (Jenkins, ArgoCD)
-3. Security (cert-manager, Vault)
-4. Backup Solutions
+### Phase 3: Advanced Infrastructure
+1. Service Mesh (Istio, Linkerd)
+2. Advanced Storage (Longhorn, Rook-Ceph)
+3. Policy Engines (OPA, Kyverno)
+4. Backup Solutions (Velero)
 
 ### Phase 4: Specialized Services
 1. ML Platforms (Kubeflow)
@@ -343,10 +461,44 @@ Each service type should support:
 
 ## Template Structure
 
-Each service template should include:
+### For Kubernetes Infrastructure Components:
+```yaml
+metadata:
+  name: component-name
+  type: k8s-component
+  category: networking/storage/dns/security/monitoring
+  version: 1.0.0
+  description: Component description
+  icon: base64-encoded-icon
+  
+spec:
+  namespace: kube-system  # or other system namespace
+  priority: critical/high/normal  # deployment priority
+  singleton: true/false  # only one instance per cluster
+  
+defaults:
+  mode: development/production
+  resources:
+    cpu: "100m"
+    memory: "128Mi"
+  
+configuration:
+  # Component-specific configuration
+  
+requirements:
+  k8sVersion: ">=1.24.0"
+  features: ["NetworkPolicy", "PersistentVolume"]
+  
+dependencies:
+  required: []  # Other K8s components needed
+  conflicts: []  # Components that conflict
+```
+
+### For Application Services:
 ```yaml
 metadata:
   name: service-name
+  type: application
   category: database/web/messaging
   version: 1.0.0
   description: Service description
@@ -366,8 +518,9 @@ autoConfig:
   security: true
   
 dependencies:
-  required: []
-  optional: []
+  k8sComponents: []  # Required K8s infrastructure
+  required: []  # Other apps needed
+  optional: []  # Optional integrations
   
 ports:
   - name: http

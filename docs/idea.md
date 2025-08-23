@@ -50,18 +50,25 @@ The backend (core) repository currently has:
 
 ### Template System Architecture
 1. **Template Repository**: Store and manage predefined YAML templates
-   - Deployment templates (web apps, databases, microservices)
-   - Service templates (LoadBalancer, ClusterIP, NodePort)
-   - ConfigMap and Secret templates
-   - Ingress and networking templates
-   - StatefulSet and DaemonSet templates
+   - **Kubernetes Infrastructure Components**:
+     - Networking (ingress controllers, load balancers, CNI plugins)
+     - Storage (provisioners, storage classes, CSI drivers)
+     - DNS and service discovery (CoreDNS, external-dns)
+     - Security (cert-manager, policy engines, secret management)
+     - Monitoring (metrics-server, kube-state-metrics)
+   - **Application Templates** (Phase 2):
+     - Deployment templates (web apps, databases, microservices)
+     - Service templates (LoadBalancer, ClusterIP, NodePort)
+     - ConfigMap and Secret templates
+     - StatefulSet and DaemonSet templates
 
 2. **JSON to YAML Transformation Engine**
    - Receive JSON workflow from frontend
-   - Map component IDs to template references
+   - Map component IDs to template references (k8s-components/* or applications/*)
    - Inject user parameters into templates
    - Generate complete Kubernetes manifests
    - Validate generated YAML against cluster capabilities
+   - Handle dependencies between K8s components and applications
 
 ### Backend Services Needed
 1. **Template Management Service**: CRUD operations for YAML templates
@@ -96,7 +103,7 @@ The backend (core) repository currently has:
   "components": [
     {
       "id": "load-balancer",
-      "templateId": "nginx-load-balancer",
+      "templateId": "k8s-components/networking/metallb",
       "parameters": {
         "type": "LoadBalancer",
         "algorithm": "round-robin",
@@ -108,7 +115,7 @@ The backend (core) repository currently has:
     },
     {
       "id": "frontend",
-      "templateId": "web-app-deployment",
+      "templateId": "applications/web/react-app",
       "parameters": {
         "imageSource": {
           "type": "github",
@@ -122,7 +129,7 @@ The backend (core) repository currently has:
     },
     {
       "id": "backend-api",
-      "templateId": "api-deployment",
+      "templateId": "applications/api/nodejs-api",
       "parameters": {
         "image": "myapp/api:1.0",
         "replicas": 2,
@@ -141,7 +148,7 @@ The backend (core) repository currently has:
     },
     {
       "id": "postgres-db",
-      "templateId": "postgres-statefulset",
+      "templateId": "applications/databases/postgres",
       "parameters": {
         "version": "14",
         "storage": "10Gi"
@@ -149,7 +156,7 @@ The backend (core) repository currently has:
     },
     {
       "id": "service-mesh",
-      "templateId": "istio-gateway",
+      "templateId": "k8s-components/networking/istio",
       "parameters": {
         "trafficPolicy": "round-robin",
         "mtls": true,
