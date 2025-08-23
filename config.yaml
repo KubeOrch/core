@@ -6,3 +6,12 @@ PORT: 3000
 
 # Gin mode: debug, release, test
 GIN_MODE: debug
+
+# Database configuration
+DATABASE:
+  HOST: localhost
+  PORT: 5432
+  USER: kubeorch_user
+  PASSWORD: kubeorch_password
+  NAME: kubeorch_db
+  SSL_MODE: disable
