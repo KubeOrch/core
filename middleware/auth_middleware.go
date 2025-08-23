@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/KubeOrchestra/core/utils"
+	"github.com/KubeOrchestra/core/services"
 	"github.com/gin-gonic/gin"
 )
 
@@ -36,7 +36,7 @@ func AuthMiddleware() gin.HandlerFunc {
 
 		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 
-		claims, err := utils.ValidateJWTToken(tokenString)
+		claims, err := services.ValidateJWTToken(tokenString)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"error": "Invalid or expired token",

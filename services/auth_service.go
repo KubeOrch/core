@@ -1,19 +1,13 @@
-package utils
+package services
 
 import (
 	"errors"
-	"os"
 	"time"
 
+	"github.com/KubeOrchestra/core/utils/config"
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
-
-var jwtSecret string
-
-func init() {
-	jwtSecret = os.Getenv("JWT_SECRET")
-}
 
 type JWTClaims struct {
 	UserID uint   `json:"user_id"`
@@ -32,6 +26,7 @@ func CheckPasswordHash(password, hash string) bool {
 }
 
 func GenerateJWTToken(userID uint, email string) (string, error) {
+	jwtSecret := config.GetEnv("JWT_SECRET")
 	if jwtSecret == "" {
 		return "", errors.New("JWT_SECRET environment variable not set")
 	}
@@ -51,6 +46,7 @@ func GenerateJWTToken(userID uint, email string) (string, error) {
 }
 
 func ValidateJWTToken(tokenString string) (*JWTClaims, error) {
+	jwtSecret := config.GetEnv("JWT_SECRET")
 	if jwtSecret == "" {
 		return nil, errors.New("JWT_SECRET environment variable not set")
 	}

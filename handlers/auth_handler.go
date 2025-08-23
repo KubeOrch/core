@@ -5,7 +5,7 @@ import (
 	"sync"
 
 	"github.com/KubeOrchestra/core/models"
-	"github.com/KubeOrchestra/core/utils"
+	"github.com/KubeOrchestra/core/services"
 	"github.com/gin-gonic/gin"
 )
 
@@ -44,7 +44,7 @@ func RegisterHandler(c *gin.Context) {
 		return
 	}
 
-	hashedPassword, err := utils.HashPassword(req.Password)
+	hashedPassword, err := services.HashPassword(req.Password)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Registration failed",
@@ -66,7 +66,7 @@ func RegisterHandler(c *gin.Context) {
 
 	userStore.users[req.Email] = user
 
-	token, err := utils.GenerateJWTToken(user.ID, user.Email)
+	token, err := services.GenerateJWTToken(user.ID, user.Email)
 	if err != nil {
 		delete(userStore.users, req.Email)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -101,14 +101,14 @@ func LoginHandler(c *gin.Context) {
 		return
 	}
 
-	if !utils.CheckPasswordHash(req.Password, user.Password) {
+	if !services.CheckPasswordHash(req.Password, user.Password) {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": "Invalid email or password",
 		})
 		return
 	}
 
-	token, err := utils.GenerateJWTToken(user.ID, user.Email)
+	token, err := services.GenerateJWTToken(user.ID, user.Email)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Login failed",
