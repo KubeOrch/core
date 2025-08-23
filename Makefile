@@ -24,16 +24,22 @@ build:
 
 # Run the application
 .PHONY: run
-run:
+run: db-check
 	@echo "Running $(APP_NAME)..."
 	$(GOBUILD) -o bin/$(BINARY_NAME) -v .
 	./bin/$(BINARY_NAME)
 
 # Run without building (go run)
 .PHONY: dev
-dev:
+dev: db-check
 	@echo "Running $(APP_NAME) in development mode..."
 	$(GOCMD) run .
+	
+# Run app with migration
+.PHONY: dev-migrate
+dev-migrate: db-check
+	@echo "Running migrations and starting app..."
+	$(GOCMD) run . --migrate
 
 # Clean build artifacts
 .PHONY: clean
@@ -80,17 +86,38 @@ lint:
 	@echo "Linting code..."
 	golangci-lint run
 
+# Check if database is running and start if needed
+.PHONY: db-check
+db-check:
+	@if docker compose ps postgres | grep -q "Up"; then \
+		echo "Database is already running"; \
+	else \
+		echo "Database is not running, starting..."; \
+		make db-up; \
+	fi
+
 # Start PostgreSQL database
 .PHONY: db-up
 db-up:
 	@echo "Starting PostgreSQL database..."
-	docker compose up -d postgres
+	@docker compose up -d postgres
+	@echo "Checking if database is ready..."
+	@timeout 30 bash -c 'until docker compose exec -T postgres pg_isready -U kubeorch_user -d kubeorch_db; do sleep 1; done' || echo "Database ready check timed out, continuing anyway..."
 
 # Stop PostgreSQL database
 .PHONY: db-down
 db-down:
 	@echo "Stopping PostgreSQL database..."
 	docker compose down
+
+# Restart PostgreSQL database
+.PHONY: db-restart
+db-restart:
+	@echo "Restarting PostgreSQL database..."
+	docker compose down postgres
+	docker compose up -d postgres
+	@echo "Waiting for database to be ready..."
+	@timeout 30 bash -c 'until docker compose exec -T postgres pg_isready -U kubeorch_user -d kubeorch_db; do sleep 1; done' || echo "Database ready check timed out, continuing anyway..."
 
 # Start all services
 .PHONY: up
@@ -130,7 +157,7 @@ docker-build:
 
 # Run with hot reload (requires air)
 .PHONY: watch
-watch:
+watch: db-check
 	@echo "Starting with hot reload..."
 	air
 
@@ -146,8 +173,8 @@ install-tools:
 help:
 	@echo "Available commands:"
 	@echo "  build         - Build the application"
-	@echo "  run           - Build and run the application"
-	@echo "  dev           - Run in development mode (go run)"
+	@echo "  run           - Smart start database and run the application"
+	@echo "  dev           - Smart start database and run in development mode"
 	@echo "  clean         - Clean build artifacts"
 	@echo "  test          - Run tests"
 	@echo "  test-coverage - Run tests with coverage report"
@@ -155,7 +182,10 @@ help:
 	@echo "  tidy          - Tidy dependencies"
 	@echo "  fmt           - Format code"
 	@echo "  lint          - Lint code"
-	@echo "  db-up         - Start PostgreSQL database"
+	@echo "  db-check      - Check if database is running, start if needed"
+	@echo "  db-start      - Start database if not running"
+	@echo "  db-up         - Force start PostgreSQL database"
+	@echo "  db-restart    - Restart PostgreSQL database"
 	@echo "  db-down       - Stop PostgreSQL database"
 	@echo "  up            - Start all services"
 	@echo "  down          - Stop all services"
@@ -163,7 +193,7 @@ help:
 	@echo "  db-connect    - Connect to database"
 	@echo "  build-prod    - Build for production"
 	@echo "  docker-build  - Build Docker image"
-	@echo "  watch         - Run with hot reload"
+	@echo "  watch         - Smart start database and run with hot reload"
 	@echo "  install-tools - Install development tools"
 	@echo "  help          - Show this help message"
 
