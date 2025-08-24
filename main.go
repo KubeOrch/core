@@ -12,8 +12,8 @@ import (
 )
 
 func main() {
-    migrate := flag.Bool("migrate", false, "Run database migrations")
-    flag.Parse()
+	migrate := flag.Bool("migrate", false, "Run database migrations")
+	flag.Parse()
 
 	if err := config.Load(); err != nil {
 		logrus.Fatalf("Failed to load configuration: %v", err)

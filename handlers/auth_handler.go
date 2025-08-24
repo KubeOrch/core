@@ -2,31 +2,19 @@ package handlers
 
 import (
 	"net/http"
-	"sync"
 
-	"github.com/KubeOrchestra/core/models"
+	"github.com/KubeOrchestra/core/model"
 	"github.com/KubeOrchestra/core/services"
 	"github.com/gin-gonic/gin"
 )
 
-type UserStore struct {
-	users    map[string]models.User
-	usersMux sync.RWMutex
-	nextID   uint
-	idMux    sync.Mutex
-}
-
-func NewUserStore() *UserStore {
-	return &UserStore{
-		users:  make(map[string]models.User),
-		nextID: 1,
-	}
-}
-
-var userStore = NewUserStore()
-
 func RegisterHandler(c *gin.Context) {
-	var req models.RegisterRequest
+	var req struct {
+		Email    string `json:"email" binding:"required,email"`
+		Password string `json:"password" binding:"required,min=6"`
+		Name     string `json:"name" binding:"required"`
+	}
+
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "Invalid request data",
@@ -34,16 +22,23 @@ func RegisterHandler(c *gin.Context) {
 		return
 	}
 
-	userStore.usersMux.Lock()
-	defer userStore.usersMux.Unlock()
+	// Check if user already exists
+	exists, err := services.UserExistsByEmail(req.Email)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Registration failed",
+		})
+		return
+	}
 
-	if _, exists := userStore.users[req.Email]; exists {
+	if exists {
 		c.JSON(http.StatusConflict, gin.H{
 			"error": "User already exists",
 		})
 		return
 	}
 
+	// Hash password
 	hashedPassword, err := services.HashPassword(req.Password)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -52,37 +47,45 @@ func RegisterHandler(c *gin.Context) {
 		return
 	}
 
-	userStore.idMux.Lock()
-	userID := userStore.nextID
-	userStore.nextID++
-	userStore.idMux.Unlock()
-
-	user := models.User{
-		ID:       userID,
+	// Create user in database
+	user := &model.User{
 		Email:    req.Email,
 		Name:     req.Name,
 		Password: hashedPassword,
 	}
 
-	userStore.users[req.Email] = user
-
-	token, err := services.GenerateJWTToken(user.ID, user.Email)
-	if err != nil {
-		delete(userStore.users, req.Email)
+	if err := services.CreateUser(user); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Registration failed",
 		})
 		return
 	}
 
-	c.JSON(http.StatusCreated, models.AuthResponse{
-		Token: token,
-		User:  user,
+	// Generate JWT token
+	token, err := services.GenerateJWTToken(user.ID, user.Email)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Registration failed",
+		})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"token": token,
+		"user": gin.H{
+			"id":    user.ID,
+			"email": user.Email,
+			"name":  user.Name,
+		},
 	})
 }
 
 func LoginHandler(c *gin.Context) {
-	var req models.LoginRequest
+	var req struct {
+		Email    string `json:"email" binding:"required,email"`
+		Password string `json:"password" binding:"required,min=6"`
+	}
+
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "Invalid request data",
@@ -90,17 +93,16 @@ func LoginHandler(c *gin.Context) {
 		return
 	}
 
-	userStore.usersMux.RLock()
-	user, exists := userStore.users[req.Email]
-	userStore.usersMux.RUnlock()
-
-	if !exists {
+	// Get user from database
+	user, err := services.GetUserByEmail(req.Email)
+	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": "Invalid email or password",
 		})
 		return
 	}
 
+	// Check password
 	if !services.CheckPasswordHash(req.Password, user.Password) {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": "Invalid email or password",
@@ -108,6 +110,7 @@ func LoginHandler(c *gin.Context) {
 		return
 	}
 
+	// Generate JWT token
 	token, err := services.GenerateJWTToken(user.ID, user.Email)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -116,8 +119,12 @@ func LoginHandler(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, models.AuthResponse{
-		Token: token,
-		User:  user,
+	c.JSON(http.StatusOK, gin.H{
+		"token": token,
+		"user": gin.H{
+			"id":    user.ID,
+			"email": user.Email,
+			"name":  user.Name,
+		},
 	})
 }

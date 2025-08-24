@@ -42,7 +42,7 @@ func Connect() error {
 }
 
 func Migrate() error {
-    return DB.AutoMigrate(&model.User{})
+	return DB.AutoMigrate(&model.User{})
 }
 
 func Close() error {
