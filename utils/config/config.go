@@ -16,12 +16,12 @@ func Load() error {
 	viper.SetDefault("PORT", "3000")
 	viper.SetDefault("GIN_MODE", "debug")
 
-    viper.SetDefault("DATABASE.HOST", "localhost")
-    viper.SetDefault("DATABASE.PORT", "5432")
-    viper.SetDefault("DATABASE.USER", "kubeorch_user")
-    viper.SetDefault("DATABASE.PASSWORD", "kubeorch_password")
-    viper.SetDefault("DATABASE.NAME", "kubeorch_db")
-    viper.SetDefault("DATABASE.SSL_MODE", "disable")
+	viper.SetDefault("DATABASE.HOST", "localhost")
+	viper.SetDefault("DATABASE.PORT", "5432")
+	viper.SetDefault("DATABASE.USER", "kubeorch_user")
+	viper.SetDefault("DATABASE.PASSWORD", "kubeorch_password")
+	viper.SetDefault("DATABASE.NAME", "kubeorch_db")
+	viper.SetDefault("DATABASE.SSL_MODE", "disable")
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
@@ -46,25 +46,25 @@ func GetEnv(key string) string {
 }
 
 func GetDBHost() string {
-    return viper.GetString("DATABASE.HOST")
+	return viper.GetString("DATABASE.HOST")
 }
 
 func GetDBPort() string {
-    return viper.GetString("DATABASE.PORT")
+	return viper.GetString("DATABASE.PORT")
 }
 
 func GetDBUser() string {
-    return viper.GetString("DATABASE.USER")
+	return viper.GetString("DATABASE.USER")
 }
 
 func GetDBPassword() string {
-    return viper.GetString("DATABASE.PASSWORD")
+	return viper.GetString("DATABASE.PASSWORD")
 }
 
 func GetDBName() string {
-    return viper.GetString("DATABASE.NAME")
+	return viper.GetString("DATABASE.NAME")
 }
 
 func GetDBSSLMode() string {
-    return viper.GetString("DATABASE.SSL_MODE")
+	return viper.GetString("DATABASE.SSL_MODE")
 }

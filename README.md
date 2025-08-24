@@ -63,6 +63,76 @@ core/
 └── utils/          # Utilities and helpers
 ```
 
+Or use environment variables:
+```bash
+export PORT=3000
+export GIN_MODE=release
+export JWT_SECRET=your-super-secret-jwt-key-here
+```
+
+**Note:** For authentication features, you must set the `JWT_SECRET` environment variable.
+
+## API
+
+The server provides the following API endpoints:
+
+### Core Endpoints
+- `GET /v1/` - Returns a greeting message
+
+### Authentication Endpoints
+- `POST /api/auth/register` - User registration
+- `POST /api/auth/login` - User authentication
+
+#### Authentication Examples
+
+**Register a new user:**
+```bash
+curl -X POST http://localhost:3000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "user@example.com",
+    "password": "password123",
+    "name": "John Doe"
+  }'
+```
+
+**Login with credentials:**
+```bash
+curl -X POST http://localhost:3000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "user@example.com",
+    "password": "password123"
+  }'
+```
+
+**Test basic endpoint:**
+```bash
+curl http://localhost:3000/v1/
+```
+
+## Development
+
+### Building
+```bash
+go build -o kubeorchestra main.go
+```
+
+### Running
+```bash
+./kubeorchestra
+```
+
+### Features
+
+- **JWT Authentication**: Secure user registration and login with JWT tokens
+- **Password Hashing**: bcrypt password hashing with cost factor 12
+- **Thread-Safe**: Concurrent-safe user storage with mutex protection
+- **Input Validation**: Email validation and password requirements
+- **Token Expiration**: 24-hour JWT token expiration
+- **Middleware**: JWT token validation middleware for protected routes
+- **Storage**: Currently using in-memory storage (data persists during server runtime)
+
 ## 🔗 API Overview
 
 - `POST /v1/workflows/deploy` - Deploy visual workflow
