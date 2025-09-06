@@ -1,15 +1,15 @@
-# KubeOrchestra Core
+# KubeOrch Core
 
 [![Apache 2.0 License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Cloud Native](https://img.shields.io/badge/Cloud%20Native-orange.svg)](https://landscape.cncf.io/)
 
-Backend service for KubeOrchestra - Transform Kubernetes complexity into simple drag-and-drop workflows.
+Backend service for KubeOrch - Transform Kubernetes complexity into simple drag-and-drop workflows.
 
 ## 🎯 Vision
 
-KubeOrchestra democratizes Kubernetes by eliminating YAML complexity. Just drag, drop, and deploy - everything auto-configures intelligently.
+KubeOrch democratizes Kubernetes by eliminating YAML complexity. Just drag, drop, and deploy - everything auto-configures intelligently.
 
-## 🚀 What is KubeOrchestra Core?
+## 🚀 What is KubeOrch Core?
 
 The intelligent backend that powers the visual orchestration platform:
 
@@ -40,7 +40,7 @@ The intelligent backend that powers the visual orchestration platform:
 
 ```bash
 # Clone the repository
-git clone https://github.com/KubeOrchestra/core.git
+git clone https://github.com/KubeOrch/core.git
 cd core
 
 # Install dependencies
@@ -115,12 +115,12 @@ curl http://localhost:3000/v1/
 
 ### Building
 ```bash
-go build -o kubeorchestra main.go
+go build -o kubeorch main.go
 ```
 
 ### Running
 ```bash
-./kubeorchestra
+./kubeorch
 ```
 
 ### Features

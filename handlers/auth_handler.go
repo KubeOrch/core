@@ -3,8 +3,8 @@ package handlers
 import (
 	"net/http"
 
-	"github.com/KubeOrchestra/core/model"
-	"github.com/KubeOrchestra/core/services"
+	"github.com/KubeOrch/core/model"
+	"github.com/KubeOrch/core/services"
 	"github.com/gin-gonic/gin"
 )
 

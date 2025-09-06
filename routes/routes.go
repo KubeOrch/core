@@ -3,8 +3,8 @@ package routes
 import (
 	"time"
 
-	"github.com/KubeOrchestra/core/handlers"
-	"github.com/KubeOrchestra/core/middleware"
+	"github.com/KubeOrch/core/handlers"
+	"github.com/KubeOrch/core/middleware"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )

@@ -1,4 +1,4 @@
-module github.com/KubeOrchestra/core
+module github.com/KubeOrch/core
 
 go 1.25.0
 

@@ -1,8 +1,8 @@
 package services
 
 import (
-	"github.com/KubeOrchestra/core/database"
-	"github.com/KubeOrchestra/core/model"
+	"github.com/KubeOrch/core/database"
+	"github.com/KubeOrch/core/model"
 )
 
 func CreateUser(user *model.User) error {

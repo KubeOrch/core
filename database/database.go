@@ -3,8 +3,8 @@ package database
 import (
 	"fmt"
 
-	"github.com/KubeOrchestra/core/model"
-	"github.com/KubeOrchestra/core/utils/config"
+	"github.com/KubeOrch/core/model"
+	"github.com/KubeOrch/core/utils/config"
 	"github.com/sirupsen/logrus"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"

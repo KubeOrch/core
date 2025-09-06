@@ -3,9 +3,9 @@ package main
 import (
 	"flag"
 
-	"github.com/KubeOrchestra/core/database"
-	"github.com/KubeOrchestra/core/routes"
-	"github.com/KubeOrchestra/core/utils/config"
+	"github.com/KubeOrch/core/database"
+	"github.com/KubeOrch/core/routes"
+	"github.com/KubeOrch/core/utils/config"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"github.com/sirupsen/logrus"
@@ -37,7 +37,7 @@ func main() {
 
 	router := routes.SetupRouter()
 
-	logrus.Infof("Starting KubeOrchestra server on port %s in %s mode...", port, ginMode)
+	logrus.Infof("Starting KubeOrch server on port %s in %s mode...", port, ginMode)
 	if err := router.Run(":" + port); err != nil {
 		logrus.Fatal("Failed to start server:", err)
 	}

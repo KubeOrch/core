@@ -11,37 +11,37 @@ Each task is designed to be completed in 1-2 hours independently. Tasks are grou
 **Assignee**: Developer 1  
 **Time**: 2 hours  
 **Dependencies**: None  
-**Description**: Create YAML template management system
-- Set up template directory structure (`templates/deployments/`, `templates/services/`, etc.)
-- Create base templates for common services (nginx, postgres, redis, etc.)
-- Design template metadata structure (name, description, parameters)
+**Description**: Create YAML template management system for K8s infrastructure components
+- Set up template directory structure (`templates/infrastructure/networking/`, `/storage/`, `/security/`, `/monitoring/`)
+- Create Helm chart structure for K8s infrastructure components
+- Design template metadata structure for K8s components (phase, category, dependencies)
 - Implement template versioning system
-- Create template validation utilities
-**Deliverables**: Template repository with 10+ base templates
+- Create template validation utilities for K8s resources
+**Deliverables**: Template repository with K8s infrastructure component structure
 
 ### CORE-002: JSON to YAML Transformation Engine
 **Assignee**: Developer 2  
 **Time**: 2 hours  
 **Dependencies**: CORE-001  
-**Description**: Build transformation engine for JSON workflows
-- Create JSON workflow parser
-- Implement template injection system
-- Build parameter validation against template schemas
-- Create service dependency resolver
-- Generate Kubernetes service and ingress from connections
-**Deliverables**: Working JSON to YAML transformer
+**Description**: Build transformation engine for JSON workflows using Helm
+- Integrate helm.sh/helm/v3 library for template rendering
+- Create JSON workflow parser for K8s components
+- Implement Helm values injection system
+- Build parameter validation against Helm chart schemas
+- Create K8s component dependency resolver
+**Deliverables**: Working JSON to YAML transformer with Helm support
 
 ### CORE-003: Template API Endpoints
 **Assignee**: Developer 3  
 **Time**: 1.5 hours  
 **Dependencies**: CORE-001  
 **Description**: Create REST APIs for template management
-- List templates endpoint (`GET /v1/templates`)
+- List templates endpoint (`GET /v1/templates`) with phase filtering
 - Get template details (`GET /v1/templates/{id}`)
 - Get template parameters schema (`GET /v1/templates/{id}/schema`)
-- Template categories endpoint (`GET /v1/templates/categories`)
-- Template search and filter functionality
-**Deliverables**: Complete template REST API
+- Infrastructure categories endpoint (`GET /v1/infrastructure/categories`)
+- Template search and filter by phase (1 or 2)
+**Deliverables**: Complete template REST API with K8s component support
 
 ### CORE-004: Database and Models Setup
 **Assignee**: Developer 4  
@@ -49,11 +49,11 @@ Each task is designed to be completed in 1-2 hours independently. Tasks are grou
 **Dependencies**: None  
 **Description**: Set up PostgreSQL and data models
 - Install and configure GORM ORM
-- Create models: User, Workflow, Deployment, Template
-- Design workflow JSON storage schema
-- Implement deployment history tracking
+- Create models: User, Workflow, Deployment, KubeComponent, InfrastructureTemplate
+- Design workflow JSON storage schema with component phases
+- Implement deployment history tracking for K8s components
 - Set up database migrations
-**Deliverables**: Database with core models
+**Deliverables**: Database with core models including K8s component tracking
 
 ---
 
@@ -387,13 +387,13 @@ Each task is designed to be completed in 1-2 hours independently. Tasks are grou
 **Assignee**: Developer 2  
 **Time**: 2 hours  
 **Dependencies**: CORE-005  
-**Description**: Implement Helm support
-- Integrate Helm client
-- Create chart repository management
-- Implement chart deployment API
-- Add chart versioning support
-- Create values file management
-**Deliverables**: Helm chart management
+**Description**: Implement Helm support for K8s components
+- Integrate Helm client for infrastructure charts
+- Create K8s component chart repository
+- Implement infrastructure chart deployment API
+- Add chart versioning for K8s components
+- Create values file management with Kustomize overlays
+**Deliverables**: Helm chart management for K8s infrastructure
 
 ### CORE-031: Backup and Restore
 **Assignee**: Developer 3  
@@ -525,173 +525,173 @@ Each task is designed to be completed in 1-2 hours independently. Tasks are grou
 
 ---
 
-## Sprint 11: Template Enhancement (Week 6)
+## Sprint 11: K8s Infrastructure Components (Week 6)
 
 ### CORE-041: Advanced Template Library
 **Assignee**: Developer 1  
 **Time**: 2 hours  
 **Dependencies**: CORE-001  
-**Description**: Expand template collection
-- Create microservices templates (Node.js, Python, Go)
-- Add database cluster templates
-- Build message queue templates (Kafka, RabbitMQ)
-- Create monitoring stack templates
-- Add ML/AI workload templates
-**Deliverables**: 30+ production-ready templates
+**Description**: Create K8s infrastructure component templates
+- Create NGINX Ingress Controller Helm chart
+- Add MetalLB load balancer template
+- Build Calico CNI plugin template
+- Create cert-manager Helm chart
+- Add sealed-secrets controller template
+**Deliverables**: Core K8s infrastructure component templates
 
 ### CORE-042: Template Composition Engine
 **Assignee**: Developer 2  
 **Time**: 2 hours  
 **Dependencies**: CORE-002  
-**Description**: Enable complex architectures
-- Build multi-template composition
-- Create inter-template networking
-- Implement shared resource management
-- Add dependency ordering
-- Create composition validation
-**Deliverables**: Template composition system
+**Description**: Enable K8s infrastructure composition
+- Build multi-component K8s infrastructure composition
+- Create inter-component dependency resolution
+- Implement Kustomize overlay integration
+- Add K8s component dependency ordering
+- Create infrastructure validation
+**Deliverables**: K8s component composition system
 
 ### CORE-043: Template Testing Framework
 **Assignee**: Developer 3  
 **Time**: 1.5 hours  
 **Dependencies**: CORE-001  
-**Description**: Ensure template quality
-- Create template unit tests
-- Build deployment simulation
-- Add resource validation
-- Implement security scanning
-- Create performance benchmarks
-**Deliverables**: Template testing suite
+**Description**: Ensure K8s component template quality
+- Create Helm chart unit tests
+- Build K8s manifest validation
+- Add resource requirement validation
+- Implement security policy scanning
+- Create K8s API compatibility tests
+**Deliverables**: K8s template testing suite
 
 ### CORE-044: Custom Template Builder
 **Assignee**: Developer 4  
 **Time**: 1.5 hours  
 **Dependencies**: CORE-001  
-**Description**: Allow user templates
-- Create template upload API
-- Build template validator
-- Add template marketplace backend
-- Implement template versioning
-- Create template documentation generator
-**Deliverables**: Custom template system
+**Description**: Allow custom K8s component templates
+- Create K8s component template upload API
+- Build Helm chart validator
+- Add infrastructure template marketplace
+- Implement K8s component versioning
+- Create Helm chart documentation generator
+**Deliverables**: Custom K8s component template system
 
 ---
 
-## Sprint 12: Advanced Component Templates (Week 6)
+## Sprint 12: Core K8s Infrastructure Templates (Week 6)
 
 ### CORE-045: Load Balancer Templates
 **Assignee**: Developer 1  
 **Time**: 2 hours  
 **Dependencies**: CORE-001  
-**Description**: Create load balancer component templates
-- Create NGINX load balancer template
-- Add HAProxy template configuration
-- Build AWS/GCP/Azure load balancer templates
-- Implement Kubernetes Service LoadBalancer type
-- Create MetalLB template for bare-metal
-- Add health check configurations
-- Implement session affinity options
-**Deliverables**: Complete load balancer template library
+**Description**: Create K8s load balancer templates
+- Create MetalLB Helm chart for bare-metal
+- Add kube-vip template for HA
+- Build cloud provider load balancer integration
+- Implement Service LoadBalancer configurations
+- Create IP pool management templates
+- Add BGP/L2 configuration options
+- Implement health check configurations
+**Deliverables**: K8s load balancer infrastructure templates
 
 ### CORE-046: Istio Service Mesh Templates
 **Assignee**: Developer 2  
 **Time**: 2 hours  
 **Dependencies**: CORE-001, CORE-029  
-**Description**: Build Istio component templates
-- Create Istio Gateway templates
-- Build VirtualService templates
-- Add DestinationRule configurations
-- Implement traffic management policies
-- Create security policies (mTLS, AuthZ)
-- Add observability configurations
-- Build canary deployment templates
-**Deliverables**: Istio service mesh templates
+**Description**: Build Istio infrastructure templates
+- Create Istio control plane Helm chart
+- Build Istio ingress gateway templates
+- Add Istio system namespace configuration
+- Implement mTLS and security policies
+- Create Istio CRD templates
+- Add observability integrations
+- Build traffic management templates
+**Deliverables**: Istio infrastructure templates
 
 ### CORE-047: Ingress Controller Templates
 **Assignee**: Developer 3  
 **Time**: 1.5 hours  
 **Dependencies**: CORE-001  
-**Description**: Create ingress controller templates
-- Build NGINX Ingress controller template
-- Add Traefik ingress template
-- Create Kong API Gateway template
-- Implement cert-manager integration
-- Add rate limiting configurations
-- Create path-based routing templates
-**Deliverables**: Ingress controller template set
+**Description**: Create K8s ingress controller templates
+- Build NGINX Ingress controller Helm chart
+- Add Traefik ingress Helm template
+- Create HAProxy ingress template
+- Implement cert-manager integration for auto-TLS
+- Add ingress class configurations
+- Create RBAC and service account templates
+**Deliverables**: K8s ingress controller template set
 
-### CORE-048: Message Queue Templates
+### CORE-048: Storage Infrastructure Templates
 **Assignee**: Developer 4  
 **Time**: 2 hours  
 **Dependencies**: CORE-001  
-**Description**: Build message queue templates
-- Create RabbitMQ cluster template
-- Build Kafka deployment template
-- Add Redis Pub/Sub template
-- Implement NATS streaming template
-- Create AWS SQS/SNS integration
-- Add dead letter queue configurations
-**Deliverables**: Message queue template library
+**Description**: Build K8s storage infrastructure templates
+- Create local-path-provisioner Helm chart
+- Build NFS provisioner template
+- Add Longhorn distributed storage template
+- Implement Rook-Ceph operator template
+- Create StorageClass templates
+- Add CSI driver configurations
+**Deliverables**: K8s storage infrastructure templates
 
 ---
 
-## Sprint 13: Automatic Image Building (Week 7)
+## Sprint 13: Security & Monitoring Infrastructure (Week 7)
 
-### CORE-049: Nixpacks Integration
+### CORE-049: Security Component Templates
 **Assignee**: Developer 1  
 **Time**: 2 hours  
-**Dependencies**: CORE-015  
-**Description**: Integrate Nixpacks for automatic builds
-- Install and configure Nixpacks library
-- Create build detection service
-- Implement language/framework detection
-- Build Nixpacks configuration generator
-- Add build caching mechanism
-- Create build optimization service
-**Deliverables**: Nixpacks build integration
+**Dependencies**: CORE-001  
+**Description**: Create K8s security infrastructure templates
+- Build cert-manager Helm chart with Let's Encrypt
+- Create sealed-secrets controller template
+- Add OPA Gatekeeper policy templates
+- Implement Falco runtime security template
+- Create NetworkPolicy templates
+- Add PodSecurityPolicy configurations
+**Deliverables**: K8s security infrastructure templates
 
-### CORE-050: GitHub Source Integration
+### CORE-050: Monitoring Stack Templates
 **Assignee**: Developer 2  
 **Time**: 2 hours  
-**Dependencies**: CORE-013  
-**Description**: Build GitHub source fetching
-- Create GitHub repository scanner
-- Implement branch/tag selection
-- Build source code downloader
-- Add webhook for auto-builds
-- Create build trigger system
-- Implement build status reporting
-**Deliverables**: GitHub source integration
+**Dependencies**: CORE-001  
+**Description**: Build K8s monitoring infrastructure
+- Create metrics-server Helm chart
+- Build kube-state-metrics template
+- Add Prometheus Operator template
+- Implement node-exporter DaemonSet
+- Create ServiceMonitor CRDs
+- Add Grafana dashboard templates
+**Deliverables**: K8s monitoring infrastructure templates
 
-### CORE-051: Container Image Builder
+### CORE-051: DNS & Discovery Templates
 **Assignee**: Developer 3  
 **Time**: 2 hours  
-**Dependencies**: CORE-049, CORE-050  
-**Description**: Create unified image building service
-- Build image builder orchestrator
-- Implement build queue management
-- Create multi-stage build support
-- Add build log streaming
-- Implement build artifact storage
-- Create image scanning integration
-**Deliverables**: Container image builder service
+**Dependencies**: CORE-001  
+**Description**: Create K8s DNS infrastructure templates
+- Build CoreDNS configuration templates
+- Create external-dns Helm chart
+- Add k8s_gateway template
+- Implement DNS policy configurations
+- Create service discovery templates
+- Add DNS autoscaling configurations
+**Deliverables**: K8s DNS infrastructure templates
 
-### CORE-052: Image Input Flexibility
+### CORE-052: Backup & Disaster Recovery Templates
 **Assignee**: Developer 4  
 **Time**: 1.5 hours  
-**Dependencies**: CORE-016  
-**Description**: Support multiple image sources
-- Create Docker Hub image validator
-- Build private registry support
-- Add image URL input handling
-- Implement image tag management
-- Create image pull secret handling
-- Add image verification service
-**Deliverables**: Flexible image input system
+**Dependencies**: CORE-001  
+**Description**: Build K8s backup infrastructure
+- Create Velero backup operator template
+- Build backup schedule configurations
+- Add storage backend templates
+- Implement restore procedure templates
+- Create disaster recovery workflows
+- Add backup retention policies
+**Deliverables**: K8s backup infrastructure templates
 
 ---
 
-## Sprint 14: Automatic Connection & Dependencies (Week 7)
+## Sprint 14: K8s Component Integration & Testing (Week 7)
 
 ### CORE-053: Connection Resolver Engine
 **Assignee**: Developer 1  
@@ -1077,9 +1077,18 @@ Each task is designed to be completed in 1-2 hours independently. Tasks are grou
 - Code reviews required before merging
 
 ### Priority Order
-1. Authentication & Database (Critical)
-2. Kubernetes Integration (Core Feature)
-3. Workflow Engine (Core Feature)
-4. Real-time Features (User Experience)
-5. Security & Optimization (Production Ready)
-6. Advanced Features (Differentiators)
+
+#### Phase 1: Kubernetes Infrastructure Components (Weeks 1-8)
+1. Core Networking (NGINX Ingress, MetalLB) - CRITICAL
+2. Core Storage (local-path, NFS provisioners) - CRITICAL  
+3. Core Security (cert-manager, sealed-secrets) - HIGH
+4. Core Monitoring (metrics-server, kube-state-metrics) - HIGH
+5. Advanced Infrastructure (Istio, Prometheus Operator) - MEDIUM
+
+#### Phase 2: Application Services (Weeks 9+)
+1. Databases (PostgreSQL, MySQL, MongoDB) - After Phase 1
+2. Web Applications (NGINX, Node.js apps) - After Phase 1
+3. Message Queues (RabbitMQ, Kafka) - After Phase 1
+4. Advanced Applications - After Phase 1
+
+**IMPORTANT**: Phase 2 (Application templates) should only begin after Phase 1 (K8s infrastructure) is complete and tested

@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/KubeOrchestra/core/services"
+	"github.com/KubeOrch/core/services"
 	"github.com/gin-gonic/gin"
 )
 
