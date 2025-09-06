@@ -31,8 +31,7 @@ func CheckPasswordHash(password, hash string) bool {
 func GenerateJWTToken(userID primitive.ObjectID, email string, role models.UserRole) (string, error) {
 	jwtSecret := config.GetEnv("JWT_SECRET")
 	if jwtSecret == "" {
-		// Use a default secret for development (should be changed in production)
-		jwtSecret = "kubeorchestra-default-secret-change-in-production"
+		return "", errors.New("JWT_SECRET environment variable not set")
 	}
 
 	claims := JWTClaims{
@@ -53,8 +52,7 @@ func GenerateJWTToken(userID primitive.ObjectID, email string, role models.UserR
 func ValidateJWTToken(tokenString string) (*JWTClaims, error) {
 	jwtSecret := config.GetEnv("JWT_SECRET")
 	if jwtSecret == "" {
-		// Use a default secret for development (should be changed in production)
-		jwtSecret = "kubeorchestra-default-secret-change-in-production"
+		return nil, errors.New("JWT_SECRET environment variable not set")
 	}
 
 	token, err := jwt.ParseWithClaims(tokenString, &JWTClaims{}, func(token *jwt.Token) (interface{}, error) {
