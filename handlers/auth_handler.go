@@ -3,9 +3,10 @@ package handlers
 import (
 	"net/http"
 
-	"github.com/KubeOrch/core/model"
+	"github.com/KubeOrch/core/models"
 	"github.com/KubeOrch/core/services"
 	"github.com/gin-gonic/gin"
+	"github.com/sirupsen/logrus"
 )
 
 func RegisterHandler(c *gin.Context) {
@@ -25,6 +26,7 @@ func RegisterHandler(c *gin.Context) {
 	// Check if user already exists
 	exists, err := services.UserExistsByEmail(req.Email)
 	if err != nil {
+		logrus.Errorf("Error checking user existence: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Registration failed",
 		})
@@ -41,6 +43,7 @@ func RegisterHandler(c *gin.Context) {
 	// Hash password
 	hashedPassword, err := services.HashPassword(req.Password)
 	if err != nil {
+		logrus.Errorf("Error hashing password: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Registration failed",
 		})
@@ -48,13 +51,14 @@ func RegisterHandler(c *gin.Context) {
 	}
 
 	// Create user in database
-	user := &model.User{
+	user := &models.User{
 		Email:    req.Email,
 		Name:     req.Name,
 		Password: hashedPassword,
 	}
 
 	if err := services.CreateUser(user); err != nil {
+		logrus.Errorf("Error creating user: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Registration failed",
 		})
@@ -62,20 +66,24 @@ func RegisterHandler(c *gin.Context) {
 	}
 
 	// Generate JWT token
-	token, err := services.GenerateJWTToken(user.ID, user.Email)
+	token, err := services.GenerateJWTToken(user.ID, user.Email, user.Role)
 	if err != nil {
+		logrus.Errorf("Error generating token: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Registration failed",
 		})
 		return
 	}
 
+	logrus.Infof("New user registered: %s with role: %s", user.Email, user.Role)
+
 	c.JSON(http.StatusCreated, gin.H{
 		"token": token,
 		"user": gin.H{
-			"id":    user.ID,
+			"id":    user.ID.Hex(),
 			"email": user.Email,
 			"name":  user.Name,
+			"role":  user.Role,
 		},
 	})
 }
@@ -111,8 +119,9 @@ func LoginHandler(c *gin.Context) {
 	}
 
 	// Generate JWT token
-	token, err := services.GenerateJWTToken(user.ID, user.Email)
+	token, err := services.GenerateJWTToken(user.ID, user.Email, user.Role)
 	if err != nil {
+		logrus.Errorf("Error generating token: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Login failed",
 		})
@@ -122,9 +131,45 @@ func LoginHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"token": token,
 		"user": gin.H{
-			"id":    user.ID,
+			"id":    user.ID.Hex(),
 			"email": user.Email,
 			"name":  user.Name,
+			"role":  user.Role,
+		},
+	})
+}
+
+func GetProfileHandler(c *gin.Context) {
+	userIDStr, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "Unauthorized",
+		})
+		return
+	}
+
+	userID, err := services.ParseObjectID(userIDStr.(string))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid user ID",
+		})
+		return
+	}
+
+	user, err := services.GetUserByID(userID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "User not found",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"user": gin.H{
+			"id":    user.ID.Hex(),
+			"email": user.Email,
+			"name":  user.Name,
+			"role":  user.Role,
 		},
 	})
 }

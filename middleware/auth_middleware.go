@@ -4,15 +4,10 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/KubeOrch/core/models"
 	"github.com/KubeOrch/core/services"
 	"github.com/gin-gonic/gin"
-)
-
-type contextKey string
-
-const (
-	UserIDKey    contextKey = "user_id"
-	UserEmailKey contextKey = "user_email"
+	"github.com/sirupsen/logrus"
 )
 
 func AuthMiddleware() gin.HandlerFunc {
@@ -45,8 +40,70 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		c.Set(string(UserIDKey), claims.UserID)
-		c.Set(string(UserEmailKey), claims.Email)
+		// Set user information in context
+		c.Set("userID", claims.UserID)
+		c.Set("userEmail", claims.Email)
+		c.Set("userRole", string(claims.Role))
+
+		c.Next()
+	}
+}
+
+func AdminMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		role, exists := c.Get("userRole")
+		if !exists {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "Unauthorized",
+			})
+			c.Abort()
+			return
+		}
+
+		userRole := models.UserRole(role.(string))
+		if userRole != models.RoleAdmin {
+			email, _ := c.Get("userEmail")
+			logrus.Warnf("Non-admin user attempted to access admin endpoint: %s", email)
+			c.JSON(http.StatusForbidden, gin.H{
+				"error": "Admin access required",
+			})
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
+func RequireRole(allowedRoles ...models.UserRole) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		role, exists := c.Get("userRole")
+		if !exists {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "Unauthorized",
+			})
+			c.Abort()
+			return
+		}
+
+		userRole := models.UserRole(role.(string))
+		
+		// Check if user role is in allowed roles
+		allowed := false
+		for _, allowedRole := range allowedRoles {
+			if userRole == allowedRole {
+				allowed = true
+				break
+			}
+		}
+
+		if !allowed {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error": "Insufficient permissions",
+			})
+			c.Abort()
+			return
+		}
 
 		c.Next()
 	}

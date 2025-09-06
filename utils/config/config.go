@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 
+	"github.com/fsnotify/fsnotify"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 )
@@ -12,24 +13,29 @@ func Load() error {
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath(".")
 	viper.AutomaticEnv()
+	viper.SetEnvPrefix("KUBEORCH")
 
+	// Set defaults
 	viper.SetDefault("PORT", "3000")
 	viper.SetDefault("GIN_MODE", "debug")
-
-	viper.SetDefault("DATABASE.HOST", "localhost")
-	viper.SetDefault("DATABASE.PORT", "5432")
-	viper.SetDefault("DATABASE.USER", "kubeorch_user")
-	viper.SetDefault("DATABASE.PASSWORD", "kubeorch_password")
-	viper.SetDefault("DATABASE.NAME", "kubeorch_db")
-	viper.SetDefault("DATABASE.SSL_MODE", "disable")
+	viper.SetDefault("MONGODB.HOST", "localhost")
+	viper.SetDefault("MONGODB.PORT", "27017")
+	viper.SetDefault("MONGODB.NAME", "kubeorchestra")
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-			log.Info("No config file found, using environment variables")
+			log.Info("No config file found, using environment variables and defaults")
 		} else {
 			return err
 		}
 	}
+
+	// Watch for config file changes
+	viper.WatchConfig()
+	viper.OnConfigChange(func(e fsnotify.Event) {
+		log.Infof("Config file changed: %s", e.Name)
+	})
+
 	return nil
 }
 
@@ -45,26 +51,14 @@ func GetEnv(key string) string {
 	return os.Getenv(key)
 }
 
-func GetDBHost() string {
-	return viper.GetString("DATABASE.HOST")
+func GetMongoHost() string {
+	return viper.GetString("MONGODB.HOST")
 }
 
-func GetDBPort() string {
-	return viper.GetString("DATABASE.PORT")
+func GetMongoPort() string {
+	return viper.GetString("MONGODB.PORT")
 }
 
-func GetDBUser() string {
-	return viper.GetString("DATABASE.USER")
-}
-
-func GetDBPassword() string {
-	return viper.GetString("DATABASE.PASSWORD")
-}
-
-func GetDBName() string {
-	return viper.GetString("DATABASE.NAME")
-}
-
-func GetDBSSLMode() string {
-	return viper.GetString("DATABASE.SSL_MODE")
+func GetMongoDBName() string {
+	return viper.GetString("MONGODB.NAME")
 }
