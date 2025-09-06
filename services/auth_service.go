@@ -4,14 +4,17 @@ import (
 	"errors"
 	"time"
 
+	"github.com/KubeOrch/core/models"
 	"github.com/KubeOrch/core/utils/config"
 	"github.com/golang-jwt/jwt/v5"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type JWTClaims struct {
-	UserID uint   `json:"user_id"`
-	Email  string `json:"email"`
+	UserID string          `json:"user_id"`
+	Email  string          `json:"email"`
+	Role   models.UserRole  `json:"role"`
 	jwt.RegisteredClaims
 }
 
@@ -25,15 +28,16 @@ func CheckPasswordHash(password, hash string) bool {
 	return err == nil
 }
 
-func GenerateJWTToken(userID uint, email string) (string, error) {
+func GenerateJWTToken(userID primitive.ObjectID, email string, role models.UserRole) (string, error) {
 	jwtSecret := config.GetEnv("JWT_SECRET")
 	if jwtSecret == "" {
 		return "", errors.New("JWT_SECRET environment variable not set")
 	}
 
 	claims := JWTClaims{
-		UserID: userID,
+		UserID: userID.Hex(),
 		Email:  email,
+		Role:   role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -64,4 +68,8 @@ func ValidateJWTToken(tokenString string) (*JWTClaims, error) {
 	}
 
 	return nil, errors.New("invalid token")
+}
+
+func ParseObjectID(id string) (primitive.ObjectID, error) {
+	return primitive.ObjectIDFromHex(id)
 }

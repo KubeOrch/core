@@ -32,6 +32,20 @@ func SetupRouter() *gin.Engine {
 			auth.POST("/register", handlers.RegisterHandler)
 			auth.POST("/login", handlers.LoginHandler)
 		}
+
+		// Protected routes
+		protected := v1.Group("/api")
+		protected.Use(middleware.AuthMiddleware())
+		{
+			protected.GET("/profile", handlers.GetProfileHandler)
+		}
+
+		// Admin routes
+		admin := v1.Group("/api/admin")
+		admin.Use(middleware.AuthMiddleware(), middleware.AdminMiddleware())
+		{
+			// Add admin-only endpoints here
+		}
 	}
 
 	return r
