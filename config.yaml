@@ -1,17 +1,8 @@
-# KubeOrch Configuration
-# You can override these values with environment variables
-
-# Server port
-PORT: 3000
-
-# Gin mode: debug, release, test
 GIN_MODE: debug
-
-# MongoDB configuration
+INVITE_CODE: "929057"
+JWT_SECRET: 1SJmrV5K3wcv0A/28HCYfuMl+giMEuURBZvSUw3tSxs=
 MONGODB:
   HOST: localhost
-  PORT: 27017
   NAME: kubeorch
-
-# JWT Secret for authentication
-JWT_SECRET: "1SJmrV5K3wcv0A/28HCYfuMl+giMEuURBZvSUw3tSxs="
+  PORT: 27017
+PORT: 3000

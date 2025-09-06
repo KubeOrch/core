@@ -7,13 +7,15 @@ import (
 	"github.com/KubeOrch/core/services"
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
+	"github.com/spf13/viper"
 )
 
 func RegisterHandler(c *gin.Context) {
 	var req struct {
-		Email    string `json:"email" binding:"required,email"`
-		Password string `json:"password" binding:"required,min=6"`
-		Name     string `json:"name" binding:"required"`
+		Email      string `json:"email" binding:"required,email"`
+		Password   string `json:"password" binding:"required,min=6"`
+		Name       string `json:"name" binding:"required"`
+		InviteCode string `json:"inviteCode"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -40,6 +42,40 @@ func RegisterHandler(c *gin.Context) {
 		return
 	}
 
+	// Check if this is the first user (admin) or validate invite code
+	userCount, err := services.GetUserCount()
+	if err != nil {
+		logrus.Errorf("Error checking user count: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Registration failed",
+		})
+		return
+	}
+
+	var role models.UserRole
+	if userCount == 0 {
+		// First user becomes admin
+		role = models.RoleAdmin
+		// Generate invite code for the organization
+		inviteCode := generateInviteCode()
+		if err := updateConfigFile("INVITE_CODE", inviteCode); err != nil {
+			logrus.Warnf("Error saving initial invite code: %v", err)
+		} else {
+			viper.Set("INVITE_CODE", inviteCode)
+			logrus.Infof("Initial invite code generated: %s", inviteCode)
+		}
+	} else {
+		// Require valid invite code for non-admin users
+		storedInviteCode := viper.GetString("INVITE_CODE")
+		if storedInviteCode == "" || req.InviteCode != storedInviteCode {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error": "Valid invite code required",
+			})
+			return
+		}
+		role = models.RoleUser
+	}
+
 	// Hash password
 	hashedPassword, err := services.HashPassword(req.Password)
 	if err != nil {
@@ -55,6 +91,7 @@ func RegisterHandler(c *gin.Context) {
 		Email:    req.Email,
 		Name:     req.Name,
 		Password: hashedPassword,
+		Role:     role,
 	}
 
 	if err := services.CreateUser(user); err != nil {
