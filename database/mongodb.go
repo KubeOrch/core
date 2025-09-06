@@ -59,6 +59,7 @@ func Connect() error {
 	// Check if this is the first user (admin)
 	if err := checkAndCreateFirstAdmin(); err != nil {
 		logrus.Errorf("Failed to check/create first admin: %v", err)
+		return err
 	}
 
 	return nil
