@@ -11,4 +11,7 @@ GIN_MODE: debug
 MONGODB:
   HOST: localhost
   PORT: 27017
-  NAME: kubeorchestra
+  NAME: kubeorch
+
+# JWT Secret for authentication
+JWT_SECRET: "1SJmrV5K3wcv0A/28HCYfuMl+giMEuURBZvSUw3tSxs="
