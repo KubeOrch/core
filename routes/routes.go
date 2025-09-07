@@ -47,6 +47,16 @@ func SetupRouter() *gin.Engine {
 			}
 		}
 
+		// Deployment routes
+		deployments := protected.Group("/deployments")
+		{
+			deployments.POST("/", handlers.CreateDeploymentHandler)
+			deployments.GET("/", handlers.ListDeploymentsHandler)
+			deployments.GET("/:id", handlers.GetDeploymentHandler)
+			deployments.PUT("/:id", handlers.UpdateDeploymentHandler)
+			deployments.DELETE("/:id", handlers.DeleteDeploymentHandler)
+		}
+
 		// Admin routes
 		admin := v1.Group("/api/admin")
 		admin.Use(middleware.AuthMiddleware(), middleware.AdminMiddleware())
