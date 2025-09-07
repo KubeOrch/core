@@ -21,6 +21,7 @@ func main() {
 	}
 	defer database.Close()
 
+
 	port := config.GetPort()
 	ginMode := config.GetGinMode()
 	gin.SetMode(ginMode)

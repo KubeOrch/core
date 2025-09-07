@@ -115,6 +115,10 @@ func IsFirstUser() (bool, error) {
 	return count == 0, nil
 }
 
+func GetDB() *mongo.Database {
+	return Database
+}
+
 func Close() error {
 	if Client != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
