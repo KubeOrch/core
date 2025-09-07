@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"net/http"
 
 	"github.com/KubeOrch/core/models"
@@ -56,6 +58,29 @@ func RegisterHandler(c *gin.Context) {
 	if userCount == 0 {
 		// First user becomes admin
 		role = models.RoleAdmin
+		
+		// Generate JWT secret if not already set
+		if viper.GetString("JWT_SECRET") == "" {
+			jwtSecret, err := generateJWTSecret()
+			if err != nil {
+				logrus.Errorf("Error generating JWT secret: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error": "Registration failed",
+				})
+				return
+			}
+			
+			if err := updateConfigFile("JWT_SECRET", jwtSecret); err != nil {
+				logrus.Errorf("Error saving JWT secret: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error": "Registration failed",
+				})
+				return
+			}
+			viper.Set("JWT_SECRET", jwtSecret)
+			logrus.Info("JWT secret generated and saved")
+		}
+		
 		// Generate invite code for the organization
 		inviteCode := generateInviteCode()
 		if err := updateConfigFile("INVITE_CODE", inviteCode); err != nil {
@@ -174,6 +199,16 @@ func LoginHandler(c *gin.Context) {
 			"role":  user.Role,
 		},
 	})
+}
+
+func generateJWTSecret() (string, error) {
+	// Generate 32 bytes of random data
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return "", err
+	}
+	// Encode to base64 for storage
+	return base64.StdEncoding.EncodeToString(secret), nil
 }
 
 func GetProfileHandler(c *gin.Context) {
