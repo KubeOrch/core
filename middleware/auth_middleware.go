@@ -42,7 +42,7 @@ func AuthMiddleware() gin.HandlerFunc {
 
 		// Set user information in context
 		c.Set("userID", claims.UserID)
-		c.Set("userEmail", claims.Email)
+		c.Set("email", claims.Email)
 		c.Set("userRole", string(claims.Role))
 
 		c.Next()
@@ -62,7 +62,7 @@ func AdminMiddleware() gin.HandlerFunc {
 
 		userRole := models.UserRole(role.(string))
 		if userRole != models.RoleAdmin {
-			email, _ := c.Get("userEmail")
+			email, _ := c.Get("email") // Changed from userEmail to email
 			logrus.Warnf("Non-admin user attempted to access admin endpoint: %s", email)
 			c.JSON(http.StatusForbidden, gin.H{
 				"error": "Admin access required",
@@ -87,7 +87,7 @@ func RequireRole(allowedRoles ...models.UserRole) gin.HandlerFunc {
 		}
 
 		userRole := models.UserRole(role.(string))
-		
+
 		// Check if user role is in allowed roles
 		allowed := false
 		for _, allowedRole := range allowedRoles {

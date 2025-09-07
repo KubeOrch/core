@@ -38,7 +38,7 @@ func SetupRouter() *gin.Engine {
 		protected.Use(middleware.AuthMiddleware())
 		{
 			protected.GET("/profile", handlers.GetProfileHandler)
-			
+
 			// Settings routes
 			settings := protected.Group("/settings")
 			{

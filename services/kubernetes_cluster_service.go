@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/KubeOrch/core/models"
 	k8sauth "github.com/KubeOrch/core/pkg/kubernetes"
@@ -29,17 +30,17 @@ func NewKubernetesClusterService() *KubernetesClusterService {
 // CreateClusterConnection creates a Kubernetes client from stored cluster credentials
 func (s *KubernetesClusterService) CreateClusterConnection(cluster *models.Cluster) (*kubernetes.Clientset, error) {
 	auth := s.clusterToAuthConfig(cluster)
-	
+
 	config, err := auth.BuildRESTConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build REST config: %w", err)
 	}
-	
+
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create kubernetes client: %w", err)
 	}
-	
+
 	return clientset, nil
 }
 
@@ -47,7 +48,7 @@ func (s *KubernetesClusterService) CreateClusterConnection(cluster *models.Clust
 func (s *KubernetesClusterService) AddCluster(ctx context.Context, userID primitive.ObjectID, cluster *models.Cluster) error {
 	cluster.UserID = userID
 	cluster.Status = models.ClusterStatusUnknown
-	
+
 	// Test connection before saving
 	clientset, err := s.CreateClusterConnection(cluster)
 	if err != nil {
@@ -61,16 +62,18 @@ func (s *KubernetesClusterService) AddCluster(ctx context.Context, userID primit
 		} else {
 			cluster.Status = models.ClusterStatusConnected
 			// Update metadata
-			s.updateClusterMetadata(ctx, cluster, clientset)
+			if err := s.updateClusterMetadata(ctx, cluster, clientset); err != nil {
+				s.logger.WithError(err).Warn("Failed to update cluster metadata on add")
+			}
 		}
 	}
-	
+
 	if err := s.clusterRepo.Create(ctx, cluster); err != nil {
 		return fmt.Errorf("failed to save cluster: %w", err)
 	}
-	
+
 	s.logConnection(ctx, cluster.ID, userID, "cluster_added", cluster.Status == models.ClusterStatusConnected, nil)
-	
+
 	return nil
 }
 
@@ -80,7 +83,7 @@ func (s *KubernetesClusterService) GetClusterClient(ctx context.Context, userID 
 	if err != nil {
 		return nil, fmt.Errorf("cluster not found: %w", err)
 	}
-	
+
 	return s.CreateClusterConnection(cluster)
 }
 
@@ -105,21 +108,24 @@ func (s *KubernetesClusterService) RemoveCluster(ctx context.Context, userID pri
 	if err != nil {
 		return fmt.Errorf("cluster not found: %w", err)
 	}
-	
+
 	// Check permissions
 	if cluster.UserID != userID {
-		access, _ := s.clusterRepo.GetUserAccess(ctx, cluster.ID, userID)
+		access, err := s.clusterRepo.GetUserAccess(ctx, cluster.ID, userID)
+		if err != nil {
+			return fmt.Errorf("failed to check user access permissions: %w", err)
+		}
 		if access == nil || access.Role != "admin" {
 			return fmt.Errorf("insufficient permissions to remove cluster")
 		}
 	}
-	
+
 	if err := s.clusterRepo.Delete(ctx, cluster.ID); err != nil {
 		return fmt.Errorf("failed to delete cluster: %w", err)
 	}
-	
+
 	s.logConnection(ctx, cluster.ID, userID, "cluster_removed", true, nil)
-	
+
 	return nil
 }
 
@@ -129,25 +135,27 @@ func (s *KubernetesClusterService) TestClusterConnection(ctx context.Context, us
 	if err != nil {
 		return fmt.Errorf("cluster not found: %w", err)
 	}
-	
+
 	clientset, err := s.CreateClusterConnection(cluster)
 	if err != nil {
 		_ = s.clusterRepo.UpdateStatus(ctx, cluster.ID, models.ClusterStatusError)
 		s.logConnection(ctx, cluster.ID, userID, "connection_test", false, err)
 		return fmt.Errorf("failed to create connection: %w", err)
 	}
-	
+
 	// Test connection
 	_, err = clientset.Discovery().ServerVersion()
-	
+
 	status := models.ClusterStatusConnected
 	if err != nil {
 		status = models.ClusterStatusError
 	}
-	
-	_ = s.clusterRepo.UpdateStatus(ctx, cluster.ID, status)
+
+	if updateErr := s.clusterRepo.UpdateStatus(ctx, cluster.ID, status); updateErr != nil {
+		s.logger.WithError(updateErr).Warn("failed to update cluster status after connection test")
+	}
 	s.logConnection(ctx, cluster.ID, userID, "connection_test", err == nil, err)
-	
+
 	return err
 }
 
@@ -157,7 +165,7 @@ func (s *KubernetesClusterService) SetDefaultCluster(ctx context.Context, userID
 	if err != nil {
 		return fmt.Errorf("cluster not found: %w", err)
 	}
-	
+
 	return s.clusterRepo.SetDefault(ctx, userID, cluster.ID)
 }
 
@@ -172,24 +180,24 @@ func (s *KubernetesClusterService) UpdateClusterCredentials(ctx context.Context,
 	if err != nil {
 		return fmt.Errorf("cluster not found: %w", err)
 	}
-	
+
 	// Only owner can update credentials
 	if cluster.UserID != userID {
 		return fmt.Errorf("only cluster owner can update credentials")
 	}
-	
+
 	// Test new credentials
 	cluster.Credentials = credentials
 	clientset, err := s.CreateClusterConnection(cluster)
 	if err != nil {
 		return fmt.Errorf("invalid credentials: %w", err)
 	}
-	
+
 	_, err = clientset.Discovery().ServerVersion()
 	if err != nil {
 		return fmt.Errorf("failed to validate new credentials: %w", err)
 	}
-	
+
 	// Update in database
 	return s.clusterRepo.Update(ctx, cluster.ID, bson.M{
 		"credentials": credentials,
@@ -203,11 +211,11 @@ func (s *KubernetesClusterService) ShareCluster(ctx context.Context, ownerID, cl
 	if err != nil {
 		return fmt.Errorf("cluster not found: %w", err)
 	}
-	
+
 	if cluster.UserID != ownerID {
 		return fmt.Errorf("only cluster owner can share access")
 	}
-	
+
 	access := &models.ClusterAccess{
 		ClusterID:  clusterID,
 		UserID:     targetUserID,
@@ -215,16 +223,16 @@ func (s *KubernetesClusterService) ShareCluster(ctx context.Context, ownerID, cl
 		Namespaces: namespaces,
 		GrantedBy:  ownerID,
 	}
-	
+
 	if err := s.clusterRepo.GrantAccess(ctx, access); err != nil {
 		return fmt.Errorf("failed to grant access: %w", err)
 	}
-	
+
 	s.logConnection(ctx, clusterID, ownerID, "access_granted", true, bson.M{
 		"target_user": targetUserID,
 		"role":        role,
 	})
-	
+
 	return nil
 }
 
@@ -234,11 +242,11 @@ func (s *KubernetesClusterService) RevokeClusterAccess(ctx context.Context, owne
 	if err != nil {
 		return fmt.Errorf("cluster not found: %w", err)
 	}
-	
+
 	if cluster.UserID != ownerID {
 		return fmt.Errorf("only cluster owner can revoke access")
 	}
-	
+
 	return s.clusterRepo.RevokeAccess(ctx, clusterID, targetUserID)
 }
 
@@ -248,7 +256,7 @@ func (s *KubernetesClusterService) GetClusterLogs(ctx context.Context, userID pr
 	if err != nil {
 		return nil, fmt.Errorf("cluster not found: %w", err)
 	}
-	
+
 	return s.clusterRepo.GetConnectionLogs(ctx, cluster.ID, limit)
 }
 
@@ -258,12 +266,12 @@ func (s *KubernetesClusterService) RefreshClusterMetadata(ctx context.Context, u
 	if err != nil {
 		return fmt.Errorf("cluster not found: %w", err)
 	}
-	
+
 	clientset, err := s.CreateClusterConnection(cluster)
 	if err != nil {
 		return fmt.Errorf("failed to create connection: %w", err)
 	}
-	
+
 	return s.updateClusterMetadata(ctx, cluster, clientset)
 }
 
@@ -272,7 +280,7 @@ func (s *KubernetesClusterService) RefreshClusterMetadata(ctx context.Context, u
 func (s *KubernetesClusterService) clusterToAuthConfig(cluster *models.Cluster) *k8sauth.AuthConfig {
 	auth := k8sauth.NewAuthConfig(k8sauth.AuthType(cluster.AuthType))
 	auth.ServerURL = cluster.Server
-	
+
 	switch cluster.AuthType {
 	case models.ClusterAuthToken, models.ClusterAuthServiceAccount:
 		auth.BearerToken = cluster.Credentials.Token
@@ -288,10 +296,10 @@ func (s *KubernetesClusterService) clusterToAuthConfig(cluster *models.Cluster) 
 		auth.OIDCRefreshToken = cluster.Credentials.OIDCRefreshToken
 		auth.OIDCScopes = cluster.Credentials.OIDCScopes
 	}
-	
+
 	auth.CAData = cluster.Credentials.CAData
 	auth.Insecure = cluster.Credentials.Insecure
-	
+
 	return auth
 }
 
@@ -300,28 +308,37 @@ func (s *KubernetesClusterService) updateClusterMetadata(ctx context.Context, cl
 	if err != nil {
 		return err
 	}
-	
-	nodes, _ := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-	namespaces, _ := clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
-	storageClasses, _ := clientset.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
-	
+
+	nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		s.logger.WithError(err).Warn("failed to list nodes for metadata update")
+	}
+	namespaces, err := clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		s.logger.WithError(err).Warn("failed to list namespaces for metadata update")
+	}
+	storageClasses, err := clientset.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		s.logger.WithError(err).Warn("failed to list storage classes for metadata update")
+	}
+
 	metadata := models.ClusterMetadata{
 		Version:   version.String(),
 		NodeCount: len(nodes.Items),
 	}
-	
+
 	if namespaces != nil {
 		for _, ns := range namespaces.Items {
 			metadata.Namespaces = append(metadata.Namespaces, ns.Name)
 		}
 	}
-	
+
 	if storageClasses != nil {
 		for _, sc := range storageClasses.Items {
 			metadata.StorageClasses = append(metadata.StorageClasses, sc.Name)
 		}
 	}
-	
+
 	if len(nodes.Items) > 0 {
 		node := nodes.Items[0]
 		if platform, ok := node.Labels["kubernetes.io/os"]; ok {
@@ -331,7 +348,7 @@ func (s *KubernetesClusterService) updateClusterMetadata(ctx context.Context, cl
 			metadata.Provider = provider
 		}
 	}
-	
+
 	cluster.Metadata = metadata
 	return s.clusterRepo.UpdateMetadata(ctx, cluster.ID, metadata)
 }
@@ -343,28 +360,31 @@ func (s *KubernetesClusterService) logConnection(ctx context.Context, clusterID,
 		Action:    action,
 		Success:   success,
 	}
-	
+
 	if !success && details != nil {
 		if err, ok := details.(error); ok {
 			log.Error = err.Error()
 		}
 	}
-	
+
 	if detailsMap, ok := details.(bson.M); ok {
 		log.Details = detailsMap
 	}
-	
+
 	if err := s.clusterRepo.LogConnection(ctx, log); err != nil {
 		s.logger.WithError(err).Warn("Failed to log connection")
 	}
 }
 
 // Singleton instance
-var clusterServiceInstance *KubernetesClusterService
+var (
+	clusterServiceInstance *KubernetesClusterService
+	once                   sync.Once
+)
 
 func GetKubernetesClusterService() *KubernetesClusterService {
-	if clusterServiceInstance == nil {
+	once.Do(func() {
 		clusterServiceInstance = NewKubernetesClusterService()
-	}
+	})
 	return clusterServiceInstance
 }

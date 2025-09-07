@@ -32,12 +32,12 @@ func (r *ClusterRepository) Create(ctx context.Context, cluster *models.Cluster)
 	cluster.CreatedAt = time.Now()
 	cluster.UpdatedAt = time.Now()
 	cluster.Status = models.ClusterStatusUnknown
-	
+
 	result, err := r.collection.InsertOne(ctx, cluster)
 	if err != nil {
 		return fmt.Errorf("failed to create cluster: %w", err)
 	}
-	
+
 	cluster.ID = result.InsertedID.(primitive.ObjectID)
 	return nil
 }
@@ -57,13 +57,13 @@ func (r *ClusterRepository) GetByID(ctx context.Context, id primitive.ObjectID) 
 func (r *ClusterRepository) GetByName(ctx context.Context, name string, userID primitive.ObjectID) (*models.Cluster, error) {
 	var cluster models.Cluster
 	filter := bson.M{
-		"name":    name,
+		"name": name,
 		"$or": []bson.M{
 			{"user_id": userID},
 			{"shared_with": userID},
 		},
 	}
-	
+
 	err := r.collection.FindOne(ctx, filter).Decode(&cluster)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
@@ -81,51 +81,51 @@ func (r *ClusterRepository) ListByUser(ctx context.Context, userID primitive.Obj
 			{"shared_with": userID},
 		},
 	}
-	
+
 	cursor, err := r.collection.Find(ctx, filter, options.Find().SetSort(bson.D{{"created_at", -1}}))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list clusters: %w", err)
 	}
 	defer cursor.Close(ctx)
-	
+
 	var clusters []*models.Cluster
 	if err := cursor.All(ctx, &clusters); err != nil {
 		return nil, fmt.Errorf("failed to decode clusters: %w", err)
 	}
-	
+
 	return clusters, nil
 }
 
 func (r *ClusterRepository) ListByOrganization(ctx context.Context, orgID primitive.ObjectID) ([]*models.Cluster, error) {
 	filter := bson.M{"org_id": orgID}
-	
+
 	cursor, err := r.collection.Find(ctx, filter, options.Find().SetSort(bson.D{{"created_at", -1}}))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list organization clusters: %w", err)
 	}
 	defer cursor.Close(ctx)
-	
+
 	var clusters []*models.Cluster
 	if err := cursor.All(ctx, &clusters); err != nil {
 		return nil, fmt.Errorf("failed to decode clusters: %w", err)
 	}
-	
+
 	return clusters, nil
 }
 
 func (r *ClusterRepository) Update(ctx context.Context, id primitive.ObjectID, update bson.M) error {
 	update["updated_at"] = time.Now()
-	
+
 	_, err := r.collection.UpdateOne(
 		ctx,
 		bson.M{"_id": id},
 		bson.M{"$set": update},
 	)
-	
+
 	if err != nil {
 		return fmt.Errorf("failed to update cluster: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -146,23 +146,50 @@ func (r *ClusterRepository) Delete(ctx context.Context, id primitive.ObjectID) e
 	if err != nil {
 		return fmt.Errorf("failed to delete cluster: %w", err)
 	}
-	
+
 	_, _ = r.accessCol.DeleteMany(ctx, bson.M{"cluster_id": id})
-	
+
 	return nil
 }
 
 func (r *ClusterRepository) SetDefault(ctx context.Context, userID, clusterID primitive.ObjectID) error {
-	_, err := r.collection.UpdateMany(
-		ctx,
-		bson.M{"user_id": userID},
-		bson.M{"$set": bson.M{"default": false}},
-	)
+	session, err := database.Client.StartSession()
 	if err != nil {
-		return fmt.Errorf("failed to unset default clusters: %w", err)
+		return fmt.Errorf("failed to start session: %w", err)
 	}
-	
-	return r.Update(ctx, clusterID, bson.M{"default": true})
+	defer session.EndSession(ctx)
+
+	err = mongo.WithSession(ctx, session, func(sc mongo.SessionContext) error {
+		if err := session.StartTransaction(); err != nil {
+			return fmt.Errorf("failed to start transaction: %w", err)
+		}
+
+		// Unset all defaults for this user
+		_, err := r.collection.UpdateMany(
+			sc,
+			bson.M{"user_id": userID},
+			bson.M{"$set": bson.M{"default": false}},
+		)
+		if err != nil {
+			_ = session.AbortTransaction(sc)
+			return fmt.Errorf("failed to unset default clusters: %w", err)
+		}
+
+		// Set the new default
+		_, err = r.collection.UpdateOne(
+			sc,
+			bson.M{"_id": clusterID},
+			bson.M{"$set": bson.M{"default": true, "updated_at": time.Now()}},
+		)
+		if err != nil {
+			_ = session.AbortTransaction(sc)
+			return fmt.Errorf("failed to set default cluster: %w", err)
+		}
+
+		return session.CommitTransaction(sc)
+	})
+
+	return err
 }
 
 func (r *ClusterRepository) GetDefault(ctx context.Context, userID primitive.ObjectID) (*models.Cluster, error) {
@@ -174,7 +201,7 @@ func (r *ClusterRepository) GetDefault(ctx context.Context, userID primitive.Obj
 			{"shared_with": userID},
 		},
 	}
-	
+
 	err := r.collection.FindOne(ctx, filter).Decode(&cluster)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
@@ -182,42 +209,84 @@ func (r *ClusterRepository) GetDefault(ctx context.Context, userID primitive.Obj
 		}
 		return nil, fmt.Errorf("failed to get default cluster: %w", err)
 	}
-	
+
 	return &cluster, nil
 }
 
 func (r *ClusterRepository) GrantAccess(ctx context.Context, access *models.ClusterAccess) error {
 	access.GrantedAt = time.Now()
-	
-	_, err := r.accessCol.InsertOne(ctx, access)
+
+	session, err := database.Client.StartSession()
 	if err != nil {
-		return fmt.Errorf("failed to grant cluster access: %w", err)
+		return fmt.Errorf("failed to start session: %w", err)
 	}
-	
-	_, err = r.collection.UpdateOne(
-		ctx,
-		bson.M{"_id": access.ClusterID},
-		bson.M{"$addToSet": bson.M{"shared_with": access.UserID}},
-	)
-	
+	defer session.EndSession(ctx)
+
+	err = mongo.WithSession(ctx, session, func(sc mongo.SessionContext) error {
+		if err := session.StartTransaction(); err != nil {
+			return fmt.Errorf("failed to start transaction: %w", err)
+		}
+
+		// Insert access record
+		_, err := r.accessCol.InsertOne(sc, access)
+		if err != nil {
+			_ = session.AbortTransaction(sc)
+			return fmt.Errorf("failed to grant cluster access: %w", err)
+		}
+
+		// Update cluster's shared_with array
+		_, err = r.collection.UpdateOne(
+			sc,
+			bson.M{"_id": access.ClusterID},
+			bson.M{"$addToSet": bson.M{"shared_with": access.UserID}},
+		)
+		if err != nil {
+			_ = session.AbortTransaction(sc)
+			return fmt.Errorf("failed to update shared_with: %w", err)
+		}
+
+		return session.CommitTransaction(sc)
+	})
+
 	return err
 }
 
 func (r *ClusterRepository) RevokeAccess(ctx context.Context, clusterID, userID primitive.ObjectID) error {
-	_, err := r.accessCol.DeleteMany(ctx, bson.M{
-		"cluster_id": clusterID,
-		"user_id":    userID,
-	})
+	session, err := database.Client.StartSession()
 	if err != nil {
-		return fmt.Errorf("failed to revoke cluster access: %w", err)
+		return fmt.Errorf("failed to start session: %w", err)
 	}
-	
-	_, err = r.collection.UpdateOne(
-		ctx,
-		bson.M{"_id": clusterID},
-		bson.M{"$pull": bson.M{"shared_with": userID}},
-	)
-	
+	defer session.EndSession(ctx)
+
+	err = mongo.WithSession(ctx, session, func(sc mongo.SessionContext) error {
+		if err := session.StartTransaction(); err != nil {
+			return fmt.Errorf("failed to start transaction: %w", err)
+		}
+
+		// Delete access records
+		_, err := r.accessCol.DeleteMany(sc, bson.M{
+			"cluster_id": clusterID,
+			"user_id":    userID,
+		})
+		if err != nil {
+			_ = session.AbortTransaction(sc)
+			return fmt.Errorf("failed to revoke cluster access: %w", err)
+		}
+
+		// Remove from shared_with array
+		_, err = r.collection.UpdateOne(
+			sc,
+			bson.M{"_id": clusterID},
+			bson.M{"$pull": bson.M{"shared_with": userID}},
+		)
+		if err != nil {
+			_ = session.AbortTransaction(sc)
+			return fmt.Errorf("failed to update shared_with: %w", err)
+		}
+
+		return session.CommitTransaction(sc)
+	})
+
 	return err
 }
 
@@ -227,25 +296,25 @@ func (r *ClusterRepository) GetUserAccess(ctx context.Context, clusterID, userID
 		"cluster_id": clusterID,
 		"user_id":    userID,
 	}).Decode(&access)
-	
+
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to get user access: %w", err)
 	}
-	
+
 	return &access, nil
 }
 
 func (r *ClusterRepository) LogConnection(ctx context.Context, log *models.ClusterConnectionLog) error {
 	log.Timestamp = time.Now()
-	
+
 	_, err := r.logCol.InsertOne(ctx, log)
 	if err != nil {
 		return fmt.Errorf("failed to log connection: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -253,17 +322,17 @@ func (r *ClusterRepository) GetConnectionLogs(ctx context.Context, clusterID pri
 	opts := options.Find().
 		SetSort(bson.D{{"timestamp", -1}}).
 		SetLimit(limit)
-	
+
 	cursor, err := r.logCol.Find(ctx, bson.M{"cluster_id": clusterID}, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get connection logs: %w", err)
 	}
 	defer cursor.Close(ctx)
-	
+
 	var logs []*models.ClusterConnectionLog
 	if err := cursor.All(ctx, &logs); err != nil {
 		return nil, fmt.Errorf("failed to decode logs: %w", err)
 	}
-	
+
 	return logs, nil
 }

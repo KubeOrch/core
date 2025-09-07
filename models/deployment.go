@@ -8,12 +8,12 @@ type DeploymentRequest struct {
 }
 
 type DeploymentParameters struct {
-	Image    string                 `json:"image" binding:"required"`
-	Replicas int                    `json:"replicas" binding:"min=1"`
-	Port     int                    `json:"port" binding:"min=1,max=65535"`
-	Env      map[string]string      `json:"env,omitempty"`
+	Image     string                `json:"image" binding:"required"`
+	Replicas  int                   `json:"replicas" binding:"min=1"`
+	Port      int                   `json:"port" binding:"min=1,max=65535"`
+	Env       map[string]string     `json:"env,omitempty"`
 	Resources *ResourceRequirements `json:"resources,omitempty"`
-	Labels   map[string]string      `json:"labels,omitempty"`
+	Labels    map[string]string     `json:"labels,omitempty"`
 }
 
 type ResourceRequirements struct {

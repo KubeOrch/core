@@ -21,7 +21,6 @@ func main() {
 	}
 	defer database.Close()
 
-
 	port := config.GetPort()
 	ginMode := config.GetGinMode()
 	gin.SetMode(ginMode)
@@ -31,7 +30,7 @@ func main() {
 	logrus.Infof("Starting KubeOrch server on port %s in %s mode...", port, ginMode)
 	logrus.Info("MongoDB connection established")
 	logrus.Info("First user to register will automatically become admin")
-	
+
 	if err := router.Run(":" + port); err != nil {
 		logrus.Fatal("Failed to start server:", err)
 	}

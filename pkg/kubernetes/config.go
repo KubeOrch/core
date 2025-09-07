@@ -115,7 +115,7 @@ func (k *KubeConfigLoader) applyRateLimiting(config *rest.Config) {
 
 func (k *KubeConfigLoader) LoadRawConfig() (*api.Config, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	
+
 	if k.kubeconfigPath != "" {
 		loadingRules.ExplicitPath = k.kubeconfigPath
 	} else if envPath := os.Getenv("KUBECONFIG"); envPath != "" {
@@ -156,11 +156,11 @@ func ValidateClusterConnectionWithRetry(ctx context.Context, config *rest.Config
 }
 
 type ClusterInfo struct {
-	Name       string
-	Server     string
-	AuthInfo   string
-	Namespace  string
-	Current    bool
+	Name      string
+	Server    string
+	AuthInfo  string
+	Namespace string
+	Current   bool
 }
 
 func ListAvailableClusters(kubeconfigPath string) ([]ClusterInfo, error) {
@@ -198,7 +198,7 @@ func GetConfigForContext(kubeconfigPath, contextName string) (*rest.Config, erro
 	loader := NewKubeConfigLoader().
 		WithKubeConfigPath(kubeconfigPath).
 		WithContext(contextName)
-	
+
 	return loader.Load()
 }
 

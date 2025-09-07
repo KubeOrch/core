@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"io/ioutil"
+	"os"
 
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd/api"
@@ -23,33 +23,33 @@ const (
 
 type AuthConfig struct {
 	Type AuthType
-	
+
 	KubeConfigPath    string
 	KubeConfigContent string
-	
+
 	ServiceAccountToken string
 	ServiceAccountPath  string
-	
+
 	BearerToken     string
 	BearerTokenFile string
-	
+
 	ClientCertData string
 	ClientKeyData  string
 	ClientCertPath string
 	ClientKeyPath  string
 	CAData         string
 	CAPath         string
-	
-	OIDCIssuerURL      string
-	OIDCClientID       string
-	OIDCClientSecret   string
-	OIDCRefreshToken   string
-	OIDCScopes         []string
-	
+
+	OIDCIssuerURL    string
+	OIDCClientID     string
+	OIDCClientSecret string
+	OIDCRefreshToken string
+	OIDCScopes       []string
+
 	ExecCommand string
 	ExecArgs    []string
 	ExecEnv     map[string]string
-	
+
 	ServerURL string
 	Insecure  bool
 }
@@ -81,7 +81,7 @@ func (a *AuthConfig) BuildRESTConfig() (*rest.Config, error) {
 
 func (a *AuthConfig) buildKubeConfigAuth() (*rest.Config, error) {
 	if a.KubeConfigContent != "" {
-		tempFile, err := ioutil.TempFile("", "kubeconfig-*.yaml")
+		tempFile, err := os.CreateTemp("", "kubeconfig-*.yaml")
 		if err != nil {
 			return nil, fmt.Errorf("failed to create temp kubeconfig file: %w", err)
 		}
@@ -174,10 +174,10 @@ func (a *AuthConfig) buildOIDCAuth() (*rest.Config, error) {
 		AuthProvider: &api.AuthProviderConfig{
 			Name: "oidc",
 			Config: map[string]string{
-				"idp-issuer-url":  a.OIDCIssuerURL,
-				"client-id":       a.OIDCClientID,
-				"client-secret":   a.OIDCClientSecret,
-				"refresh-token":   a.OIDCRefreshToken,
+				"idp-issuer-url": a.OIDCIssuerURL,
+				"client-id":      a.OIDCClientID,
+				"client-secret":  a.OIDCClientSecret,
+				"refresh-token":  a.OIDCRefreshToken,
 			},
 		},
 	}
@@ -246,43 +246,11 @@ func (a *AuthConfig) applyTLSConfig(config *rest.Config) error {
 	return nil
 }
 
-type ClusterCredentials struct {
-	Name      string            `json:"name"`
-	Server    string            `json:"server"`
-	AuthType  AuthType          `json:"authType"`
-	Token     string            `json:"token,omitempty"`
-	CertData  string            `json:"certData,omitempty"`
-	KeyData   string            `json:"keyData,omitempty"`
-	CAData    string            `json:"caData,omitempty"`
-	Namespace string            `json:"namespace,omitempty"`
-	Labels    map[string]string `json:"labels,omitempty"`
-}
-
-func (c *ClusterCredentials) ToAuthConfig() *AuthConfig {
-	auth := NewAuthConfig(c.AuthType)
-	auth.ServerURL = c.Server
-	
-	switch c.AuthType {
-	case AuthTypeToken, AuthTypeServiceAccount:
-		auth.BearerToken = c.Token
-	case AuthTypeCertificate:
-		auth.ClientCertData = c.CertData
-		auth.ClientKeyData = c.KeyData
-	}
-	
-	auth.CAData = c.CAData
-	return auth
-}
-
-func (c *ClusterCredentials) BuildRESTConfig() (*rest.Config, error) {
-	return c.ToAuthConfig().BuildRESTConfig()
-}
-
 func CreateServiceAccountConfig(namespace, serviceAccountName string) *AuthConfig {
 	tokenPath := fmt.Sprintf("/var/run/secrets/kubernetes.io/serviceaccount/%s/%s/token",
 		namespace, serviceAccountName)
 	caPath := "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-	
+
 	return &AuthConfig{
 		Type:               AuthTypeServiceAccount,
 		ServiceAccountPath: tokenPath,
@@ -295,6 +263,6 @@ func ValidateAuthConfig(ctx context.Context, auth *AuthConfig) error {
 	if err != nil {
 		return fmt.Errorf("failed to build REST config: %w", err)
 	}
-	
+
 	return ValidateClusterConnection(ctx, config)
 }
