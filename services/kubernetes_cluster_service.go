@@ -278,7 +278,7 @@ func (s *KubernetesClusterService) RefreshClusterMetadata(ctx context.Context, u
 // Helper functions
 
 func (s *KubernetesClusterService) clusterToAuthConfig(cluster *models.Cluster) *k8sauth.AuthConfig {
-	auth := k8sauth.NewAuthConfig(k8sauth.AuthType(cluster.AuthType))
+	auth := k8sauth.NewAuthConfig(cluster.AuthType)
 	auth.ServerURL = cluster.Server
 
 	switch cluster.AuthType {

@@ -6,23 +6,13 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/KubeOrch/core/models"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd/api"
 )
 
-type AuthType string
-
-const (
-	AuthTypeKubeConfig     AuthType = "kubeconfig"
-	AuthTypeServiceAccount AuthType = "serviceaccount"
-	AuthTypeToken          AuthType = "token"
-	AuthTypeCertificate    AuthType = "certificate"
-	AuthTypeOIDC           AuthType = "oidc"
-	AuthTypeExec           AuthType = "exec"
-)
-
 type AuthConfig struct {
-	Type AuthType
+	Type models.ClusterAuthType
 
 	KubeConfigPath    string
 	KubeConfigContent string
@@ -54,7 +44,7 @@ type AuthConfig struct {
 	Insecure  bool
 }
 
-func NewAuthConfig(authType AuthType) *AuthConfig {
+func NewAuthConfig(authType models.ClusterAuthType) *AuthConfig {
 	return &AuthConfig{
 		Type: authType,
 	}
@@ -62,18 +52,16 @@ func NewAuthConfig(authType AuthType) *AuthConfig {
 
 func (a *AuthConfig) BuildRESTConfig() (*rest.Config, error) {
 	switch a.Type {
-	case AuthTypeKubeConfig:
+	case models.ClusterAuthKubeConfig:
 		return a.buildKubeConfigAuth()
-	case AuthTypeServiceAccount:
+	case models.ClusterAuthServiceAccount:
 		return a.buildServiceAccountAuth()
-	case AuthTypeToken:
+	case models.ClusterAuthToken:
 		return a.buildTokenAuth()
-	case AuthTypeCertificate:
+	case models.ClusterAuthCertificate:
 		return a.buildCertificateAuth()
-	case AuthTypeOIDC:
+	case models.ClusterAuthOIDC:
 		return a.buildOIDCAuth()
-	case AuthTypeExec:
-		return a.buildExecAuth()
 	default:
 		return nil, fmt.Errorf("unsupported auth type: %s", a.Type)
 	}
@@ -252,7 +240,7 @@ func CreateServiceAccountConfig(namespace, serviceAccountName string) *AuthConfi
 	caPath := "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
 
 	return &AuthConfig{
-		Type:               AuthTypeServiceAccount,
+		Type:               models.ClusterAuthServiceAccount,
 		ServiceAccountPath: tokenPath,
 		CAPath:             caPath,
 	}
