@@ -26,12 +26,12 @@ func Connect() error {
 	logrus.Infof("Connecting to MongoDB: host=%s, port=%s, dbname=%s", host, port, dbname)
 
 	uri := fmt.Sprintf("mongodb://%s:%s", host, port)
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	clientOptions := options.Client().ApplyURI(uri)
-	
+
 	client, err := mongo.Connect(ctx, clientOptions)
 	if err != nil {
 		logrus.Errorf("Could not connect to MongoDB: %v", err)
@@ -49,7 +49,7 @@ func Connect() error {
 	UserColl = Database.Collection("users")
 
 	logrus.Info("MongoDB connection established")
-	
+
 	// Create indexes
 	if err := createIndexes(); err != nil {
 		logrus.Errorf("Failed to create indexes: %v", err)
@@ -115,11 +115,15 @@ func IsFirstUser() (bool, error) {
 	return count == 0, nil
 }
 
+func GetDB() *mongo.Database {
+	return Database
+}
+
 func Close() error {
 	if Client != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		
+
 		if err := Client.Disconnect(ctx); err != nil {
 			logrus.Errorf("Could not disconnect from MongoDB: %v", err)
 			return err

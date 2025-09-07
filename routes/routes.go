@@ -38,7 +38,7 @@ func SetupRouter() *gin.Engine {
 		protected.Use(middleware.AuthMiddleware())
 		{
 			protected.GET("/profile", handlers.GetProfileHandler)
-			
+
 			// Settings routes
 			settings := protected.Group("/settings")
 			{
@@ -55,6 +55,23 @@ func SetupRouter() *gin.Engine {
 			deployments.GET("/:id", handlers.GetDeploymentHandler)
 			deployments.PUT("/:id", handlers.UpdateDeploymentHandler)
 			deployments.DELETE("/:id", handlers.DeleteDeploymentHandler)
+		}
+
+		// Kubernetes cluster management routes
+		clusterHandler := handlers.NewClusterHandler()
+		clusters := protected.Group("/clusters")
+		{
+			clusters.POST("/", clusterHandler.AddCluster)
+			clusters.GET("/", clusterHandler.ListClusters)
+			clusters.GET("/default", clusterHandler.GetDefaultCluster)
+			clusters.GET("/:name", clusterHandler.GetCluster)
+			clusters.DELETE("/:name", clusterHandler.RemoveCluster)
+			clusters.PUT("/:name/default", clusterHandler.SetDefaultCluster)
+			clusters.POST("/:name/test", clusterHandler.TestConnection)
+			clusters.POST("/:name/refresh", clusterHandler.RefreshMetadata)
+			clusters.GET("/:name/logs", clusterHandler.GetClusterLogs)
+			clusters.PUT("/:name/credentials", clusterHandler.UpdateCredentials)
+			clusters.POST("/:name/share", clusterHandler.ShareCluster)
 		}
 
 		// Admin routes

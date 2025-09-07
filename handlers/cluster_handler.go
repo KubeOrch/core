@@ -1,0 +1,423 @@
+package handlers
+
+import (
+	"net/http"
+	"strconv"
+
+	"github.com/KubeOrch/core/middleware"
+	"github.com/KubeOrch/core/models"
+	"github.com/KubeOrch/core/services"
+	"github.com/gin-gonic/gin"
+	"github.com/sirupsen/logrus"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+)
+
+type ClusterHandler struct {
+	service *services.KubernetesClusterService
+	logger  *logrus.Logger
+}
+
+func NewClusterHandler() *ClusterHandler {
+	return &ClusterHandler{
+		service: services.GetKubernetesClusterService(),
+		logger:  logrus.New(),
+	}
+}
+
+type AddClusterRequest struct {
+	Name        string                    `json:"name" binding:"required"`
+	DisplayName string                    `json:"displayName"`
+	Description string                    `json:"description"`
+	Server      string                    `json:"server" binding:"required"`
+	AuthType    models.ClusterAuthType    `json:"authType" binding:"required"`
+	Credentials models.ClusterCredentials `json:"credentials" binding:"required"`
+	Labels      map[string]string         `json:"labels,omitempty"`
+}
+
+type ClusterResponse struct {
+	ID          string                 `json:"id"`
+	Name        string                 `json:"name"`
+	DisplayName string                 `json:"displayName"`
+	Description string                 `json:"description"`
+	Server      string                 `json:"server"`
+	AuthType    models.ClusterAuthType `json:"authType"`
+	Status      models.ClusterStatus   `json:"status"`
+	Default     bool                   `json:"default"`
+	Labels      map[string]string      `json:"labels,omitempty"`
+	Metadata    models.ClusterMetadata `json:"metadata,omitempty"`
+}
+
+func (h *ClusterHandler) AddCluster(c *gin.Context) {
+	var req AddClusterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		h.logger.WithError(err).Error("Invalid request body")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	cluster := &models.Cluster{
+		Name:        req.Name,
+		DisplayName: req.DisplayName,
+		Description: req.Description,
+		Server:      req.Server,
+		AuthType:    req.AuthType,
+		Credentials: req.Credentials,
+		Labels:      req.Labels,
+	}
+
+	ctx := c.Request.Context()
+	if err := h.service.AddCluster(ctx, userID, cluster); err != nil {
+		h.logger.WithError(err).Error("Failed to add cluster")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"message": "Cluster added successfully",
+		"cluster": clusterToResponse(cluster),
+	})
+}
+
+func (h *ClusterHandler) ListClusters(c *gin.Context) {
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	clusters, err := h.service.ListUserClusters(ctx, userID)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to list clusters")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Get default cluster
+	defaultCluster, err := h.service.GetDefaultCluster(ctx, userID)
+	if err != nil {
+		// A default cluster may not exist, which is not an error
+		// We should only fail on actual errors
+		h.logger.WithError(err).Warn("Failed to get default cluster")
+	}
+	defaultID := ""
+	if defaultCluster != nil {
+		defaultID = defaultCluster.ID.Hex()
+	}
+
+	response := make([]ClusterResponse, 0, len(clusters))
+	for _, cluster := range clusters {
+		clusterResp := clusterToResponse(cluster)
+		clusterResp.Default = cluster.ID.Hex() == defaultID
+		response = append(response, clusterResp)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"clusters": response,
+		"default":  defaultID,
+	})
+}
+
+func (h *ClusterHandler) GetCluster(c *gin.Context) {
+	name := c.Param("name")
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cluster name is required"})
+		return
+	}
+
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	cluster, err := h.service.GetClusterByName(ctx, userID, name)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to get cluster")
+		c.JSON(http.StatusNotFound, gin.H{"error": "Cluster not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, clusterToResponse(cluster))
+}
+
+func (h *ClusterHandler) RemoveCluster(c *gin.Context) {
+	name := c.Param("name")
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cluster name is required"})
+		return
+	}
+
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	if err := h.service.RemoveCluster(ctx, userID, name); err != nil {
+		h.logger.WithError(err).Error("Failed to remove cluster")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Cluster removed successfully",
+		"cluster": name,
+	})
+}
+
+func (h *ClusterHandler) SetDefaultCluster(c *gin.Context) {
+	name := c.Param("name")
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cluster name is required"})
+		return
+	}
+
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	if err := h.service.SetDefaultCluster(ctx, userID, name); err != nil {
+		h.logger.WithError(err).Error("Failed to set default cluster")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Default cluster set successfully",
+		"cluster": name,
+	})
+}
+
+func (h *ClusterHandler) GetDefaultCluster(c *gin.Context) {
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	cluster, err := h.service.GetDefaultCluster(ctx, userID)
+	if err != nil || cluster == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No default cluster set"})
+		return
+	}
+
+	response := clusterToResponse(cluster)
+	response.Default = true
+
+	c.JSON(http.StatusOK, response)
+}
+
+func (h *ClusterHandler) TestConnection(c *gin.Context) {
+	name := c.Param("name")
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cluster name is required"})
+		return
+	}
+
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	if err := h.service.TestClusterConnection(ctx, userID, name); err != nil {
+		h.logger.WithError(err).Error("Cluster connection test failed")
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":   err.Error(),
+			"cluster": name,
+			"status":  "failed",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Connection test successful",
+		"cluster": name,
+		"status":  "connected",
+	})
+}
+
+func (h *ClusterHandler) RefreshMetadata(c *gin.Context) {
+	name := c.Param("name")
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cluster name is required"})
+		return
+	}
+
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	if err := h.service.RefreshClusterMetadata(ctx, userID, name); err != nil {
+		h.logger.WithError(err).Error("Failed to refresh cluster metadata")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Get updated cluster
+	cluster, err := h.service.GetClusterByName(ctx, userID, name)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to get updated cluster info after metadata refresh")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve updated cluster information"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":  "Metadata refreshed successfully",
+		"metadata": cluster.Metadata,
+	})
+}
+
+func (h *ClusterHandler) GetClusterLogs(c *gin.Context) {
+	name := c.Param("name")
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cluster name is required"})
+		return
+	}
+
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	limit := int64(100)
+	if l := c.Query("limit"); l != "" {
+		if parsedLimit, err := strconv.ParseInt(l, 10, 64); err == nil {
+			if parsedLimit > 0 && parsedLimit <= 1000 { // Cap the limit to a max of 1000
+				limit = parsedLimit
+			}
+		}
+	}
+
+	ctx := c.Request.Context()
+	logs, err := h.service.GetClusterLogs(ctx, userID, name, limit)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to get cluster logs")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"cluster": name,
+		"logs":    logs,
+	})
+}
+
+type UpdateCredentialsRequest struct {
+	Credentials models.ClusterCredentials `json:"credentials" binding:"required"`
+}
+
+func (h *ClusterHandler) UpdateCredentials(c *gin.Context) {
+	name := c.Param("name")
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cluster name is required"})
+		return
+	}
+
+	var req UpdateCredentialsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	if err := h.service.UpdateClusterCredentials(ctx, userID, name, req.Credentials); err != nil {
+		h.logger.WithError(err).Error("Failed to update credentials")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Credentials updated successfully",
+		"cluster": name,
+	})
+}
+
+type ShareClusterRequest struct {
+	TargetUserID string   `json:"targetUserId" binding:"required"`
+	Role         string   `json:"role" binding:"required"`
+	Namespaces   []string `json:"namespaces,omitempty"`
+}
+
+func (h *ClusterHandler) ShareCluster(c *gin.Context) {
+	name := c.Param("name")
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cluster name is required"})
+		return
+	}
+
+	var req ShareClusterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	targetID, err := primitive.ObjectIDFromHex(req.TargetUserID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid target user ID"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	cluster, err := h.service.GetClusterByName(ctx, userID, name)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Cluster not found"})
+		return
+	}
+
+	if err := h.service.ShareCluster(ctx, userID, cluster.ID, targetID, req.Role, req.Namespaces); err != nil {
+		h.logger.WithError(err).Error("Failed to share cluster")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Cluster shared successfully",
+		"cluster": name,
+	})
+}
+
+// Helper function to convert cluster model to response
+func clusterToResponse(cluster *models.Cluster) ClusterResponse {
+	return ClusterResponse{
+		ID:          cluster.ID.Hex(),
+		Name:        cluster.Name,
+		DisplayName: cluster.DisplayName,
+		Description: cluster.Description,
+		Server:      cluster.Server,
+		AuthType:    cluster.AuthType,
+		Status:      cluster.Status,
+		Labels:      cluster.Labels,
+		Metadata:    cluster.Metadata,
+	}
+}

@@ -51,7 +51,7 @@ func GetUserByEmail(email string) (*models.User, error) {
 
 	var user models.User
 	filter := bson.M{"email": email, "deleted_at": nil}
-	
+
 	err := database.UserColl.FindOne(ctx, filter).Decode(&user)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
@@ -69,7 +69,7 @@ func GetUserByID(id primitive.ObjectID) (*models.User, error) {
 
 	var user models.User
 	filter := bson.M{"_id": id, "deleted_at": nil}
-	
+
 	err := database.UserColl.FindOne(ctx, filter).Decode(&user)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {

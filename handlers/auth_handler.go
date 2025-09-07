@@ -58,7 +58,7 @@ func RegisterHandler(c *gin.Context) {
 	if userCount == 0 {
 		// First user becomes admin
 		role = models.RoleAdmin
-		
+
 		// Generate JWT secret if not already set
 		if viper.GetString("JWT_SECRET") == "" {
 			jwtSecret, err := generateJWTSecret()
@@ -69,7 +69,7 @@ func RegisterHandler(c *gin.Context) {
 				})
 				return
 			}
-			
+
 			if err := updateConfigFile("JWT_SECRET", jwtSecret); err != nil {
 				logrus.Errorf("Error saving JWT secret: %v", err)
 				c.JSON(http.StatusInternalServerError, gin.H{
@@ -80,7 +80,7 @@ func RegisterHandler(c *gin.Context) {
 			viper.Set("JWT_SECRET", jwtSecret)
 			logrus.Info("JWT secret generated and saved")
 		}
-		
+
 		// Generate invite code for the organization
 		inviteCode := generateInviteCode()
 		if err := updateConfigFile("INVITE_CODE", inviteCode); err != nil {
