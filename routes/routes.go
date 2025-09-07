@@ -38,6 +38,23 @@ func SetupRouter() *gin.Engine {
 		protected.Use(middleware.AuthMiddleware())
 		{
 			protected.GET("/profile", handlers.GetProfileHandler)
+			
+			// Settings routes
+			settings := protected.Group("/settings")
+			{
+				settings.GET("/invite-code", handlers.GetInviteCodeHandler)
+				settings.POST("/generate-invite-code", handlers.GenerateInviteCodeHandler)
+			}
+		}
+
+		// Deployment routes
+		deployments := protected.Group("/deployments")
+		{
+			deployments.POST("/", handlers.CreateDeploymentHandler)
+			deployments.GET("/", handlers.ListDeploymentsHandler)
+			deployments.GET("/:id", handlers.GetDeploymentHandler)
+			deployments.PUT("/:id", handlers.UpdateDeploymentHandler)
+			deployments.DELETE("/:id", handlers.DeleteDeploymentHandler)
 		}
 
 		// Admin routes

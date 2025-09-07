@@ -131,6 +131,10 @@ func CountUsers() (int64, error) {
 	return database.UserColl.CountDocuments(ctx, bson.M{"deleted_at": nil})
 }
 
+func GetUserCount() (int64, error) {
+	return CountUsers()
+}
+
 func GetAllUsers() ([]models.User, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

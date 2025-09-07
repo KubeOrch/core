@@ -20,7 +20,7 @@ func Load() error {
 	viper.SetDefault("GIN_MODE", "debug")
 	viper.SetDefault("MONGODB.HOST", "localhost")
 	viper.SetDefault("MONGODB.PORT", "27017")
-	viper.SetDefault("MONGODB.NAME", "kubeorchestra")
+	viper.SetDefault("MONGODB.NAME", "kubeorch")
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
@@ -61,4 +61,8 @@ func GetMongoPort() string {
 
 func GetMongoDBName() string {
 	return viper.GetString("MONGODB.NAME")
+}
+
+func GetJWTSecret() string {
+	return viper.GetString("JWT_SECRET")
 }

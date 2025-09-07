@@ -29,9 +29,9 @@ func CheckPasswordHash(password, hash string) bool {
 }
 
 func GenerateJWTToken(userID primitive.ObjectID, email string, role models.UserRole) (string, error) {
-	jwtSecret := config.GetEnv("JWT_SECRET")
+	jwtSecret := config.GetJWTSecret()
 	if jwtSecret == "" {
-		return "", errors.New("JWT_SECRET environment variable not set")
+		return "", errors.New("JWT_SECRET not configured")
 	}
 
 	claims := JWTClaims{
@@ -50,9 +50,9 @@ func GenerateJWTToken(userID primitive.ObjectID, email string, role models.UserR
 }
 
 func ValidateJWTToken(tokenString string) (*JWTClaims, error) {
-	jwtSecret := config.GetEnv("JWT_SECRET")
+	jwtSecret := config.GetJWTSecret()
 	if jwtSecret == "" {
-		return nil, errors.New("JWT_SECRET environment variable not set")
+		return nil, errors.New("JWT_SECRET not configured")
 	}
 
 	token, err := jwt.ParseWithClaims(tokenString, &JWTClaims{}, func(token *jwt.Token) (interface{}, error) {
