@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/KubeOrch/core/middleware"
 	"github.com/KubeOrch/core/models"
@@ -282,6 +283,39 @@ func (h *ClusterHandler) RefreshMetadata(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message":  "Metadata refreshed successfully",
 		"metadata": cluster.Metadata,
+	})
+}
+
+func (h *ClusterHandler) GetClusterStatus(c *gin.Context) {
+	name := c.Param("name")
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cluster name is required"})
+		return
+	}
+
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	cluster, err := h.service.GetClusterByName(ctx, userID, name)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to get cluster")
+		c.JSON(http.StatusNotFound, gin.H{"error": "Cluster not found"})
+		return
+	}
+
+	// Check if status is stale (not checked in last 2 minutes)
+	isStale := time.Since(cluster.LastCheck) > 2*time.Minute
+	
+	c.JSON(http.StatusOK, gin.H{
+		"cluster":   name,
+		"status":    cluster.Status,
+		"lastCheck": cluster.LastCheck,
+		"isStale":   isStale,
+		"isOnline":  cluster.Status == models.ClusterStatusConnected,
 	})
 }
 

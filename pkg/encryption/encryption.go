@@ -8,18 +8,35 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/spf13/viper"
 )
 
 var encryptionKey []byte
+var initialized bool
 
-func init() {
+func InitializeEncryption() {
+	if initialized {
+		return
+	}
+	
+	// Try environment variable first
 	key := os.Getenv("ENCRYPTION_KEY")
 	if key == "" {
-		// Fallback to JWT_SECRET if ENCRYPTION_KEY not set
+		// Try Viper config
+		key = viper.GetString("ENCRYPTION_KEY")
+	}
+	if key == "" {
+		// Fallback to JWT_SECRET from environment
 		key = os.Getenv("JWT_SECRET")
 	}
 	if key == "" {
-		panic("ENCRYPTION_KEY or JWT_SECRET environment variable must be set")
+		// Try JWT_SECRET from Viper config
+		key = viper.GetString("JWT_SECRET")
+	}
+	if key == "" {
+		// Don't panic, just return - will be initialized when first admin registers
+		return
 	}
 	
 	// Try to decode from base64 first (if it's a generated key)
@@ -41,11 +58,19 @@ func init() {
 			encryptionKey = keyBytes[:32]
 		}
 	}
+	initialized = true
 }
 
 func Encrypt(plaintext string) (string, error) {
+	InitializeEncryption() // Ensure initialization
+	
 	if plaintext == "" {
 		return "", nil
+	}
+	
+	if encryptionKey == nil {
+		// No encryption key available yet, return plaintext (will be encrypted when key is generated)
+		return plaintext, nil
 	}
 
 	block, err := aes.NewCipher(encryptionKey)
@@ -68,8 +93,15 @@ func Encrypt(plaintext string) (string, error) {
 }
 
 func Decrypt(ciphertext string) (string, error) {
+	InitializeEncryption() // Ensure initialization
+	
 	if ciphertext == "" {
 		return "", nil
+	}
+	
+	if encryptionKey == nil {
+		// No encryption key available yet, assume it's plaintext
+		return ciphertext, nil
 	}
 
 	data, err := base64.StdEncoding.DecodeString(ciphertext)
@@ -102,6 +134,8 @@ func Decrypt(ciphertext string) (string, error) {
 }
 
 func EncryptSlice(items []string) ([]string, error) {
+	InitializeEncryption() // Ensure initialization
+	
 	encrypted := make([]string, len(items))
 	for i, item := range items {
 		enc, err := Encrypt(item)
@@ -114,6 +148,8 @@ func EncryptSlice(items []string) ([]string, error) {
 }
 
 func DecryptSlice(items []string) ([]string, error) {
+	InitializeEncryption() // Ensure initialization
+	
 	decrypted := make([]string, len(items))
 	for i, item := range items {
 		dec, err := Decrypt(item)

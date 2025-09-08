@@ -136,7 +136,7 @@ sequenceDiagram
 ### MongoDB-Only Approach
 - **Single Source of Truth**: All cluster data in MongoDB
 - **No Runtime State**: Connections created on-demand
-- **Simplicity**: No synchronization needed
+- **Encrypted Storage**: AES-256 GCM encryption for credentials
 - **Consistency**: Always current data from DB
 
 ### Benefits
@@ -145,6 +145,56 @@ sequenceDiagram
 - **Always Fresh**: Latest credentials from DB
 - **Simple Recovery**: Just restart service
 - **Multi-Instance**: Multiple services can run simultaneously
+- **Secure**: Credentials encrypted at rest
+
+## Health Monitoring System
+
+### Automatic Health Checks
+The system includes a background health monitoring service that continuously tracks cluster connectivity:
+
+```go
+// ClusterHealthMonitor runs every 60 seconds
+type ClusterHealthMonitor struct {
+    interval time.Duration  // 60 seconds default
+    workers  int            // 5 concurrent checks
+}
+```
+
+### Health Check Flow
+
+```mermaid
+sequenceDiagram
+    participant Monitor
+    participant DB
+    participant Cluster
+    participant Logger
+
+    loop Every 60 seconds
+        Monitor->>DB: GetAll clusters
+        DB-->>Monitor: Cluster list
+        par Concurrent checks (max 5)
+            Monitor->>Cluster: Test connection
+            alt Connection successful
+                Cluster-->>Monitor: Connected
+                Monitor->>DB: Update status (if changed)
+            else Connection failed
+                Cluster-->>Monitor: Error
+                Monitor->>DB: Update status to error/disconnected
+            end
+            Monitor->>Logger: Log status change
+        end
+    end
+```
+
+### Status Management
+- **Smart Updates**: Only updates DB when status actually changes
+- **Timestamp Tracking**: `lastCheck` field updated separately
+- **Stale Detection**: Status considered stale after 2 minutes
+- **Status Values**:
+  - `connected`: Cluster is reachable
+  - `disconnected`: Cluster unreachable
+  - `error`: Authentication or configuration error
+  - `unknown`: Not yet checked
 
 ## Multi-Cluster Management
 

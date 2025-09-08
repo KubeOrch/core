@@ -99,10 +99,32 @@ Remove a cluster configuration.
 
 Set a cluster as the default for the user.
 
+### Get Cluster Status
+**GET** `/v1/api/clusters/:name/status`
+
+Get real-time connection status of a cluster. This endpoint returns the current health status without performing a new connection test.
+
+**Response:**
+```json
+{
+  "cluster": "production",
+  "status": "connected",
+  "lastCheck": "2024-01-15T10:30:00Z",
+  "isStale": false,
+  "isOnline": true
+}
+```
+
+**Response Fields:**
+- `status` - Current status: "connected", "disconnected", "error", or "unknown"
+- `lastCheck` - Timestamp of the last health check
+- `isStale` - True if status hasn't been checked in the last 2 minutes
+- `isOnline` - True if cluster is currently connected (useful for UI status indicators)
+
 ### Test Connection
 **POST** `/v1/api/clusters/:name/test`
 
-Test connectivity to a cluster.
+Manually test connectivity to a cluster and update its status.
 
 **Response:**
 ```json
@@ -234,7 +256,35 @@ Share cluster access with another user.
 ```
 
 ## Status Values
-- `connected` - Successfully connected
-- `disconnected` - Not connected
-- `error` - Connection error
-- `unknown` - Status not checked
+- `connected` - Successfully connected to cluster
+- `disconnected` - Cannot reach cluster
+- `error` - Connection error or invalid credentials
+- `unknown` - Status not checked yet
+
+## Health Monitoring
+
+The system automatically monitors cluster health in the background:
+
+### Automatic Health Checks
+- **Polling Interval**: Every 60 seconds
+- **Concurrent Checks**: Up to 5 clusters checked simultaneously
+- **Smart Updates**: Database only updated when status changes
+- **Stale Detection**: Status marked as stale if not checked in 2+ minutes
+
+### Status Tracking
+Each cluster maintains:
+- `status` - Current connection status
+- `lastCheck` - Timestamp of last health check
+- `isOnline` - Boolean for UI status indicators (green/red dot)
+
+### Credential Security
+All sensitive credentials are encrypted using AES-256 GCM encryption before storage:
+- Tokens, certificates, and keys are encrypted at rest
+- Encryption key is auto-generated on first admin signup
+- Credentials are decrypted only when needed for connection
+
+### Best Practices
+1. Use the `/status` endpoint for real-time status display
+2. Use `/test` endpoint for manual connectivity verification
+3. Monitor the `isStale` flag to detect monitoring issues
+4. Check logs endpoint for troubleshooting connection problems

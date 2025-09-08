@@ -192,6 +192,36 @@ func (r *ClusterRepository) UpdateStatus(ctx context.Context, id primitive.Objec
 	})
 }
 
+func (r *ClusterRepository) UpdateLastCheck(ctx context.Context, id primitive.ObjectID) error {
+	return r.Update(ctx, id, bson.M{
+		"last_check": time.Now(),
+	})
+}
+
+func (r *ClusterRepository) GetAll(ctx context.Context) ([]*models.Cluster, error) {
+	cursor, err := r.collection.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{"created_at", -1}}))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get all clusters: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var clusters []*models.Cluster
+	if err := cursor.All(ctx, &clusters); err != nil {
+		return nil, fmt.Errorf("failed to decode clusters: %w", err)
+	}
+
+	// Decrypt credentials for each cluster
+	for i := range clusters {
+		decryptedCreds, err := r.decryptCredentials(&clusters[i].Credentials)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt credentials for cluster %s: %w", clusters[i].Name, err)
+		}
+		clusters[i].Credentials = *decryptedCreds
+	}
+
+	return clusters, nil
+}
+
 func (r *ClusterRepository) UpdateMetadata(ctx context.Context, id primitive.ObjectID, metadata models.ClusterMetadata) error {
 	metadata.LastUpdated = time.Now()
 	return r.Update(ctx, id, bson.M{"metadata": metadata})

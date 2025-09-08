@@ -1,6 +1,4 @@
 GIN_MODE: debug
-INVITE_CODE: "536945"
-JWT_SECRET: FzSO+MaH5kIAvW9gadczIsESR1FIuAKiEkWSxArgkqw=
 MONGODB:
   HOST: localhost
   NAME: kubeorch
