@@ -66,3 +66,7 @@ func GetMongoDBName() string {
 func GetJWTSecret() string {
 	return viper.GetString("JWT_SECRET")
 }
+
+func GetEncryptionKey() string {
+	return viper.GetString("ENCRYPTION_KEY")
+}

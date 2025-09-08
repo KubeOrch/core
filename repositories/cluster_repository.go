@@ -7,6 +7,7 @@ import (
 
 	"github.com/KubeOrch/core/database"
 	"github.com/KubeOrch/core/models"
+	"github.com/KubeOrch/core/pkg/encryption"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -33,7 +34,17 @@ func (r *ClusterRepository) Create(ctx context.Context, cluster *models.Cluster)
 	cluster.UpdatedAt = time.Now()
 	cluster.Status = models.ClusterStatusUnknown
 
-	result, err := r.collection.InsertOne(ctx, cluster)
+	// Encrypt credentials before storing
+	encryptedCreds, err := r.encryptCredentials(&cluster.Credentials)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt credentials: %w", err)
+	}
+
+	// Create a copy for insertion with encrypted credentials
+	clusterToStore := *cluster
+	clusterToStore.Credentials = *encryptedCreds
+
+	result, err := r.collection.InsertOne(ctx, clusterToStore)
 	if err != nil {
 		return fmt.Errorf("failed to create cluster: %w", err)
 	}
@@ -51,6 +62,14 @@ func (r *ClusterRepository) GetByID(ctx context.Context, id primitive.ObjectID) 
 		}
 		return nil, fmt.Errorf("failed to get cluster: %w", err)
 	}
+
+	// Decrypt credentials after retrieval
+	decryptedCreds, err := r.decryptCredentials(&cluster.Credentials)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt credentials: %w", err)
+	}
+	cluster.Credentials = *decryptedCreds
+
 	return &cluster, nil
 }
 
@@ -71,6 +90,14 @@ func (r *ClusterRepository) GetByName(ctx context.Context, name string, userID p
 		}
 		return nil, fmt.Errorf("failed to get cluster: %w", err)
 	}
+
+	// Decrypt credentials after retrieval
+	decryptedCreds, err := r.decryptCredentials(&cluster.Credentials)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt credentials: %w", err)
+	}
+	cluster.Credentials = *decryptedCreds
+
 	return &cluster, nil
 }
 
@@ -93,6 +120,15 @@ func (r *ClusterRepository) ListByUser(ctx context.Context, userID primitive.Obj
 		return nil, fmt.Errorf("failed to decode clusters: %w", err)
 	}
 
+	// Decrypt credentials for each cluster
+	for i := range clusters {
+		decryptedCreds, err := r.decryptCredentials(&clusters[i].Credentials)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt credentials for cluster %s: %w", clusters[i].Name, err)
+		}
+		clusters[i].Credentials = *decryptedCreds
+	}
+
 	return clusters, nil
 }
 
@@ -110,11 +146,31 @@ func (r *ClusterRepository) ListByOrganization(ctx context.Context, orgID primit
 		return nil, fmt.Errorf("failed to decode clusters: %w", err)
 	}
 
+	// Decrypt credentials for each cluster
+	for i := range clusters {
+		decryptedCreds, err := r.decryptCredentials(&clusters[i].Credentials)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt credentials for cluster %s: %w", clusters[i].Name, err)
+		}
+		clusters[i].Credentials = *decryptedCreds
+	}
+
 	return clusters, nil
 }
 
 func (r *ClusterRepository) Update(ctx context.Context, id primitive.ObjectID, update bson.M) error {
 	update["updated_at"] = time.Now()
+
+	// Check if credentials are being updated
+	if creds, ok := update["credentials"]; ok {
+		if credsModel, ok := creds.(models.ClusterCredentials); ok {
+			encryptedCreds, err := r.encryptCredentials(&credsModel)
+			if err != nil {
+				return fmt.Errorf("failed to encrypt credentials: %w", err)
+			}
+			update["credentials"] = *encryptedCreds
+		}
+	}
 
 	_, err := r.collection.UpdateOne(
 		ctx,
@@ -209,6 +265,13 @@ func (r *ClusterRepository) GetDefault(ctx context.Context, userID primitive.Obj
 		}
 		return nil, fmt.Errorf("failed to get default cluster: %w", err)
 	}
+
+	// Decrypt credentials after retrieval
+	decryptedCreds, err := r.decryptCredentials(&cluster.Credentials)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt credentials: %w", err)
+	}
+	cluster.Credentials = *decryptedCreds
 
 	return &cluster, nil
 }
@@ -335,4 +398,168 @@ func (r *ClusterRepository) GetConnectionLogs(ctx context.Context, clusterID pri
 	}
 
 	return logs, nil
+}
+
+// Helper methods for encryption/decryption
+
+func (r *ClusterRepository) encryptCredentials(creds *models.ClusterCredentials) (*models.ClusterCredentials, error) {
+	encrypted := &models.ClusterCredentials{
+		Namespace: creds.Namespace,
+		Context:   creds.Context,
+		Insecure:  creds.Insecure,
+	}
+
+	var err error
+	if creds.KubeConfig != "" {
+		encrypted.KubeConfig, err = encryption.Encrypt(creds.KubeConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encrypt kubeconfig: %w", err)
+		}
+	}
+
+	if creds.Token != "" {
+		encrypted.Token, err = encryption.Encrypt(creds.Token)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encrypt token: %w", err)
+		}
+	}
+
+	if creds.ClientCertData != "" {
+		encrypted.ClientCertData, err = encryption.Encrypt(creds.ClientCertData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encrypt client cert: %w", err)
+		}
+	}
+
+	if creds.ClientKeyData != "" {
+		encrypted.ClientKeyData, err = encryption.Encrypt(creds.ClientKeyData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encrypt client key: %w", err)
+		}
+	}
+
+	if creds.CAData != "" {
+		encrypted.CAData, err = encryption.Encrypt(creds.CAData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encrypt CA data: %w", err)
+		}
+	}
+
+	if creds.OIDCIssuerURL != "" {
+		encrypted.OIDCIssuerURL, err = encryption.Encrypt(creds.OIDCIssuerURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encrypt OIDC issuer URL: %w", err)
+		}
+	}
+
+	if creds.OIDCClientID != "" {
+		encrypted.OIDCClientID, err = encryption.Encrypt(creds.OIDCClientID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encrypt OIDC client ID: %w", err)
+		}
+	}
+
+	if creds.OIDCClientSecret != "" {
+		encrypted.OIDCClientSecret, err = encryption.Encrypt(creds.OIDCClientSecret)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encrypt OIDC client secret: %w", err)
+		}
+	}
+
+	if creds.OIDCRefreshToken != "" {
+		encrypted.OIDCRefreshToken, err = encryption.Encrypt(creds.OIDCRefreshToken)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encrypt OIDC refresh token: %w", err)
+		}
+	}
+
+	if len(creds.OIDCScopes) > 0 {
+		encrypted.OIDCScopes, err = encryption.EncryptSlice(creds.OIDCScopes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encrypt OIDC scopes: %w", err)
+		}
+	}
+
+	return encrypted, nil
+}
+
+func (r *ClusterRepository) decryptCredentials(creds *models.ClusterCredentials) (*models.ClusterCredentials, error) {
+	decrypted := &models.ClusterCredentials{
+		Namespace: creds.Namespace,
+		Context:   creds.Context,
+		Insecure:  creds.Insecure,
+	}
+
+	var err error
+	if creds.KubeConfig != "" {
+		decrypted.KubeConfig, err = encryption.Decrypt(creds.KubeConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt kubeconfig: %w", err)
+		}
+	}
+
+	if creds.Token != "" {
+		decrypted.Token, err = encryption.Decrypt(creds.Token)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt token: %w", err)
+		}
+	}
+
+	if creds.ClientCertData != "" {
+		decrypted.ClientCertData, err = encryption.Decrypt(creds.ClientCertData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt client cert: %w", err)
+		}
+	}
+
+	if creds.ClientKeyData != "" {
+		decrypted.ClientKeyData, err = encryption.Decrypt(creds.ClientKeyData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt client key: %w", err)
+		}
+	}
+
+	if creds.CAData != "" {
+		decrypted.CAData, err = encryption.Decrypt(creds.CAData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt CA data: %w", err)
+		}
+	}
+
+	if creds.OIDCIssuerURL != "" {
+		decrypted.OIDCIssuerURL, err = encryption.Decrypt(creds.OIDCIssuerURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt OIDC issuer URL: %w", err)
+		}
+	}
+
+	if creds.OIDCClientID != "" {
+		decrypted.OIDCClientID, err = encryption.Decrypt(creds.OIDCClientID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt OIDC client ID: %w", err)
+		}
+	}
+
+	if creds.OIDCClientSecret != "" {
+		decrypted.OIDCClientSecret, err = encryption.Decrypt(creds.OIDCClientSecret)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt OIDC client secret: %w", err)
+		}
+	}
+
+	if creds.OIDCRefreshToken != "" {
+		decrypted.OIDCRefreshToken, err = encryption.Decrypt(creds.OIDCRefreshToken)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt OIDC refresh token: %w", err)
+		}
+	}
+
+	if len(creds.OIDCScopes) > 0 {
+		decrypted.OIDCScopes, err = encryption.DecryptSlice(creds.OIDCScopes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt OIDC scopes: %w", err)
+		}
+	}
+
+	return decrypted, nil
 }
