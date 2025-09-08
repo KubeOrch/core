@@ -27,15 +27,8 @@ func InitializeEncryption() {
 		key = viper.GetString("ENCRYPTION_KEY")
 	}
 	if key == "" {
-		// Fallback to JWT_SECRET from environment
-		key = os.Getenv("JWT_SECRET")
-	}
-	if key == "" {
-		// Try JWT_SECRET from Viper config
-		key = viper.GetString("JWT_SECRET")
-	}
-	if key == "" {
-		// Don't panic, just return - will be initialized when first admin registers
+		// No encryption key available - this is expected before first admin setup
+		// The key will be generated and set during admin registration
 		return
 	}
 	
@@ -61,6 +54,12 @@ func InitializeEncryption() {
 	initialized = true
 }
 
+// IsConfigured returns true if encryption key is properly configured
+func IsConfigured() bool {
+	InitializeEncryption()
+	return encryptionKey != nil && len(encryptionKey) == 32
+}
+
 func Encrypt(plaintext string) (string, error) {
 	InitializeEncryption() // Ensure initialization
 	
@@ -69,8 +68,7 @@ func Encrypt(plaintext string) (string, error) {
 	}
 	
 	if encryptionKey == nil {
-		// No encryption key available yet, return plaintext (will be encrypted when key is generated)
-		return plaintext, nil
+		return "", fmt.Errorf("encryption key not configured - cannot encrypt sensitive data")
 	}
 
 	block, err := aes.NewCipher(encryptionKey)
@@ -100,8 +98,7 @@ func Decrypt(ciphertext string) (string, error) {
 	}
 	
 	if encryptionKey == nil {
-		// No encryption key available yet, assume it's plaintext
-		return ciphertext, nil
+		return "", fmt.Errorf("encryption key not configured - cannot decrypt sensitive data")
 	}
 
 	data, err := base64.StdEncoding.DecodeString(ciphertext)

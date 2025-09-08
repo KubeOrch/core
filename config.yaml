@@ -4,3 +4,6 @@ MONGODB:
   NAME: kubeorch
   PORT: 27017
 PORT: 3000
+
+# Cluster logs configuration
+CLUSTER_LOG_TTL_HOURS: 24  # Hours after which cluster connection logs are automatically deleted (default: 24)

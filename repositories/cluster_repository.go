@@ -8,6 +8,8 @@ import (
 	"github.com/KubeOrch/core/database"
 	"github.com/KubeOrch/core/models"
 	"github.com/KubeOrch/core/pkg/encryption"
+	"github.com/KubeOrch/core/utils/config"
+	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -22,14 +24,24 @@ type ClusterRepository struct {
 
 func NewClusterRepository() *ClusterRepository {
 	db := database.GetDB()
-	return &ClusterRepository{
+	repo := &ClusterRepository{
 		collection: db.Collection("clusters"),
 		accessCol:  db.Collection("cluster_access"),
 		logCol:     db.Collection("cluster_logs"),
 	}
+	
+	// Initialize TTL index for automatic log cleanup
+	repo.initializeTTLIndex()
+	
+	return repo
 }
 
 func (r *ClusterRepository) Create(ctx context.Context, cluster *models.Cluster) error {
+	// Ensure encryption is properly configured before storing sensitive credentials
+	if !encryption.IsConfigured() {
+		return fmt.Errorf("encryption key not configured - cannot store cluster credentials securely")
+	}
+
 	cluster.CreatedAt = time.Now()
 	cluster.UpdatedAt = time.Now()
 	cluster.Status = models.ClusterStatusUnknown
@@ -428,6 +440,36 @@ func (r *ClusterRepository) GetConnectionLogs(ctx context.Context, clusterID pri
 	}
 
 	return logs, nil
+}
+
+// initializeTTLIndex creates a TTL index on the timestamp field for automatic log cleanup
+func (r *ClusterRepository) initializeTTLIndex() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	// Get TTL duration from config file
+	ttlHours := config.GetClusterLogTTLHours()
+	if ttlHours <= 0 {
+		ttlHours = 24 // Fallback to 24 hours if invalid value
+	}
+	
+	ttlSeconds := int32(ttlHours * 3600)
+	
+	// Create TTL index on timestamp field
+	indexModel := mongo.IndexModel{
+		Keys: bson.M{"timestamp": 1},
+		Options: options.Index().
+			SetExpireAfterSeconds(ttlSeconds).
+			SetName("ttl_index"),
+	}
+	
+	_, err := r.logCol.Indexes().CreateOne(ctx, indexModel)
+	if err != nil {
+		// Log error but don't fail - index might already exist
+		logrus.WithError(err).Warnf("Failed to create TTL index on cluster_logs collection (TTL: %d hours)", ttlHours)
+	} else {
+		logrus.Infof("TTL index created on cluster_logs collection (logs will expire after %d hours)", ttlHours)
+	}
 }
 
 // Helper methods for encryption/decryption
