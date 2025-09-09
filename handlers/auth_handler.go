@@ -81,6 +81,28 @@ func RegisterHandler(c *gin.Context) {
 			logrus.Info("JWT secret generated and saved")
 		}
 
+		// Generate ENCRYPTION_KEY if not already set
+		if viper.GetString("ENCRYPTION_KEY") == "" {
+			encryptionKey, err := generateEncryptionKey()
+			if err != nil {
+				logrus.Errorf("Error generating encryption key: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error": "Registration failed",
+				})
+				return
+			}
+
+			if err := updateConfigFile("ENCRYPTION_KEY", encryptionKey); err != nil {
+				logrus.Errorf("Error saving encryption key: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error": "Registration failed",
+				})
+				return
+			}
+			viper.Set("ENCRYPTION_KEY", encryptionKey)
+			logrus.Info("Encryption key generated and saved")
+		}
+
 		// Generate invite code for the organization
 		inviteCode := generateInviteCode()
 		if err := updateConfigFile("INVITE_CODE", inviteCode); err != nil {
@@ -209,6 +231,16 @@ func generateJWTSecret() (string, error) {
 	}
 	// Encode to base64 for storage
 	return base64.StdEncoding.EncodeToString(secret), nil
+}
+
+func generateEncryptionKey() (string, error) {
+	// Generate 32 bytes of random data for AES-256
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return "", err
+	}
+	// Encode to base64 for storage
+	return base64.StdEncoding.EncodeToString(key), nil
 }
 
 func GetProfileHandler(c *gin.Context) {

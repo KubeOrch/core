@@ -21,6 +21,7 @@ func Load() error {
 	viper.SetDefault("MONGODB.HOST", "localhost")
 	viper.SetDefault("MONGODB.PORT", "27017")
 	viper.SetDefault("MONGODB.NAME", "kubeorch")
+	viper.SetDefault("CLUSTER_LOG_TTL_HOURS", 24)
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
@@ -65,4 +66,12 @@ func GetMongoDBName() string {
 
 func GetJWTSecret() string {
 	return viper.GetString("JWT_SECRET")
+}
+
+func GetEncryptionKey() string {
+	return viper.GetString("ENCRYPTION_KEY")
+}
+
+func GetClusterLogTTLHours() int {
+	return viper.GetInt("CLUSTER_LOG_TTL_HOURS")
 }
