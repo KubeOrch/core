@@ -24,13 +24,14 @@ func SetupRouter() *gin.Engine {
 	v1 := r.Group("/v1")
 	{
 		v1.Use(middleware.LogsMiddleware())
-		v1.GET("/", handlers.HelloHandler)
+		v1.GET("", handlers.HelloHandler)
 
 		// Auth routes
 		auth := v1.Group("/api/auth")
 		{
 			auth.POST("/register", handlers.RegisterHandler)
 			auth.POST("/login", handlers.LoginHandler)
+			auth.POST("/refresh", middleware.RefreshTokenMiddleware(), handlers.RefreshTokenHandler)
 		}
 
 		// Protected routes
@@ -38,6 +39,7 @@ func SetupRouter() *gin.Engine {
 		protected.Use(middleware.AuthMiddleware())
 		{
 			protected.GET("/profile", handlers.GetProfileHandler)
+			protected.PUT("/profile", handlers.UpdateProfileHandler)
 
 			// Settings routes
 			settings := protected.Group("/settings")
@@ -50,19 +52,33 @@ func SetupRouter() *gin.Engine {
 		// Deployment routes
 		deployments := protected.Group("/deployments")
 		{
-			deployments.POST("/", handlers.CreateDeploymentHandler)
-			deployments.GET("/", handlers.ListDeploymentsHandler)
+			deployments.POST("", handlers.CreateDeploymentHandler)
+			deployments.GET("", handlers.ListDeploymentsHandler)
 			deployments.GET("/:id", handlers.GetDeploymentHandler)
 			deployments.PUT("/:id", handlers.UpdateDeploymentHandler)
 			deployments.DELETE("/:id", handlers.DeleteDeploymentHandler)
+		}
+
+		// Workflow routes
+		workflows := protected.Group("/workflows")
+		{
+			workflows.POST("", handlers.CreateWorkflowHandler)
+			workflows.GET("", handlers.ListWorkflowsHandler)
+			workflows.GET("/:id", handlers.GetWorkflowHandler)
+			workflows.PUT("/:id", handlers.UpdateWorkflowHandler)
+			workflows.DELETE("/:id", handlers.DeleteWorkflowHandler)
+			workflows.POST("/:id/clone", handlers.CloneWorkflowHandler)
+			workflows.PUT("/:id/status", handlers.UpdateWorkflowStatusHandler)
+			workflows.POST("/:id/version", handlers.SaveWorkflowVersionHandler)
+			workflows.GET("/:id/runs", handlers.GetWorkflowRunsHandler)
 		}
 
 		// Kubernetes cluster management routes
 		clusterHandler := handlers.NewClusterHandler()
 		clusters := protected.Group("/clusters")
 		{
-			clusters.POST("/", clusterHandler.AddCluster)
-			clusters.GET("/", clusterHandler.ListClusters)
+			clusters.POST("", clusterHandler.AddCluster)
+			clusters.GET("", clusterHandler.ListClusters)
 			clusters.GET("/default", clusterHandler.GetDefaultCluster)
 			clusters.GET("/:name", clusterHandler.GetCluster)
 			clusters.GET("/:name/status", clusterHandler.GetClusterStatus)

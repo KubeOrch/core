@@ -1,9 +1,10 @@
+CLUSTER_LOG_TTL_HOURS: 24
+ENCRYPTION_KEY: kJf2wgojO4AUSszv+fXg8dYi/K8wlQ3rwpXP7ZgbYaM=
 GIN_MODE: debug
+INVITE_CODE: "735806"
+JWT_SECRET: mGHaBcNM6xUndEZoXQcT2twp3TQrIZ8EMNSNbhN5v6Q=
 MONGODB:
   HOST: localhost
   NAME: kubeorch
   PORT: 27017
 PORT: 3000
-
-# Cluster logs configuration
-CLUSTER_LOG_TTL_HOURS: 24  # Hours after which cluster connection logs are automatically deleted (default: 24)

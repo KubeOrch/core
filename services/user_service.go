@@ -152,3 +152,23 @@ func GetAllUsers() ([]models.User, error) {
 
 	return users, nil
 }
+
+func UpdateUserName(id primitive.ObjectID, name string) (*models.User, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	filter := bson.M{"_id": id, "deleted_at": nil}
+	update := bson.M{
+		"$set": bson.M{
+			"name":       name,
+			"updated_at": time.Now(),
+		},
+	}
+
+	_, err := database.UserColl.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return nil, err
+	}
+
+	return GetUserByID(id)
+}

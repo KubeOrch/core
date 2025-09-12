@@ -277,3 +277,99 @@ func GetProfileHandler(c *gin.Context) {
 		},
 	})
 }
+
+func UpdateProfileHandler(c *gin.Context) {
+	userIDStr, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "Unauthorized",
+		})
+		return
+	}
+
+	userID, err := services.ParseObjectID(userIDStr.(string))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid user ID",
+		})
+		return
+	}
+
+	var request struct {
+		Name string `json:"name" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Name is required",
+		})
+		return
+	}
+
+	// Update user in database
+	user, err := services.UpdateUserName(userID, request.Name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to update profile",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"user": gin.H{
+			"id":    user.ID.Hex(),
+			"email": user.Email,
+			"name":  user.Name,
+			"role":  user.Role,
+		},
+	})
+}
+
+func RefreshTokenHandler(c *gin.Context) {
+	// This endpoint is called when the token is expired
+	// It validates the expired token and issues a new one
+	userIDStr, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "Unauthorized",
+		})
+		return
+	}
+
+	userID, err := services.ParseObjectID(userIDStr.(string))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid user ID",
+		})
+		return
+	}
+
+	// Get user from database
+	user, err := services.GetUserByID(userID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "User not found",
+		})
+		return
+	}
+
+	// Generate new JWT token
+	token, err := services.GenerateJWTToken(user.ID, user.Email, user.Role)
+	if err != nil {
+		logrus.Errorf("Error generating refresh token: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to refresh token",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"token": token,
+		"user": gin.H{
+			"id":    user.ID.Hex(),
+			"email": user.Email,
+			"name":  user.Name,
+			"role":  user.Role,
+		},
+	})
+}

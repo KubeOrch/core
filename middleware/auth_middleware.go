@@ -108,3 +108,44 @@ func RequireRole(allowedRoles ...models.UserRole) gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// RefreshTokenMiddleware allows expired tokens but validates they're otherwise valid
+func RefreshTokenMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "Authorization header is required",
+			})
+			c.Abort()
+			return
+		}
+
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "Authorization header must start with 'Bearer '",
+			})
+			c.Abort()
+			return
+		}
+
+		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+
+		// Validate token even if expired (for refresh)
+		claims, err := services.ValidateJWTTokenForRefresh(tokenString)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "Invalid token",
+			})
+			c.Abort()
+			return
+		}
+
+		// Set user information in context
+		c.Set("userID", claims.UserID)
+		c.Set("email", claims.Email)
+		c.Set("userRole", string(claims.Role))
+
+		c.Next()
+	}
+}
