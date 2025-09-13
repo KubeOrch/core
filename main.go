@@ -23,6 +23,16 @@ func main() {
 	}
 	logrus.SetFormatter(&logrus.JSONFormatter{})
 
+	// Configure log level from config
+	logLevel := config.GetLogLevel()
+	level, err := logrus.ParseLevel(logLevel)
+	if err != nil {
+		logrus.Warnf("Invalid log level '%s', defaulting to 'info': %v", logLevel, err)
+		level = logrus.InfoLevel
+	}
+	logrus.SetLevel(level)
+	logrus.Infof("Log level set to: %s", level)
+
 	// Connect to MongoDB
 	if err := database.Connect(); err != nil {
 		logrus.Fatalf("Failed to connect to MongoDB: %v", err)

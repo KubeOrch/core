@@ -41,7 +41,7 @@ func CreateWorkflowHandler(c *gin.Context) {
 	var request struct {
 		Name        string `json:"name" binding:"required"`
 		Description string `json:"description"`
-		ClusterID   string `json:"cluster_id"`
+		ClusterID   string `json:"cluster_id" binding:"required"`
 	}
 
 	if err := c.ShouldBindJSON(&request); err != nil {

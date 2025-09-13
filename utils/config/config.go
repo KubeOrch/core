@@ -18,6 +18,7 @@ func Load() error {
 	// Set defaults
 	viper.SetDefault("PORT", "3000")
 	viper.SetDefault("GIN_MODE", "debug")
+	viper.SetDefault("LOG_LEVEL", "info")
 	viper.SetDefault("MONGODB.HOST", "localhost")
 	viper.SetDefault("MONGODB.PORT", "27017")
 	viper.SetDefault("MONGODB.NAME", "kubeorch")
@@ -83,4 +84,8 @@ func GetInviteCode() string {
 
 func GetTokenRefreshMaxAgeDays() int {
 	return viper.GetInt("TOKEN_REFRESH_MAX_AGE_DAYS")
+}
+
+func GetLogLevel() string {
+	return viper.GetString("LOG_LEVEL")
 }

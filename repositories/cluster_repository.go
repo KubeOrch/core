@@ -251,43 +251,27 @@ func (r *ClusterRepository) Delete(ctx context.Context, id primitive.ObjectID) e
 }
 
 func (r *ClusterRepository) SetDefault(ctx context.Context, userID, clusterID primitive.ObjectID) error {
-	session, err := database.Client.StartSession()
+	// Unset all defaults for this user
+	_, err := r.collection.UpdateMany(
+		ctx,
+		bson.M{"user_id": userID},
+		bson.M{"$set": bson.M{"default": false}},
+	)
 	if err != nil {
-		return fmt.Errorf("failed to start session: %w", err)
+		return fmt.Errorf("failed to unset default clusters: %w", err)
 	}
-	defer session.EndSession(ctx)
 
-	err = mongo.WithSession(ctx, session, func(sc mongo.SessionContext) error {
-		if err := session.StartTransaction(); err != nil {
-			return fmt.Errorf("failed to start transaction: %w", err)
-		}
+	// Set the new default
+	_, err = r.collection.UpdateOne(
+		ctx,
+		bson.M{"_id": clusterID, "user_id": userID},
+		bson.M{"$set": bson.M{"default": true, "updated_at": time.Now()}},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to set default cluster: %w", err)
+	}
 
-		// Unset all defaults for this user
-		_, err := r.collection.UpdateMany(
-			sc,
-			bson.M{"user_id": userID},
-			bson.M{"$set": bson.M{"default": false}},
-		)
-		if err != nil {
-			_ = session.AbortTransaction(sc)
-			return fmt.Errorf("failed to unset default clusters: %w", err)
-		}
-
-		// Set the new default
-		_, err = r.collection.UpdateOne(
-			sc,
-			bson.M{"_id": clusterID},
-			bson.M{"$set": bson.M{"default": true, "updated_at": time.Now()}},
-		)
-		if err != nil {
-			_ = session.AbortTransaction(sc)
-			return fmt.Errorf("failed to set default cluster: %w", err)
-		}
-
-		return session.CommitTransaction(sc)
-	})
-
-	return err
+	return nil
 }
 
 func (r *ClusterRepository) GetDefault(ctx context.Context, userID primitive.ObjectID) (*models.Cluster, error) {
