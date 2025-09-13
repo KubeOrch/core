@@ -10,6 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 func CreateUser(user *models.User) error {
@@ -165,10 +166,15 @@ func UpdateUserName(id primitive.ObjectID, name string) (*models.User, error) {
 		},
 	}
 
-	_, err := database.UserColl.UpdateOne(ctx, filter, update)
+	opts := options.FindOneAndUpdate().SetReturnDocument(options.After)
+	var user models.User
+	err := database.UserColl.FindOneAndUpdate(ctx, filter, update, opts).Decode(&user)
 	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, errors.New("user not found")
+		}
 		return nil, err
 	}
-
-	return GetUserByID(id)
+	
+	return &user, nil
 }

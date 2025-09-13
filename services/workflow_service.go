@@ -49,7 +49,7 @@ func CreateWorkflow(workflow *models.Workflow) error {
 		Edges:       workflow.Edges,
 		Description: "Initial version",
 		CreatedAt:   now,
-		CreatedBy:   workflow.OwnerID.Hex(),
+		CreatedBy:   workflow.OwnerID,
 	}
 	workflow.Versions = append(workflow.Versions, initialVersion)
 
