@@ -22,6 +22,7 @@ func main() {
 		logrus.Fatalf("Failed to load configuration: %v", err)
 	}
 	logrus.SetFormatter(&logrus.JSONFormatter{})
+	logrus.SetLevel(logrus.DebugLevel)
 
 	// Connect to MongoDB
 	if err := database.Connect(); err != nil {

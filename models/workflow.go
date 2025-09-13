@@ -62,6 +62,7 @@ type Workflow struct {
 	ID          primitive.ObjectID `json:"id" bson:"_id,omitempty"`
 	Name        string             `json:"name" bson:"name"`
 	Description string             `json:"description" bson:"description"`
+	ClusterID   string             `json:"cluster_id" bson:"cluster_id"`
 	Status      WorkflowStatus     `json:"status" bson:"status"`
 	Tags        []string           `json:"tags" bson:"tags"`
 	
@@ -75,7 +76,6 @@ type Workflow struct {
 	
 	// Metadata
 	OwnerID   primitive.ObjectID `json:"owner_id" bson:"owner_id"`
-	ClusterID string             `json:"cluster_id" bson:"cluster_id"`
 	TeamID    string             `json:"team_id" bson:"team_id,omitempty"`
 	
 	// Timestamps

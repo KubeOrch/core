@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/KubeOrch/core/models"
 	k8sauth "github.com/KubeOrch/core/pkg/kubernetes"
@@ -31,13 +32,39 @@ func NewKubernetesClusterService() *KubernetesClusterService {
 func (s *KubernetesClusterService) CreateClusterConnection(cluster *models.Cluster) (*kubernetes.Clientset, error) {
 	auth := s.clusterToAuthConfig(cluster)
 
+	s.logger.WithFields(logrus.Fields{
+		"server":    cluster.Server,
+		"auth_type": cluster.AuthType,
+		"has_token": cluster.Credentials.Token != "",
+		"has_ca":    cluster.Credentials.CAData != "",
+		"insecure":  cluster.Credentials.Insecure,
+	}).Debug("Building REST config for cluster")
+
 	config, err := auth.BuildRESTConfig()
 	if err != nil {
+		s.logger.WithFields(logrus.Fields{
+			"server": cluster.Server,
+			"error":  err.Error(),
+		}).Error("Failed to build REST config")
 		return nil, fmt.Errorf("failed to build REST config: %w", err)
 	}
 
+	// Set a reasonable timeout for connection attempts
+	config.Timeout = 5 * time.Second
+	config.QPS = 100
+	config.Burst = 100
+
+	s.logger.WithFields(logrus.Fields{
+		"server":  cluster.Server,
+		"timeout": config.Timeout,
+	}).Debug("Creating Kubernetes clientset")
+
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
+		s.logger.WithFields(logrus.Fields{
+			"server": cluster.Server,
+			"error":  err.Error(),
+		}).Error("Failed to create Kubernetes clientset")
 		return nil, fmt.Errorf("failed to create kubernetes client: %w", err)
 	}
 
@@ -49,30 +76,66 @@ func (s *KubernetesClusterService) AddCluster(ctx context.Context, userID primit
 	cluster.UserID = userID
 	cluster.Status = models.ClusterStatusUnknown
 
-	// Test connection before saving
-	clientset, err := s.CreateClusterConnection(cluster)
-	if err != nil {
-		cluster.Status = models.ClusterStatusError
-		s.logger.WithError(err).Warn("Failed to create cluster connection")
-	} else {
-		// Validate connection
-		_, err = clientset.Discovery().ServerVersion()
-		if err != nil {
-			cluster.Status = models.ClusterStatusError
-		} else {
-			cluster.Status = models.ClusterStatusConnected
-			// Update metadata
-			if err := s.updateClusterMetadata(ctx, cluster, clientset); err != nil {
-				s.logger.WithError(err).Warn("Failed to update cluster metadata on add")
-			}
-		}
-	}
-
+	// Save cluster first
 	if err := s.clusterRepo.Create(ctx, cluster); err != nil {
 		return fmt.Errorf("failed to save cluster: %w", err)
 	}
 
-	s.logConnection(ctx, cluster.ID, userID, "cluster_added", cluster.Status == models.ClusterStatusConnected, nil)
+	// Test connection asynchronously with a timeout
+	go func() {
+		testCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		s.logger.WithFields(logrus.Fields{
+			"cluster_name": cluster.Name,
+			"server":       cluster.Server,
+			"auth_type":    cluster.AuthType,
+		}).Info("Starting cluster connection test")
+
+		clientset, err := s.CreateClusterConnection(cluster)
+		if err != nil {
+			cluster.Status = models.ClusterStatusError
+			s.logger.WithFields(logrus.Fields{
+				"cluster_name": cluster.Name,
+				"server":       cluster.Server,
+				"error":        err.Error(),
+			}).Error("Failed to create cluster connection")
+			_ = s.clusterRepo.UpdateStatus(testCtx, cluster.ID, models.ClusterStatusError)
+		} else {
+			s.logger.WithFields(logrus.Fields{
+				"cluster_name": cluster.Name,
+				"server":       cluster.Server,
+			}).Info("Successfully created Kubernetes client, testing server version")
+			
+			// Validate connection
+			version, err := clientset.Discovery().ServerVersion()
+			if err != nil {
+				cluster.Status = models.ClusterStatusError
+				s.logger.WithFields(logrus.Fields{
+					"cluster_name": cluster.Name,
+					"server":       cluster.Server,
+					"error":        err.Error(),
+				}).Error("Failed to get server version")
+				_ = s.clusterRepo.UpdateStatus(testCtx, cluster.ID, models.ClusterStatusError)
+			} else {
+				s.logger.WithFields(logrus.Fields{
+					"cluster_name": cluster.Name,
+					"server":       cluster.Server,
+					"version":      version.String(),
+				}).Info("Successfully connected to cluster")
+				
+				cluster.Status = models.ClusterStatusConnected
+				_ = s.clusterRepo.UpdateStatus(testCtx, cluster.ID, models.ClusterStatusConnected)
+				// Update metadata
+				if err := s.updateClusterMetadata(testCtx, cluster, clientset); err != nil {
+					s.logger.WithError(err).Warn("Failed to update cluster metadata on add")
+				}
+			}
+		}
+		s.logConnection(testCtx, cluster.ID, userID, "cluster_added", cluster.Status == models.ClusterStatusConnected, err)
+	}()
+
+	// Return immediately after saving
 
 	return nil
 }

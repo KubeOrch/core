@@ -5,8 +5,10 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/KubeOrch/core/models"
+	"github.com/sirupsen/logrus"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd/api"
 )
@@ -51,6 +53,14 @@ func NewAuthConfig(authType models.ClusterAuthType) *AuthConfig {
 }
 
 func (a *AuthConfig) BuildRESTConfig() (*rest.Config, error) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.DebugLevel)
+	
+	logger.WithFields(logrus.Fields{
+		"auth_type": a.Type,
+		"server":    a.ServerURL,
+	}).Info("Building REST config for auth type")
+	
 	switch a.Type {
 	case models.ClusterAuthKubeConfig:
 		return a.buildKubeConfigAuth()
@@ -89,6 +99,7 @@ func (a *AuthConfig) buildKubeConfigAuth() (*rest.Config, error) {
 func (a *AuthConfig) buildServiceAccountAuth() (*rest.Config, error) {
 	config := &rest.Config{
 		Host: a.ServerURL,
+		TLSClientConfig: rest.TLSClientConfig{},
 	}
 
 	if a.ServiceAccountToken != "" {
@@ -107,21 +118,52 @@ func (a *AuthConfig) buildServiceAccountAuth() (*rest.Config, error) {
 }
 
 func (a *AuthConfig) buildTokenAuth() (*rest.Config, error) {
+	logger := logrus.New()
+	logger.SetLevel(logrus.DebugLevel)
+	
+	if a.ServerURL == "" {
+		return nil, fmt.Errorf("server URL is required")
+	}
+	
 	config := &rest.Config{
 		Host: a.ServerURL,
+		TLSClientConfig: rest.TLSClientConfig{},
 	}
 
 	if a.BearerToken != "" {
 		config.BearerToken = a.BearerToken
+		tokenPreview := a.BearerToken
+		if len(tokenPreview) > 20 {
+			tokenPreview = tokenPreview[:20] + "..."
+		}
+		logger.WithFields(logrus.Fields{
+			"server":          a.ServerURL,
+			"token_length":    len(a.BearerToken),
+			"token_preview":   tokenPreview,
+		}).Info("Using bearer token authentication")
 	} else if a.BearerTokenFile != "" {
 		config.BearerTokenFile = a.BearerTokenFile
+		logger.WithFields(logrus.Fields{
+			"server":     a.ServerURL,
+			"token_file": a.BearerTokenFile,
+		}).Info("Using bearer token file authentication")
 	} else {
+		logger.Error("No bearer token or token file provided")
 		return nil, fmt.Errorf("bearer token or token file must be provided")
 	}
 
+	// Apply TLS configuration
 	if err := a.applyTLSConfig(config); err != nil {
+		logger.WithError(err).Error("Failed to apply TLS config")
 		return nil, err
 	}
+
+	logger.WithFields(logrus.Fields{
+		"server":       a.ServerURL,
+		"insecure":     config.TLSClientConfig.Insecure,
+		"has_ca":       len(config.TLSClientConfig.CAData) > 0,
+		"has_ca_file":  config.TLSClientConfig.CAFile != "",
+	}).Info("Token auth config built successfully")
 
 	return config, nil
 }
@@ -129,6 +171,7 @@ func (a *AuthConfig) buildTokenAuth() (*rest.Config, error) {
 func (a *AuthConfig) buildCertificateAuth() (*rest.Config, error) {
 	config := &rest.Config{
 		Host: a.ServerURL,
+		TLSClientConfig: rest.TLSClientConfig{},
 	}
 
 	if a.ClientCertData != "" && a.ClientKeyData != "" {
@@ -159,6 +202,7 @@ func (a *AuthConfig) buildCertificateAuth() (*rest.Config, error) {
 func (a *AuthConfig) buildOIDCAuth() (*rest.Config, error) {
 	config := &rest.Config{
 		Host: a.ServerURL,
+		TLSClientConfig: rest.TLSClientConfig{},
 		AuthProvider: &api.AuthProviderConfig{
 			Name: "oidc",
 			Config: map[string]string{
@@ -191,6 +235,7 @@ func (a *AuthConfig) buildOIDCAuth() (*rest.Config, error) {
 func (a *AuthConfig) buildExecAuth() (*rest.Config, error) {
 	config := &rest.Config{
 		Host: a.ServerURL,
+		TLSClientConfig: rest.TLSClientConfig{},
 		ExecProvider: &api.ExecConfig{
 			Command: a.ExecCommand,
 			Args:    a.ExecArgs,
@@ -216,19 +261,40 @@ func (a *AuthConfig) buildExecAuth() (*rest.Config, error) {
 }
 
 func (a *AuthConfig) applyTLSConfig(config *rest.Config) error {
+	logger := logrus.New()
+	logger.SetLevel(logrus.DebugLevel)
+	
 	if a.Insecure {
 		config.TLSClientConfig.Insecure = true
+		logger.WithField("insecure", true).Info("TLS verification disabled (insecure mode)")
 		return nil
 	}
 
 	if a.CAData != "" {
-		caData, err := base64.StdEncoding.DecodeString(a.CAData)
-		if err != nil {
-			return fmt.Errorf("failed to decode CA data: %w", err)
+		logger.WithField("ca_data_length", len(a.CAData)).Info("Processing CA certificate data")
+		
+		// First, try to use the CA data as-is (if it's already PEM encoded)
+		if strings.HasPrefix(a.CAData, "-----BEGIN CERTIFICATE-----") {
+			// It's already PEM encoded, use as-is
+			config.TLSClientConfig.CAData = []byte(a.CAData)
+			logger.Info("CA data is already PEM encoded, using as-is")
+		} else {
+			// Try to decode from base64
+			caData, err := base64.StdEncoding.DecodeString(a.CAData)
+			if err != nil {
+				// If base64 decode fails, try using it as-is (might be plain text)
+				logger.WithError(err).Warn("Failed to decode CA data as base64, trying as plain text")
+				config.TLSClientConfig.CAData = []byte(a.CAData)
+			} else {
+				config.TLSClientConfig.CAData = caData
+				logger.WithField("ca_data_decoded_length", len(caData)).Info("CA data decoded from base64 successfully")
+			}
 		}
-		config.TLSClientConfig.CAData = caData
 	} else if a.CAPath != "" {
 		config.TLSClientConfig.CAFile = a.CAPath
+		logger.WithField("ca_path", a.CAPath).Info("Using CA file path")
+	} else {
+		logger.Info("No CA data or path provided, using system defaults")
 	}
 
 	return nil

@@ -47,17 +47,17 @@ type Cluster struct {
 }
 
 type ClusterCredentials struct {
-	KubeConfig     string `bson:"kubeconfig,omitempty" json:"-"`
-	Token          string `bson:"token,omitempty" json:"-"`
-	ClientCertData string `bson:"client_cert_data,omitempty" json:"-"`
-	ClientKeyData  string `bson:"client_key_data,omitempty" json:"-"`
-	CAData         string `bson:"ca_data,omitempty" json:"-"`
+	KubeConfig     string `bson:"kubeconfig,omitempty" json:"kubeconfig,omitempty"`
+	Token          string `bson:"token,omitempty" json:"token,omitempty"`
+	ClientCertData string `bson:"client_cert_data,omitempty" json:"clientCertData,omitempty"`
+	ClientKeyData  string `bson:"client_key_data,omitempty" json:"clientKeyData,omitempty"`
+	CAData         string `bson:"ca_data,omitempty" json:"caData,omitempty"`
 
-	OIDCIssuerURL    string   `bson:"oidc_issuer_url,omitempty" json:"-"`
-	OIDCClientID     string   `bson:"oidc_client_id,omitempty" json:"-"`
-	OIDCClientSecret string   `bson:"oidc_client_secret,omitempty" json:"-"`
-	OIDCRefreshToken string   `bson:"oidc_refresh_token,omitempty" json:"-"`
-	OIDCScopes       []string `bson:"oidc_scopes,omitempty" json:"-"`
+	OIDCIssuerURL    string   `bson:"oidc_issuer_url,omitempty" json:"oidcIssuerUrl,omitempty"`
+	OIDCClientID     string   `bson:"oidc_client_id,omitempty" json:"oidcClientId,omitempty"`
+	OIDCClientSecret string   `bson:"oidc_client_secret,omitempty" json:"oidcClientSecret,omitempty"`
+	OIDCRefreshToken string   `bson:"oidc_refresh_token,omitempty" json:"oidcRefreshToken,omitempty"`
+	OIDCScopes       []string `bson:"oidc_scopes,omitempty" json:"oidcScopes,omitempty"`
 
 	Namespace string `bson:"namespace,omitempty" json:"namespace"`
 	Context   string `bson:"context,omitempty" json:"context"`
