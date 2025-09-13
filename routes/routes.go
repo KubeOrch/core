@@ -69,7 +69,8 @@ func SetupRouter() *gin.Engine {
 			workflows.DELETE("/:id", handlers.DeleteWorkflowHandler)
 			workflows.POST("/:id/clone", handlers.CloneWorkflowHandler)
 			workflows.PUT("/:id/status", handlers.UpdateWorkflowStatusHandler)
-			workflows.POST("/:id/version", handlers.SaveWorkflowVersionHandler)
+			workflows.POST("/:id/save", handlers.SaveWorkflowHandler)
+			workflows.POST("/:id/run", handlers.RunWorkflowHandler)
 			workflows.GET("/:id/runs", handlers.GetWorkflowRunsHandler)
 		}
 

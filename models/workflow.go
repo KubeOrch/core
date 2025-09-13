@@ -15,6 +15,16 @@ const (
 	WorkflowStatusArchived  WorkflowStatus = "archived"
 )
 
+// WorkflowRunStatus represents the status of a workflow run
+type WorkflowRunStatus string
+
+const (
+	WorkflowRunStatusRunning   WorkflowRunStatus = "running"
+	WorkflowRunStatusCompleted WorkflowRunStatus = "completed"
+	WorkflowRunStatusFailed    WorkflowRunStatus = "failed"
+	WorkflowRunStatusCancelled WorkflowRunStatus = "cancelled"
+)
+
 // WorkflowNode represents a node in the workflow
 type WorkflowNode struct {
 	ID       string                 `json:"id" bson:"id"`
@@ -39,12 +49,12 @@ type WorkflowEdge struct {
 
 // WorkflowVersion represents a version of the workflow
 type WorkflowVersion struct {
-	Version     int            `json:"version" bson:"version"`
-	Nodes       []WorkflowNode `json:"nodes" bson:"nodes"`
-	Edges       []WorkflowEdge `json:"edges" bson:"edges"`
-	Description string         `json:"description" bson:"description"`
-	CreatedAt   time.Time      `json:"created_at" bson:"created_at"`
-	CreatedBy   string         `json:"created_by" bson:"created_by"`
+	Version     int                `json:"version" bson:"version"`
+	Nodes       []WorkflowNode     `json:"nodes" bson:"nodes"`
+	Edges       []WorkflowEdge     `json:"edges" bson:"edges"`
+	Description string             `json:"description" bson:"description"`
+	CreatedAt   time.Time          `json:"created_at" bson:"created_at"`
+	CreatedBy   primitive.ObjectID `json:"created_by" bson:"created_by"`
 }
 
 // Workflow represents a complete workflow
@@ -85,7 +95,7 @@ type WorkflowRun struct {
 	ID         primitive.ObjectID `json:"id" bson:"_id,omitempty"`
 	WorkflowID primitive.ObjectID `json:"workflow_id" bson:"workflow_id"`
 	Version    int                `json:"version" bson:"version"`
-	Status     string             `json:"status" bson:"status"` // running, completed, failed, cancelled
+	Status     WorkflowRunStatus  `json:"status" bson:"status"`
 	
 	// Execution details
 	StartedAt   time.Time  `json:"started_at" bson:"started_at"`

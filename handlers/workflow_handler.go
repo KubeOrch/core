@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"strconv"
+	"time"
 
+	"github.com/KubeOrch/core/database"
 	"github.com/KubeOrch/core/models"
 	"github.com/KubeOrch/core/services"
 	"github.com/gin-gonic/gin"
@@ -12,17 +15,26 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-// CreateWorkflowHandler creates a new workflow
-func CreateWorkflowHandler(c *gin.Context) {
+// getUserIDFromContext extracts and validates the user ID from the gin context
+func getUserIDFromContext(c *gin.Context) (primitive.ObjectID, bool) {
 	userIDStr, exists := c.Get("userID")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
+		return primitive.NilObjectID, false
 	}
 
 	userID, err := services.ParseObjectID(userIDStr.(string))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return primitive.NilObjectID, false
+	}
+	return userID, true
+}
+
+// CreateWorkflowHandler creates a new workflow
+func CreateWorkflowHandler(c *gin.Context) {
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
 		return
 	}
 
@@ -33,7 +45,7 @@ func CreateWorkflowHandler(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request data"})
 		return
 	}
 
@@ -46,7 +58,7 @@ func CreateWorkflowHandler(c *gin.Context) {
 
 	if err := services.CreateWorkflow(workflow); err != nil {
 		logrus.Errorf("Failed to create workflow: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create workflow", "details": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create workflow"})
 		return
 	}
 
@@ -65,15 +77,8 @@ func CreateWorkflowHandler(c *gin.Context) {
 
 // GetWorkflowHandler retrieves a workflow by ID
 func GetWorkflowHandler(c *gin.Context) {
-	userIDStr, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	userID, err := services.ParseObjectID(userIDStr.(string))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
 		return
 	}
 
@@ -100,15 +105,8 @@ func GetWorkflowHandler(c *gin.Context) {
 
 // UpdateWorkflowHandler updates a workflow
 func UpdateWorkflowHandler(c *gin.Context) {
-	userIDStr, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	userID, err := services.ParseObjectID(userIDStr.(string))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
 		return
 	}
 
@@ -130,17 +128,48 @@ func UpdateWorkflowHandler(c *gin.Context) {
 		return
 	}
 
-	var updates bson.M
-	if err := c.ShouldBindJSON(&updates); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	// Use a whitelist approach for allowed fields
+	var request struct {
+		Name        *string                `json:"name"`
+		Description *string                `json:"description"`
+		Nodes       *[]models.WorkflowNode `json:"nodes"`
+		Edges       *[]models.WorkflowEdge `json:"edges"`
+		Status      *string                `json:"status"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request data"})
 		return
 	}
 
-	// Remove fields that shouldn't be updated directly
-	delete(updates, "_id")
-	delete(updates, "owner_id")
-	delete(updates, "created_at")
-	delete(updates, "versions")
+	// Build updates map with only provided fields
+	updates := bson.M{}
+	if request.Name != nil {
+		updates["name"] = *request.Name
+	}
+	if request.Description != nil {
+		updates["description"] = *request.Description
+	}
+	if request.Nodes != nil {
+		updates["nodes"] = *request.Nodes
+	}
+	if request.Edges != nil {
+		updates["edges"] = *request.Edges
+	}
+	if request.Status != nil {
+		// Validate status
+		status := models.WorkflowStatus(*request.Status)
+		if status != models.WorkflowStatusDraft && status != models.WorkflowStatusPublished && status != models.WorkflowStatusArchived {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid status"})
+			return
+		}
+		updates["status"] = status
+	}
+
+	if len(updates) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No valid fields to update"})
+		return
+	}
 
 	updatedWorkflow, err := services.UpdateWorkflow(workflowID, updates)
 	if err != nil {
@@ -151,11 +180,10 @@ func UpdateWorkflowHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, updatedWorkflow)
 }
 
-// SaveWorkflowVersionHandler saves the current workflow state as a new version
-func SaveWorkflowVersionHandler(c *gin.Context) {
-	userIDStr, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+// SaveWorkflowHandler saves/updates the current workflow state without creating a new version
+func SaveWorkflowHandler(c *gin.Context) {
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
 		return
 	}
 
@@ -165,36 +193,55 @@ func SaveWorkflowVersionHandler(c *gin.Context) {
 		return
 	}
 
+	// Check ownership
+	workflow, err := services.GetWorkflowByID(workflowID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Workflow not found"})
+		return
+	}
+
+	if workflow.OwnerID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+		return
+	}
+
 	var request struct {
 		Nodes       []models.WorkflowNode `json:"nodes"`
 		Edges       []models.WorkflowEdge `json:"edges"`
-		Description string                `json:"description"`
+		Description *string               `json:"description"`
 	}
 
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request data"})
 		return
 	}
 
-	if err := services.SaveWorkflowVersion(workflowID, request.Nodes, request.Edges, request.Description, userIDStr.(string)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save workflow version"})
+	// Build updates for the current workflow
+	updates := bson.M{
+		"nodes": request.Nodes,
+		"edges": request.Edges,
+	}
+	
+	if request.Description != nil {
+		updates["description"] = *request.Description
+	}
+
+	updatedWorkflow, err := services.UpdateWorkflow(workflowID, updates)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save workflow"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Workflow version saved successfully"})
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Workflow saved successfully",
+		"workflow": updatedWorkflow,
+	})
 }
 
 // ListWorkflowsHandler lists all workflows for the authenticated user
 func ListWorkflowsHandler(c *gin.Context) {
-	userIDStr, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	userID, err := services.ParseObjectID(userIDStr.(string))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
 		return
 	}
 
@@ -209,15 +256,8 @@ func ListWorkflowsHandler(c *gin.Context) {
 
 // DeleteWorkflowHandler deletes a workflow
 func DeleteWorkflowHandler(c *gin.Context) {
-	userIDStr, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	userID, err := services.ParseObjectID(userIDStr.(string))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
 		return
 	}
 
@@ -249,15 +289,8 @@ func DeleteWorkflowHandler(c *gin.Context) {
 
 // CloneWorkflowHandler creates a copy of an existing workflow
 func CloneWorkflowHandler(c *gin.Context) {
-	userIDStr, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	userID, err := services.ParseObjectID(userIDStr.(string))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
 		return
 	}
 
@@ -272,7 +305,7 @@ func CloneWorkflowHandler(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request data"})
 		return
 	}
 
@@ -291,15 +324,8 @@ func CloneWorkflowHandler(c *gin.Context) {
 
 // UpdateWorkflowStatusHandler updates the status of a workflow
 func UpdateWorkflowStatusHandler(c *gin.Context) {
-	userIDStr, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	userID, err := services.ParseObjectID(userIDStr.(string))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
 		return
 	}
 
@@ -326,7 +352,7 @@ func UpdateWorkflowStatusHandler(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request data"})
 		return
 	}
 
@@ -344,17 +370,107 @@ func UpdateWorkflowStatusHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Workflow status updated successfully"})
 }
 
-// GetWorkflowRunsHandler gets the execution history of a workflow
-func GetWorkflowRunsHandler(c *gin.Context) {
-	userIDStr, exists := c.Get("userID")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+// RunWorkflowHandler creates a version snapshot and runs the workflow
+func RunWorkflowHandler(c *gin.Context) {
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
 		return
 	}
 
-	userID, err := services.ParseObjectID(userIDStr.(string))
+	workflowID, err := primitive.ObjectIDFromHex(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid workflow ID"})
+		return
+	}
+
+	// Check ownership
+	workflow, err := services.GetWorkflowByID(workflowID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Workflow not found"})
+		return
+	}
+
+	if workflow.OwnerID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+		return
+	}
+
+	// Check if workflow is in a runnable state
+	if workflow.Status != models.WorkflowStatusPublished {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Workflow must be published to run"})
+		return
+	}
+
+	var request struct {
+		TriggerData map[string]interface{} `json:"trigger_data"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		// Set empty trigger data if no body provided
+		request.TriggerData = make(map[string]interface{})
+	}
+
+	// Create a version snapshot before running
+	versionDescription := "Snapshot for run at " + time.Now().Format(time.RFC3339)
+	if err := services.SaveWorkflowVersion(workflowID, workflow.Nodes, workflow.Edges, versionDescription, userID); err != nil {
+		logrus.Errorf("Failed to create workflow version snapshot: %v", err)
+		// Continue with run even if version snapshot fails
+	}
+
+	// Create workflow run record
+	run := &models.WorkflowRun{
+		WorkflowID:  workflowID,
+		Version:     workflow.CurrentVersion,
+		Status:      models.WorkflowRunStatusRunning,
+		StartedAt:   time.Now(),
+		TriggeredBy: "manual",
+		TriggerData: request.TriggerData,
+		NodeStates:  make(map[string]interface{}),
+		Output:      make(map[string]interface{}),
+		Logs:        []string{},
+	}
+
+	// Record the run in database
+	if err := services.RecordWorkflowRun(run); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start workflow run"})
+		return
+	}
+
+	// TODO: Implement actual workflow execution logic here
+	// For now, we'll just mark it as completed after recording
+	run.Status = models.WorkflowRunStatusCompleted
+	run.CompletedAt = &time.Time{}
+	*run.CompletedAt = time.Now()
+	run.Duration = int64(run.CompletedAt.Sub(run.StartedAt).Milliseconds())
+
+	// Update the run status
+	updateFilter := bson.M{"_id": run.ID}
+	updateDoc := bson.M{
+		"$set": bson.M{
+			"status":       run.Status,
+			"completed_at": run.CompletedAt,
+			"duration":     run.Duration,
+		},
+	}
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	if _, err := database.WorkflowRunColl.UpdateOne(ctx, updateFilter, updateDoc); err != nil {
+		logrus.Errorf("Failed to update workflow run status: %v", err)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Workflow run started successfully",
+		"run_id":  run.ID.Hex(),
+		"status":  run.Status,
+	})
+}
+
+// GetWorkflowRunsHandler gets the execution history of a workflow
+func GetWorkflowRunsHandler(c *gin.Context) {
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
 		return
 	}
 

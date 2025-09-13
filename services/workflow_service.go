@@ -106,7 +106,7 @@ func UpdateWorkflow(id primitive.ObjectID, updates bson.M) (*models.Workflow, er
 }
 
 // SaveWorkflowVersion saves the current state as a new version
-func SaveWorkflowVersion(id primitive.ObjectID, nodes []models.WorkflowNode, edges []models.WorkflowEdge, description string, userID string) error {
+func SaveWorkflowVersion(id primitive.ObjectID, nodes []models.WorkflowNode, edges []models.WorkflowEdge, description string, userID primitive.ObjectID) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

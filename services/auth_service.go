@@ -93,7 +93,8 @@ func ValidateJWTTokenForRefresh(tokenString string) (*JWTClaims, error) {
 		// Check if token is not too old (e.g., expired for more than 7 days)
 		if claims.ExpiresAt != nil {
 			expTime := claims.ExpiresAt.Time
-			if time.Since(expTime) > 7*24*time.Hour {
+			maxAge := time.Duration(config.GetTokenRefreshMaxAgeDays()) * 24 * time.Hour
+			if time.Since(expTime) > maxAge {
 				return nil, errors.New("token expired for too long")
 			}
 		}
