@@ -7,6 +7,7 @@ import (
 
 	"github.com/KubeOrch/core/database"
 	"github.com/KubeOrch/core/models"
+	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -145,7 +146,11 @@ func GetAllUsers() ([]models.User, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer cursor.Close(ctx)
+	defer func() {
+		if err := cursor.Close(ctx); err != nil {
+			logrus.WithError(err).Warn("Failed to close cursor")
+		}
+	}()
 
 	if err = cursor.All(ctx, &users); err != nil {
 		return nil, err

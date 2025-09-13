@@ -121,11 +121,15 @@ func (r *ClusterRepository) ListByUser(ctx context.Context, userID primitive.Obj
 		},
 	}
 
-	cursor, err := r.collection.Find(ctx, filter, options.Find().SetSort(bson.D{{"created_at", -1}}))
+	cursor, err := r.collection.Find(ctx, filter, options.Find().SetSort(bson.D{bson.E{Key: "created_at", Value: -1}}))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list clusters: %w", err)
 	}
-	defer cursor.Close(ctx)
+	defer func() {
+		if err := cursor.Close(ctx); err != nil {
+			logrus.WithError(err).Warn("Failed to close cursor")
+		}
+	}()
 
 	var clusters []*models.Cluster
 	if err := cursor.All(ctx, &clusters); err != nil {
@@ -147,11 +151,15 @@ func (r *ClusterRepository) ListByUser(ctx context.Context, userID primitive.Obj
 func (r *ClusterRepository) ListByOrganization(ctx context.Context, orgID primitive.ObjectID) ([]*models.Cluster, error) {
 	filter := bson.M{"org_id": orgID}
 
-	cursor, err := r.collection.Find(ctx, filter, options.Find().SetSort(bson.D{{"created_at", -1}}))
+	cursor, err := r.collection.Find(ctx, filter, options.Find().SetSort(bson.D{bson.E{Key: "created_at", Value: -1}}))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list organization clusters: %w", err)
 	}
-	defer cursor.Close(ctx)
+	defer func() {
+		if err := cursor.Close(ctx); err != nil {
+			logrus.WithError(err).Warn("Failed to close cursor")
+		}
+	}()
 
 	var clusters []*models.Cluster
 	if err := cursor.All(ctx, &clusters); err != nil {
@@ -211,11 +219,15 @@ func (r *ClusterRepository) UpdateLastCheck(ctx context.Context, id primitive.Ob
 }
 
 func (r *ClusterRepository) GetAll(ctx context.Context) ([]*models.Cluster, error) {
-	cursor, err := r.collection.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{"created_at", -1}}))
+	cursor, err := r.collection.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{bson.E{Key: "created_at", Value: -1}}))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get all clusters: %w", err)
 	}
-	defer cursor.Close(ctx)
+	defer func() {
+		if err := cursor.Close(ctx); err != nil {
+			logrus.WithError(err).Warn("Failed to close cursor")
+		}
+	}()
 
 	var clusters []*models.Cluster
 	if err := cursor.All(ctx, &clusters); err != nil {
@@ -409,14 +421,18 @@ func (r *ClusterRepository) LogConnection(ctx context.Context, log *models.Clust
 
 func (r *ClusterRepository) GetConnectionLogs(ctx context.Context, clusterID primitive.ObjectID, limit int64) ([]*models.ClusterConnectionLog, error) {
 	opts := options.Find().
-		SetSort(bson.D{{"timestamp", -1}}).
+		SetSort(bson.D{bson.E{Key: "timestamp", Value: -1}}).
 		SetLimit(limit)
 
 	cursor, err := r.logCol.Find(ctx, bson.M{"cluster_id": clusterID}, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get connection logs: %w", err)
 	}
-	defer cursor.Close(ctx)
+	defer func() {
+		if err := cursor.Close(ctx); err != nil {
+			logrus.WithError(err).Warn("Failed to close cursor")
+		}
+	}()
 
 	var logs []*models.ClusterConnectionLog
 	if err := cursor.All(ctx, &logs); err != nil {

@@ -57,7 +57,7 @@ func InitializeEncryption() {
 // IsConfigured returns true if encryption key is properly configured
 func IsConfigured() bool {
 	InitializeEncryption()
-	return encryptionKey != nil && len(encryptionKey) == 32
+	return len(encryptionKey) == 32
 }
 
 func Encrypt(plaintext string) (string, error) {

@@ -123,7 +123,7 @@ func (m *ClusterHealthMonitor) checkClusterHealth(ctx context.Context, cluster *
 	}
 
 	previousStatus := cluster.Status
-	newStatus := models.ClusterStatusUnknown
+	var newStatus models.ClusterStatus
 
 	// Try to connect to the cluster
 	clientset, err := m.clusterService.CreateClusterConnection(cluster)
