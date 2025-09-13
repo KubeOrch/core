@@ -83,7 +83,11 @@ func (a *AuthConfig) buildKubeConfigAuth() (*rest.Config, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create temp kubeconfig file: %w", err)
 		}
-		defer tempFile.Close()
+		defer func() {
+			if err := tempFile.Close(); err != nil {
+				logger.WithError(err).Warn("Failed to close temporary kubeconfig file")
+			}
+		}()
 
 		if _, err := tempFile.WriteString(a.KubeConfigContent); err != nil {
 			return nil, fmt.Errorf("failed to write kubeconfig content: %w", err)
@@ -180,11 +184,11 @@ func (a *AuthConfig) buildCertificateAuth() (*rest.Config, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode client key data: %w", err)
 		}
-		config.TLSClientConfig.CertData = certData
-		config.TLSClientConfig.KeyData = keyData
+		config.TLSClientConfig.CertData = certData //nolint:staticcheck // TLSClientConfig is the correct way to set cert data
+		config.TLSClientConfig.KeyData = keyData   //nolint:staticcheck // TLSClientConfig is the correct way to set key data
 	} else if a.ClientCertPath != "" && a.ClientKeyPath != "" {
-		config.TLSClientConfig.CertFile = a.ClientCertPath
-		config.TLSClientConfig.KeyFile = a.ClientKeyPath
+		config.TLSClientConfig.CertFile = a.ClientCertPath //nolint:staticcheck // TLSClientConfig is the correct way to set cert file
+		config.TLSClientConfig.KeyFile = a.ClientKeyPath   //nolint:staticcheck // TLSClientConfig is the correct way to set key file
 	} else {
 		return nil, fmt.Errorf("client certificate and key must be provided")
 	}
@@ -229,37 +233,11 @@ func (a *AuthConfig) buildOIDCAuth() (*rest.Config, error) {
 	return config, nil
 }
 
-func (a *AuthConfig) buildExecAuth() (*rest.Config, error) {
-	config := &rest.Config{
-		Host: a.ServerURL,
-		TLSClientConfig: rest.TLSClientConfig{},
-		ExecProvider: &api.ExecConfig{
-			Command: a.ExecCommand,
-			Args:    a.ExecArgs,
-		},
-	}
-
-	if len(a.ExecEnv) > 0 {
-		var envVars []api.ExecEnvVar
-		for key, value := range a.ExecEnv {
-			envVars = append(envVars, api.ExecEnvVar{
-				Name:  key,
-				Value: value,
-			})
-		}
-		config.ExecProvider.Env = envVars
-	}
-
-	if err := a.applyTLSConfig(config); err != nil {
-		return nil, err
-	}
-
-	return config, nil
-}
+// Removed unused buildExecAuth function
 
 func (a *AuthConfig) applyTLSConfig(config *rest.Config) error {
 	if a.Insecure {
-		config.TLSClientConfig.Insecure = true
+		config.TLSClientConfig.Insecure = true //nolint:staticcheck // TLSClientConfig is the correct way
 		logger.WithField("insecure", true).Info("TLS verification disabled (insecure mode)")
 		return nil
 	}
@@ -270,7 +248,7 @@ func (a *AuthConfig) applyTLSConfig(config *rest.Config) error {
 		// First, try to use the CA data as-is (if it's already PEM encoded)
 		if strings.HasPrefix(a.CAData, "-----BEGIN CERTIFICATE-----") {
 			// It's already PEM encoded, use as-is
-			config.TLSClientConfig.CAData = []byte(a.CAData)
+			config.TLSClientConfig.CAData = []byte(a.CAData) //nolint:staticcheck // TLSClientConfig is correct
 			logger.Info("CA data is already PEM encoded, using as-is")
 		} else {
 			// Try to decode from base64
@@ -278,14 +256,14 @@ func (a *AuthConfig) applyTLSConfig(config *rest.Config) error {
 			if err != nil {
 				// If base64 decode fails, try using it as-is (might be plain text)
 				logger.WithError(err).Warn("Failed to decode CA data as base64, trying as plain text")
-				config.TLSClientConfig.CAData = []byte(a.CAData)
+				config.TLSClientConfig.CAData = []byte(a.CAData) //nolint:staticcheck // TLSClientConfig is correct
 			} else {
-				config.TLSClientConfig.CAData = caData
+				config.TLSClientConfig.CAData = caData //nolint:staticcheck // TLSClientConfig is correct
 				logger.WithField("ca_data_decoded_length", len(caData)).Info("CA data decoded from base64 successfully")
 			}
 		}
 	} else if a.CAPath != "" {
-		config.TLSClientConfig.CAFile = a.CAPath
+		config.TLSClientConfig.CAFile = a.CAPath //nolint:staticcheck // TLSClientConfig is correct
 		logger.WithField("ca_path", a.CAPath).Info("Using CA file path")
 	} else {
 		logger.Info("No CA data or path provided, using system defaults")

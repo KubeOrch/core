@@ -89,7 +89,9 @@ func main() {
 	}
 
 	// Close database connection
-	database.Close()
+	if err := database.Close(); err != nil {
+		logrus.Errorf("Failed to close database connection: %v", err)
+	}
 	logrus.Info("Database connection closed")
 
 	logrus.Info("Server exited gracefully")

@@ -7,6 +7,7 @@ import (
 
 	"github.com/KubeOrch/core/database"
 	"github.com/KubeOrch/core/models"
+	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -156,7 +157,11 @@ func ListWorkflows(ownerID primitive.ObjectID) ([]models.Workflow, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer cursor.Close(ctx)
+	defer func() {
+		if err := cursor.Close(ctx); err != nil {
+			logrus.WithError(err).Warn("Failed to close cursor")
+		}
+	}()
 
 	var workflows []models.Workflow
 	if err = cursor.All(ctx, &workflows); err != nil {
@@ -269,9 +274,10 @@ func RecordWorkflowRun(run *models.WorkflowRun) error {
 		},
 	}
 
-	if run.Status == "completed" {
+	switch run.Status {
+	case "completed":
 		updateDoc["$inc"].(bson.M)["success_count"] = 1
-	} else if run.Status == "failed" {
+	case "failed":
 		updateDoc["$inc"].(bson.M)["failure_count"] = 1
 	}
 
@@ -291,7 +297,11 @@ func GetWorkflowRuns(workflowID primitive.ObjectID, limit int) ([]models.Workflo
 	if err != nil {
 		return nil, err
 	}
-	defer cursor.Close(ctx)
+	defer func() {
+		if err := cursor.Close(ctx); err != nil {
+			logrus.WithError(err).Warn("Failed to close cursor")
+		}
+	}()
 
 	var runs []models.WorkflowRun
 	if err = cursor.All(ctx, &runs); err != nil {

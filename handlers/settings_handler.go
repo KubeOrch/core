@@ -5,17 +5,12 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v2"
 )
-
-func init() {
-	rand.Seed(time.Now().UnixNano())
-}
 
 func GetInviteCodeHandler(c *gin.Context) {
 	// Check if user is admin
