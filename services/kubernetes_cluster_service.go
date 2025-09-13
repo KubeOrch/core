@@ -100,7 +100,9 @@ func (s *KubernetesClusterService) AddCluster(ctx context.Context, userID primit
 				"server":       cluster.Server,
 				"error":        err.Error(),
 			}).Error("Failed to create cluster connection")
-			_ = s.clusterRepo.UpdateStatus(testCtx, cluster.ID, models.ClusterStatusError)
+			if err := s.clusterRepo.UpdateStatus(testCtx, cluster.ID, models.ClusterStatusError); err != nil {
+				s.logger.WithError(err).Error("Failed to update cluster status to error")
+			}
 		} else {
 			s.logger.WithFields(logrus.Fields{
 				"cluster_name": cluster.Name,
@@ -116,7 +118,9 @@ func (s *KubernetesClusterService) AddCluster(ctx context.Context, userID primit
 					"server":       cluster.Server,
 					"error":        err.Error(),
 				}).Error("Failed to get server version")
-				_ = s.clusterRepo.UpdateStatus(testCtx, cluster.ID, models.ClusterStatusError)
+				if err := s.clusterRepo.UpdateStatus(testCtx, cluster.ID, models.ClusterStatusError); err != nil {
+					s.logger.WithError(err).Error("Failed to update cluster status to error after version check")
+				}
 			} else {
 				s.logger.WithFields(logrus.Fields{
 					"cluster_name": cluster.Name,
@@ -125,7 +129,9 @@ func (s *KubernetesClusterService) AddCluster(ctx context.Context, userID primit
 				}).Info("Successfully connected to cluster")
 				
 				cluster.Status = models.ClusterStatusConnected
-				_ = s.clusterRepo.UpdateStatus(testCtx, cluster.ID, models.ClusterStatusConnected)
+				if err := s.clusterRepo.UpdateStatus(testCtx, cluster.ID, models.ClusterStatusConnected); err != nil {
+					s.logger.WithError(err).Error("Failed to update cluster status to connected")
+				}
 				// Update metadata
 				if err := s.updateClusterMetadata(testCtx, cluster, clientset); err != nil {
 					s.logger.WithError(err).Warn("Failed to update cluster metadata on add")

@@ -13,6 +13,9 @@ import (
 	"k8s.io/client-go/tools/clientcmd/api"
 )
 
+// Package-level logger initialized once
+var logger = logrus.WithField("package", "kubernetes")
+
 type AuthConfig struct {
 	Type models.ClusterAuthType
 
@@ -53,9 +56,6 @@ func NewAuthConfig(authType models.ClusterAuthType) *AuthConfig {
 }
 
 func (a *AuthConfig) BuildRESTConfig() (*rest.Config, error) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.DebugLevel)
-	
 	logger.WithFields(logrus.Fields{
 		"auth_type": a.Type,
 		"server":    a.ServerURL,
@@ -118,9 +118,6 @@ func (a *AuthConfig) buildServiceAccountAuth() (*rest.Config, error) {
 }
 
 func (a *AuthConfig) buildTokenAuth() (*rest.Config, error) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.DebugLevel)
-	
 	if a.ServerURL == "" {
 		return nil, fmt.Errorf("server URL is required")
 	}
@@ -261,9 +258,6 @@ func (a *AuthConfig) buildExecAuth() (*rest.Config, error) {
 }
 
 func (a *AuthConfig) applyTLSConfig(config *rest.Config) error {
-	logger := logrus.New()
-	logger.SetLevel(logrus.DebugLevel)
-	
 	if a.Insecure {
 		config.TLSClientConfig.Insecure = true
 		logger.WithField("insecure", true).Info("TLS verification disabled (insecure mode)")
