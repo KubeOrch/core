@@ -13,9 +13,11 @@ import (
 )
 
 var (
-	Client   *mongo.Client
-	Database *mongo.Database
-	UserColl *mongo.Collection
+	Client           *mongo.Client
+	Database         *mongo.Database
+	UserColl         *mongo.Collection
+	WorkflowColl     *mongo.Collection
+	WorkflowRunColl  *mongo.Collection
 )
 
 func Connect() error {
@@ -47,6 +49,8 @@ func Connect() error {
 	Client = client
 	Database = client.Database(dbname)
 	UserColl = Database.Collection("users")
+	WorkflowColl = Database.Collection("workflows")
+	WorkflowRunColl = Database.Collection("workflow_runs")
 
 	logrus.Info("MongoDB connection established")
 

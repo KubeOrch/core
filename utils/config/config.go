@@ -22,6 +22,7 @@ func Load() error {
 	viper.SetDefault("MONGODB.PORT", "27017")
 	viper.SetDefault("MONGODB.NAME", "kubeorch")
 	viper.SetDefault("CLUSTER_LOG_TTL_HOURS", 24)
+	viper.SetDefault("TOKEN_REFRESH_MAX_AGE_DAYS", 7)
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
@@ -74,4 +75,12 @@ func GetEncryptionKey() string {
 
 func GetClusterLogTTLHours() int {
 	return viper.GetInt("CLUSTER_LOG_TTL_HOURS")
+}
+
+func GetInviteCode() string {
+	return viper.GetString("INVITE_CODE")
+}
+
+func GetTokenRefreshMaxAgeDays() int {
+	return viper.GetInt("TOKEN_REFRESH_MAX_AGE_DAYS")
 }

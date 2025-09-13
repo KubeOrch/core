@@ -73,3 +73,33 @@ func ValidateJWTToken(tokenString string) (*JWTClaims, error) {
 func ParseObjectID(id string) (primitive.ObjectID, error) {
 	return primitive.ObjectIDFromHex(id)
 }
+
+// ValidateJWTTokenForRefresh validates a token even if it's expired (for refresh endpoint)
+func ValidateJWTTokenForRefresh(tokenString string) (*JWTClaims, error) {
+	jwtSecret := config.GetJWTSecret()
+	if jwtSecret == "" {
+		return nil, errors.New("JWT_SECRET not configured")
+	}
+
+	token, err := jwt.ParseWithClaims(tokenString, &JWTClaims{}, func(token *jwt.Token) (interface{}, error) {
+		return []byte(jwtSecret), nil
+	}, jwt.WithoutClaimsValidation())
+
+	if err != nil {
+		return nil, err
+	}
+
+	if claims, ok := token.Claims.(*JWTClaims); ok {
+		// Check if token is not too old (e.g., expired for more than 7 days)
+		if claims.ExpiresAt != nil {
+			expTime := claims.ExpiresAt.Time
+			maxAge := time.Duration(config.GetTokenRefreshMaxAgeDays()) * 24 * time.Hour
+			if time.Since(expTime) > maxAge {
+				return nil, errors.New("token expired for too long")
+			}
+		}
+		return claims, nil
+	}
+
+	return nil, errors.New("invalid token")
+}
