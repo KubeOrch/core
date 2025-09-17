@@ -1,12 +1,10 @@
 package handlers
 
 import (
-	"context"
 	"net/http"
 	"strconv"
 	"time"
 
-	"github.com/KubeOrch/core/database"
 	"github.com/KubeOrch/core/models"
 	"github.com/KubeOrch/core/services"
 	"github.com/gin-gonic/gin"
@@ -401,15 +399,6 @@ func RunWorkflowHandler(c *gin.Context) {
 		return
 	}
 
-	var request struct {
-		TriggerData map[string]interface{} `json:"trigger_data"`
-	}
-
-	if err := c.ShouldBindJSON(&request); err != nil {
-		// Set empty trigger data if no body provided
-		request.TriggerData = make(map[string]interface{})
-	}
-
 	// Create a version snapshot before running
 	versionDescription := "Snapshot for run at " + time.Now().Format(time.RFC3339)
 	if err := services.SaveWorkflowVersion(workflowID, workflow.Nodes, workflow.Edges, versionDescription, userID); err != nil {
@@ -417,53 +406,23 @@ func RunWorkflowHandler(c *gin.Context) {
 		// Continue with run even if version snapshot fails
 	}
 
-	// Create workflow run record
-	run := &models.WorkflowRun{
-		WorkflowID:  workflowID,
-		Version:     workflow.CurrentVersion,
-		Status:      models.WorkflowRunStatusRunning,
-		StartedAt:   time.Now(),
-		TriggeredBy: "manual",
-		TriggerData: request.TriggerData,
-		NodeStates:  make(map[string]interface{}),
-		Output:      make(map[string]interface{}),
-		Logs:        []string{},
-	}
-
-	// Record the run in database
-	if err := services.RecordWorkflowRun(run); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start workflow run"})
+	// Execute workflow using the new executor
+	executor := services.NewWorkflowExecutor()
+	workflowRun, err := executor.ExecuteWorkflow(c.Request.Context(), workflowID, userID)
+	if err != nil {
+		logrus.Errorf("Failed to execute workflow: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to execute workflow",
+			"details": err.Error(),
+		})
 		return
 	}
 
-	// TODO: Implement actual workflow execution logic here
-	// For now, we'll just mark it as completed after recording
-	run.Status = models.WorkflowRunStatusCompleted
-	run.CompletedAt = &time.Time{}
-	*run.CompletedAt = time.Now()
-	run.Duration = int64(run.CompletedAt.Sub(run.StartedAt).Milliseconds())
-
-	// Update the run status
-	updateFilter := bson.M{"_id": run.ID}
-	updateDoc := bson.M{
-		"$set": bson.M{
-			"status":       run.Status,
-			"completed_at": run.CompletedAt,
-			"duration":     run.Duration,
-		},
-	}
-	
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	
-	if _, err := database.WorkflowRunColl.UpdateOne(ctx, updateFilter, updateDoc); err != nil {
-		logrus.Errorf("Failed to update workflow run status: %v", err)
-	}
-
 	c.JSON(http.StatusOK, gin.H{
-		"message": "Workflow run started successfully",
-		"run_id":  run.ID.Hex(),
-		"status":  run.Status,
+		"message": "Workflow execution started",
+		"run_id": workflowRun.ID,
+		"status": workflowRun.Status,
+		"logs": workflowRun.Logs,
 	})
 }
 
