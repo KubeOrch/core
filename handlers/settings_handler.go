@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"fmt"
-	"math/rand"
 	"net/http"
 	"os"
 
@@ -26,7 +24,7 @@ func GetInviteCodeHandler(c *gin.Context) {
 	if inviteCode == "" {
 		// Generate new code if it doesn't exist
 		inviteCode = generateInviteCode()
-		if err := updateConfigFile("INVITE_CODE", inviteCode); err != nil {
+		if err := updateConfig("INVITE_CODE", inviteCode); err != nil {
 			logrus.Errorf("Error updating config: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": "Failed to generate invite code",
@@ -52,7 +50,7 @@ func GenerateInviteCodeHandler(c *gin.Context) {
 	}
 
 	inviteCode := generateInviteCode()
-	if err := updateConfigFile("INVITE_CODE", inviteCode); err != nil {
+	if err := updateConfig("INVITE_CODE", inviteCode); err != nil {
 		logrus.Errorf("Error updating config: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to generate invite code",
@@ -121,14 +119,6 @@ func UpdateRegenerateSettingHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"regenerateAfterSignup": req.RegenerateAfterSignup,
 	})
-}
-
-func generateInviteCode() string {
-	return fmt.Sprintf("%06d", rand.Intn(1000000))
-}
-
-func updateConfigFile(key, value string) error {
-	return updateConfig(key, value)
 }
 
 func updateConfig(key string, value interface{}) error {
