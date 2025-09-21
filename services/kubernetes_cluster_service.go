@@ -270,12 +270,12 @@ func (s *KubernetesClusterService) UpdateCluster(ctx context.Context, userID pri
 
 	// Prepare update fields
 	updateFields := bson.M{
-		"displayName": updatedCluster.DisplayName,
-		"description": updatedCluster.Description,
-		"server":      updatedCluster.Server,
-		"authType":    updatedCluster.AuthType,
-		"labels":      updatedCluster.Labels,
-		"updatedAt":   time.Now(),
+		"display_name": updatedCluster.DisplayName,
+		"description":  updatedCluster.Description,
+		"server":       updatedCluster.Server,
+		"auth_type":    updatedCluster.AuthType,
+		"labels":       updatedCluster.Labels,
+		"updated_at":   time.Now(),
 	}
 
 	// Only update credentials if they were provided
