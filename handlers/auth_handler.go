@@ -159,6 +159,17 @@ func RegisterHandler(c *gin.Context) {
 		return
 	}
 
+	// Check if we should regenerate invite code after signup (only for non-admin users)
+	if role == models.RoleUser && viper.GetBool("REGENERATE_INVITE_AFTER_SIGNUP") {
+		newInviteCode := generateInviteCode()
+		if err := updateConfigFile("INVITE_CODE", newInviteCode); err != nil {
+			logrus.Warnf("Failed to regenerate invite code after signup: %v", err)
+		} else {
+			viper.Set("INVITE_CODE", newInviteCode)
+			logrus.Infof("Invite code regenerated after signup: %s", newInviteCode)
+		}
+	}
+
 	logrus.Infof("New user registered: %s with role: %s", user.Email, user.Role)
 
 	c.JSON(http.StatusCreated, gin.H{

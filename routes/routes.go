@@ -46,6 +46,8 @@ func SetupRouter() *gin.Engine {
 			{
 				settings.GET("/invite-code", handlers.GetInviteCodeHandler)
 				settings.POST("/generate-invite-code", handlers.GenerateInviteCodeHandler)
+				settings.GET("/regenerate-setting", handlers.GetRegenerateSettingHandler)
+				settings.PUT("/regenerate-setting", handlers.UpdateRegenerateSettingHandler)
 			}
 		}
 
