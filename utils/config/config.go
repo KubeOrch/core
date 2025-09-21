@@ -19,9 +19,8 @@ func Load() error {
 	viper.SetDefault("PORT", "3000")
 	viper.SetDefault("GIN_MODE", "debug")
 	viper.SetDefault("LOG_LEVEL", "info")
-	viper.SetDefault("MONGODB.HOST", "localhost")
-	viper.SetDefault("MONGODB.PORT", "27017")
-	viper.SetDefault("MONGODB.NAME", "kubeorch")
+	// Default to local MongoDB without auth for development
+	viper.SetDefault("MONGO_URI", "mongodb://localhost:27017/kubeorch")
 	viper.SetDefault("CLUSTER_LOG_TTL_HOURS", 24)
 	viper.SetDefault("TOKEN_REFRESH_MAX_AGE_DAYS", 7)
 
@@ -54,16 +53,8 @@ func GetEnv(key string) string {
 	return os.Getenv(key)
 }
 
-func GetMongoHost() string {
-	return viper.GetString("MONGODB.HOST")
-}
-
-func GetMongoPort() string {
-	return viper.GetString("MONGODB.PORT")
-}
-
-func GetMongoDBName() string {
-	return viper.GetString("MONGODB.NAME")
+func GetMongoURI() string {
+	return viper.GetString("MONGO_URI")
 }
 
 func GetJWTSecret() string {

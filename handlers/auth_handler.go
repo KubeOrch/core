@@ -9,6 +9,7 @@ import (
 
 	"github.com/KubeOrch/core/models"
 	"github.com/KubeOrch/core/services"
+	"github.com/KubeOrch/core/utils"
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
@@ -105,7 +106,7 @@ func RegisterHandler(c *gin.Context) {
 			logrus.Info("Encryption key generated and saved")
 		}
 
-		// Generate invite code for the organization
+// Generate invite code for the organization
 		inviteCode := generateInviteCode()
 		if err := updateConfig("INVITE_CODE", inviteCode); err != nil {
 			logrus.Warnf("Error saving initial invite code: %v", err)
@@ -177,10 +178,12 @@ func RegisterHandler(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{
 		"token": token,
 		"user": gin.H{
-			"id":    user.ID.Hex(),
-			"email": user.Email,
-			"name":  user.Name,
-			"role":  user.Role,
+			"id":        user.ID.Hex(),
+			"email":     user.Email,
+			"name":      user.Name,
+			"role":      user.Role,
+			"avatarUrl": utils.GetGravatarURL(user.Email, 200),
+			"createdAt": user.CreatedAt,
 		},
 	})
 }
@@ -228,10 +231,12 @@ func LoginHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"token": token,
 		"user": gin.H{
-			"id":    user.ID.Hex(),
-			"email": user.Email,
-			"name":  user.Name,
-			"role":  user.Role,
+			"id":        user.ID.Hex(),
+			"email":     user.Email,
+			"name":      user.Name,
+			"role":      user.Role,
+			"avatarUrl": utils.GetGravatarURL(user.Email, 200),
+			"createdAt": user.CreatedAt,
 		},
 	})
 }
@@ -269,6 +274,7 @@ func generateInviteCode() string {
 	return fmt.Sprintf("%06d", num%1000000)
 }
 
+
 func GetProfileHandler(c *gin.Context) {
 	userIDStr, exists := c.Get("userID")
 	if !exists {
@@ -296,10 +302,12 @@ func GetProfileHandler(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"user": gin.H{
-			"id":    user.ID.Hex(),
-			"email": user.Email,
-			"name":  user.Name,
-			"role":  user.Role,
+			"id":         user.ID.Hex(),
+			"email":      user.Email,
+			"name":       user.Name,
+			"role":       user.Role,
+			"createdAt":  user.CreatedAt,
+			"avatarUrl":  utils.GetGravatarURL(user.Email, 200),
 		},
 	})
 }
@@ -343,10 +351,12 @@ func UpdateProfileHandler(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"user": gin.H{
-			"id":    user.ID.Hex(),
-			"email": user.Email,
-			"name":  user.Name,
-			"role":  user.Role,
+			"id":         user.ID.Hex(),
+			"email":      user.Email,
+			"name":       user.Name,
+			"role":       user.Role,
+			"createdAt":  user.CreatedAt,
+			"avatarUrl":  utils.GetGravatarURL(user.Email, 200),
 		},
 	})
 }
@@ -392,10 +402,12 @@ func RefreshTokenHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"token": token,
 		"user": gin.H{
-			"id":    user.ID.Hex(),
-			"email": user.Email,
-			"name":  user.Name,
-			"role":  user.Role,
+			"id":        user.ID.Hex(),
+			"email":     user.Email,
+			"name":      user.Name,
+			"role":      user.Role,
+			"avatarUrl": utils.GetGravatarURL(user.Email, 200),
+			"createdAt": user.CreatedAt,
 		},
 	})
 }

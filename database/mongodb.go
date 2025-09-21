@@ -3,6 +3,8 @@ package database
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/KubeOrch/core/utils/config"
@@ -21,13 +23,20 @@ var (
 )
 
 func Connect() error {
-	host := config.GetMongoHost()
-	port := config.GetMongoPort()
-	dbname := config.GetMongoDBName()
+	uri := config.GetMongoURI()
 
-	logrus.Infof("Connecting to MongoDB: host=%s, port=%s, dbname=%s", host, port, dbname)
+	// Extract database name from URI
+	dbname := extractDatabaseFromURI(uri)
+	if dbname == "" {
+		dbname = "kubeorch" // Default database name
+	}
 
-	uri := fmt.Sprintf("mongodb://%s:%s", host, port)
+	// Log connection info (without sensitive details)
+	if strings.Contains(uri, "@") {
+		logrus.Infof("Connecting to MongoDB with authentication, database=%s", dbname)
+	} else {
+		logrus.Infof("Connecting to MongoDB without authentication, database=%s", dbname)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -121,6 +130,27 @@ func IsFirstUser() (bool, error) {
 
 func GetDB() *mongo.Database {
 	return Database
+}
+
+func extractDatabaseFromURI(uri string) string {
+	// Parse database name from URI using the standard library for robustness
+	// Handles various MongoDB URI formats including mongodb+srv://
+	parsedURL, err := url.Parse(uri)
+	if err != nil {
+		logrus.Warnf("Could not parse MongoDB URI to extract database name: %v", err)
+		return ""
+	}
+
+	// The path from a valid MongoDB URI will be like "/dbname"
+	// We trim the leading slash to get the database name
+	dbPath := strings.TrimPrefix(parsedURL.Path, "/")
+
+	// Remove query parameters if present (shouldn't be in path, but extra safety)
+	if idx := strings.Index(dbPath, "?"); idx != -1 {
+		dbPath = dbPath[:idx]
+	}
+
+	return dbPath
 }
 
 func Close() error {
