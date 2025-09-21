@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"fmt"
-	"math/rand"
 	"net/http"
 	"os"
 
@@ -26,7 +24,7 @@ func GetInviteCodeHandler(c *gin.Context) {
 	if inviteCode == "" {
 		// Generate new code if it doesn't exist
 		inviteCode = generateInviteCode()
-		if err := updateConfigFile("INVITE_CODE", inviteCode); err != nil {
+		if err := updateConfig("INVITE_CODE", inviteCode); err != nil {
 			logrus.Errorf("Error updating config: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": "Failed to generate invite code",
@@ -52,7 +50,7 @@ func GenerateInviteCodeHandler(c *gin.Context) {
 	}
 
 	inviteCode := generateInviteCode()
-	if err := updateConfigFile("INVITE_CODE", inviteCode); err != nil {
+	if err := updateConfig("INVITE_CODE", inviteCode); err != nil {
 		logrus.Errorf("Error updating config: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to generate invite code",
@@ -68,11 +66,62 @@ func GenerateInviteCodeHandler(c *gin.Context) {
 	})
 }
 
-func generateInviteCode() string {
-	return fmt.Sprintf("%06d", rand.Intn(1000000))
+func GetRegenerateSettingHandler(c *gin.Context) {
+	// Check if user is admin
+	role, exists := c.Get("userRole")
+	if !exists || role != "admin" {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "Admin access required",
+		})
+		return
+	}
+
+	regenerateSetting := viper.GetBool("REGENERATE_INVITE_AFTER_SIGNUP")
+
+	c.JSON(http.StatusOK, gin.H{
+		"regenerateAfterSignup": regenerateSetting,
+		"inviteCode": viper.GetString("INVITE_CODE"),
+	})
 }
 
-func updateConfigFile(key, value string) error {
+func UpdateRegenerateSettingHandler(c *gin.Context) {
+	// Check if user is admin
+	role, exists := c.Get("userRole")
+	if !exists || role != "admin" {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "Admin access required",
+		})
+		return
+	}
+
+	var req struct {
+		RegenerateAfterSignup bool `json:"regenerateAfterSignup"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid request data",
+		})
+		return
+	}
+
+	if err := updateConfig("REGENERATE_INVITE_AFTER_SIGNUP", req.RegenerateAfterSignup); err != nil {
+		logrus.Errorf("Error updating config: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to update setting",
+		})
+		return
+	}
+
+	viper.Set("REGENERATE_INVITE_AFTER_SIGNUP", req.RegenerateAfterSignup)
+	logrus.Infof("Regenerate invite code setting updated to: %v", req.RegenerateAfterSignup)
+
+	c.JSON(http.StatusOK, gin.H{
+		"regenerateAfterSignup": req.RegenerateAfterSignup,
+	})
+}
+
+func updateConfig(key string, value interface{}) error {
 	// Read the config file
 	configPath := "config.yaml"
 	data, err := os.ReadFile(configPath)

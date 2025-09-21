@@ -3,7 +3,9 @@ package handlers
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/KubeOrch/core/models"
 	"github.com/KubeOrch/core/services"
@@ -70,7 +72,7 @@ func RegisterHandler(c *gin.Context) {
 				return
 			}
 
-			if err := updateConfigFile("JWT_SECRET", jwtSecret); err != nil {
+			if err := updateConfig("JWT_SECRET", jwtSecret); err != nil {
 				logrus.Errorf("Error saving JWT secret: %v", err)
 				c.JSON(http.StatusInternalServerError, gin.H{
 					"error": "Registration failed",
@@ -92,7 +94,7 @@ func RegisterHandler(c *gin.Context) {
 				return
 			}
 
-			if err := updateConfigFile("ENCRYPTION_KEY", encryptionKey); err != nil {
+			if err := updateConfig("ENCRYPTION_KEY", encryptionKey); err != nil {
 				logrus.Errorf("Error saving encryption key: %v", err)
 				c.JSON(http.StatusInternalServerError, gin.H{
 					"error": "Registration failed",
@@ -105,7 +107,7 @@ func RegisterHandler(c *gin.Context) {
 
 		// Generate invite code for the organization
 		inviteCode := generateInviteCode()
-		if err := updateConfigFile("INVITE_CODE", inviteCode); err != nil {
+		if err := updateConfig("INVITE_CODE", inviteCode); err != nil {
 			logrus.Warnf("Error saving initial invite code: %v", err)
 		} else {
 			viper.Set("INVITE_CODE", inviteCode)
@@ -157,6 +159,17 @@ func RegisterHandler(c *gin.Context) {
 			"error": "Registration failed",
 		})
 		return
+	}
+
+	// Check if we should regenerate invite code after signup (only for non-admin users)
+	if role == models.RoleUser && viper.GetBool("REGENERATE_INVITE_AFTER_SIGNUP") {
+		newInviteCode := generateInviteCode()
+		if err := updateConfig("INVITE_CODE", newInviteCode); err != nil {
+			logrus.Warnf("Failed to regenerate invite code after signup: %v", err)
+		} else {
+			viper.Set("INVITE_CODE", newInviteCode)
+			logrus.Infof("Invite code regenerated after signup: %s", newInviteCode)
+		}
 	}
 
 	logrus.Infof("New user registered: %s with role: %s", user.Email, user.Role)
@@ -241,6 +254,19 @@ func generateEncryptionKey() (string, error) {
 	}
 	// Encode to base64 for storage
 	return base64.StdEncoding.EncodeToString(key), nil
+}
+
+func generateInviteCode() string {
+	// Generate a cryptographically secure 6-digit code
+	// Using 3 bytes gives us values 0-16777215, we'll mod by 1000000 for 6 digits
+	b := make([]byte, 3)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to timestamp-based code in case of error
+		return fmt.Sprintf("%06d", time.Now().UnixNano()%1000000)
+	}
+	// Convert bytes to integer and ensure 6 digits
+	num := int(b[0])<<16 | int(b[1])<<8 | int(b[2])
+	return fmt.Sprintf("%06d", num%1000000)
 }
 
 func GetProfileHandler(c *gin.Context) {
