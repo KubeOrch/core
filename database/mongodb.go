@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -132,22 +133,24 @@ func GetDB() *mongo.Database {
 }
 
 func extractDatabaseFromURI(uri string) string {
-	// Parse database name from URI
-	// Format: mongodb://[credentials@]host:port/database[?params]
-	parts := strings.Split(uri, "/")
-	if len(parts) < 4 {
+	// Parse database name from URI using the standard library for robustness
+	// Handles various MongoDB URI formats including mongodb+srv://
+	parsedURL, err := url.Parse(uri)
+	if err != nil {
+		logrus.Warnf("Could not parse MongoDB URI to extract database name: %v", err)
 		return ""
 	}
 
-	// Get the part after the last slash
-	dbPart := parts[len(parts)-1]
+	// The path from a valid MongoDB URI will be like "/dbname"
+	// We trim the leading slash to get the database name
+	dbPath := strings.TrimPrefix(parsedURL.Path, "/")
 
-	// Remove query parameters if present
-	if idx := strings.Index(dbPart, "?"); idx != -1 {
-		dbPart = dbPart[:idx]
+	// Remove query parameters if present (shouldn't be in path, but extra safety)
+	if idx := strings.Index(dbPath, "?"); idx != -1 {
+		dbPath = dbPath[:idx]
 	}
 
-	return dbPart
+	return dbPath
 }
 
 func Close() error {
