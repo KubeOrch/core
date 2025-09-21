@@ -355,6 +355,80 @@ func (h *ClusterHandler) GetClusterLogs(c *gin.Context) {
 	})
 }
 
+type UpdateClusterRequest struct {
+	DisplayName string                    `json:"displayName"`
+	Description string                    `json:"description"`
+	Server      string                    `json:"server"`
+	AuthType    models.ClusterAuthType    `json:"authType"`
+	Credentials *models.ClusterCredentials `json:"credentials,omitempty"` // Optional - only if updating token
+	Labels      map[string]string         `json:"labels,omitempty"`
+}
+
+func (h *ClusterHandler) UpdateCluster(c *gin.Context) {
+	name := c.Param("name")
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cluster name is required"})
+		return
+	}
+
+	var req UpdateClusterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		h.logger.WithError(err).Error("Invalid request body")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	// Get existing cluster
+	cluster, err := h.service.GetClusterByName(ctx, userID, name)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to get cluster")
+		c.JSON(http.StatusNotFound, gin.H{"error": "Cluster not found"})
+		return
+	}
+
+	// Update fields
+	if req.DisplayName != "" {
+		cluster.DisplayName = req.DisplayName
+	}
+	if req.Description != "" {
+		cluster.Description = req.Description
+	}
+	if req.Server != "" {
+		cluster.Server = req.Server
+	}
+	if req.AuthType != "" {
+		cluster.AuthType = req.AuthType
+	}
+	if req.Labels != nil {
+		cluster.Labels = req.Labels
+	}
+
+	// Only update credentials if provided
+	if req.Credentials != nil {
+		cluster.Credentials = *req.Credentials
+	}
+
+	// Update the cluster
+	if err := h.service.UpdateCluster(ctx, userID, name, cluster); err != nil {
+		h.logger.WithError(err).Error("Failed to update cluster")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Cluster updated successfully",
+		"cluster": clusterToResponse(cluster),
+	})
+}
+
 type UpdateCredentialsRequest struct {
 	Credentials models.ClusterCredentials `json:"credentials" binding:"required"`
 }

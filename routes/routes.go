@@ -84,6 +84,7 @@ func SetupRouter() *gin.Engine {
 			clusters.GET("", clusterHandler.ListClusters)
 			clusters.GET("/default", clusterHandler.GetDefaultCluster)
 			clusters.GET("/:name", clusterHandler.GetCluster)
+			clusters.PUT("/:name", clusterHandler.UpdateCluster)
 			clusters.GET("/:name/status", clusterHandler.GetClusterStatus)
 			clusters.DELETE("/:name", clusterHandler.RemoveCluster)
 			clusters.PUT("/:name/default", clusterHandler.SetDefaultCluster)

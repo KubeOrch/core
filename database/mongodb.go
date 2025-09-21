@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/KubeOrch/core/utils/config"
@@ -21,13 +22,20 @@ var (
 )
 
 func Connect() error {
-	host := config.GetMongoHost()
-	port := config.GetMongoPort()
-	dbname := config.GetMongoDBName()
+	uri := config.GetMongoURI()
 
-	logrus.Infof("Connecting to MongoDB: host=%s, port=%s, dbname=%s", host, port, dbname)
+	// Extract database name from URI
+	dbname := extractDatabaseFromURI(uri)
+	if dbname == "" {
+		dbname = "kubeorch" // Default database name
+	}
 
-	uri := fmt.Sprintf("mongodb://%s:%s", host, port)
+	// Log connection info (without sensitive details)
+	if strings.Contains(uri, "@") {
+		logrus.Infof("Connecting to MongoDB with authentication, database=%s", dbname)
+	} else {
+		logrus.Infof("Connecting to MongoDB without authentication, database=%s", dbname)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -121,6 +129,25 @@ func IsFirstUser() (bool, error) {
 
 func GetDB() *mongo.Database {
 	return Database
+}
+
+func extractDatabaseFromURI(uri string) string {
+	// Parse database name from URI
+	// Format: mongodb://[credentials@]host:port/database[?params]
+	parts := strings.Split(uri, "/")
+	if len(parts) < 4 {
+		return ""
+	}
+
+	// Get the part after the last slash
+	dbPart := parts[len(parts)-1]
+
+	// Remove query parameters if present
+	if idx := strings.Index(dbPart, "?"); idx != -1 {
+		dbPart = dbPart[:idx]
+	}
+
+	return dbPart
 }
 
 func Close() error {

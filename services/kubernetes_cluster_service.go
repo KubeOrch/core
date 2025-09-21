@@ -243,6 +243,51 @@ func (s *KubernetesClusterService) GetDefaultCluster(ctx context.Context, userID
 	return s.clusterRepo.GetDefault(ctx, userID)
 }
 
+// UpdateCluster updates a cluster's configuration
+func (s *KubernetesClusterService) UpdateCluster(ctx context.Context, userID primitive.ObjectID, clusterName string, updatedCluster *models.Cluster) error {
+	existingCluster, err := s.clusterRepo.GetByName(ctx, clusterName, userID)
+	if err != nil {
+		return fmt.Errorf("cluster not found: %w", err)
+	}
+
+	// Only owner can update cluster
+	if existingCluster.UserID != userID {
+		return fmt.Errorf("only cluster owner can update cluster")
+	}
+
+	// If credentials changed, test the connection
+	if updatedCluster.Credentials.Token != "" || updatedCluster.Credentials.KubeConfig != "" {
+		clientset, err := s.CreateClusterConnection(updatedCluster)
+		if err != nil {
+			return fmt.Errorf("invalid configuration: %w", err)
+		}
+
+		_, err = clientset.Discovery().ServerVersion()
+		if err != nil {
+			return fmt.Errorf("failed to validate configuration: %w", err)
+		}
+	}
+
+	// Prepare update fields
+	updateFields := bson.M{
+		"displayName": updatedCluster.DisplayName,
+		"description": updatedCluster.Description,
+		"server":      updatedCluster.Server,
+		"authType":    updatedCluster.AuthType,
+		"labels":      updatedCluster.Labels,
+		"updatedAt":   time.Now(),
+	}
+
+	// Only update credentials if they were provided
+	if updatedCluster.Credentials.Token != "" || updatedCluster.Credentials.KubeConfig != "" {
+		updateFields["credentials"] = updatedCluster.Credentials
+		updateFields["status"] = models.ClusterStatusConnected
+	}
+
+	// Update in database
+	return s.clusterRepo.Update(ctx, existingCluster.ID, updateFields)
+}
+
 // UpdateClusterCredentials updates cluster credentials
 func (s *KubernetesClusterService) UpdateClusterCredentials(ctx context.Context, userID primitive.ObjectID, clusterName string, credentials models.ClusterCredentials) error {
 	cluster, err := s.clusterRepo.GetByName(ctx, clusterName, userID)
