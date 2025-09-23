@@ -51,3 +51,5 @@ logs/
 ehthumbs.db
 Thumbs.db
 kubeorch
+
+tmp/
