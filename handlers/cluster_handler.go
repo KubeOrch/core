@@ -420,17 +420,12 @@ func (h *ClusterHandler) UpdateCluster(c *gin.Context) {
 		cluster.Credentials = *req.Credentials
 	}
 
-	// Handle single node mode toggle if provided
-	if req.SingleNode != nil && cluster.SingleNode != *req.SingleNode {
-		if err := h.service.ToggleSingleNodeMode(ctx, userID, name, *req.SingleNode); err != nil {
-			h.logger.WithError(err).Error("Failed to toggle single-node mode")
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to toggle single-node mode: " + err.Error()})
-			return
-		}
+	// Update single node mode if provided
+	if req.SingleNode != nil {
 		cluster.SingleNode = *req.SingleNode
 	}
 
-	// Update the cluster
+	// Update the cluster (including single-node mode changes if any)
 	if err := h.service.UpdateCluster(ctx, userID, name, cluster); err != nil {
 		h.logger.WithError(err).Error("Failed to update cluster")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

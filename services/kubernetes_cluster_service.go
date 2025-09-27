@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -279,6 +281,31 @@ func (s *KubernetesClusterService) UpdateCluster(ctx context.Context, userID pri
 		}
 	}
 
+	// Handle single-node mode changes if needed
+	if existingCluster.SingleNode != updatedCluster.SingleNode {
+		// Create connection with existing cluster credentials
+		connectCluster := existingCluster
+		// Use new credentials if provided
+		if updatedCluster.Credentials.Token != "" || updatedCluster.Credentials.KubeConfig != "" {
+			connectCluster.Credentials = updatedCluster.Credentials
+		}
+
+		clientset, err := s.CreateClusterConnection(connectCluster)
+		if err != nil {
+			return fmt.Errorf("failed to connect to cluster for single-node mode change: %w", err)
+		}
+
+		// Manage taints for single-node mode
+		if err := s.manageSingleNodeTaints(ctx, clientset, updatedCluster.SingleNode); err != nil {
+			return fmt.Errorf("failed to manage single-node taints: %w", err)
+		}
+
+		s.logger.WithFields(logrus.Fields{
+			"cluster":     clusterName,
+			"single_node": updatedCluster.SingleNode,
+		}).Info("Toggled single-node mode")
+	}
+
 	// Prepare update fields
 	updateFields := bson.M{
 		"display_name": updatedCluster.DisplayName,
@@ -286,6 +313,7 @@ func (s *KubernetesClusterService) UpdateCluster(ctx context.Context, userID pri
 		"server":       updatedCluster.Server,
 		"auth_type":    updatedCluster.AuthType,
 		"labels":       updatedCluster.Labels,
+		"single_node":  updatedCluster.SingleNode,
 		"updated_at":   time.Now(),
 	}
 
@@ -551,11 +579,23 @@ func (s *KubernetesClusterService) manageSingleNodeTaints(ctx context.Context, c
 			}
 		}
 
-		// Update node if taints changed
+		// Update node if taints changed using JSON Patch for better conflict handling
 		if updated {
-			node.Spec.Taints = newTaints
-			if _, err := clientset.CoreV1().Nodes().Update(ctx, &node, metav1.UpdateOptions{}); err != nil {
-				return fmt.Errorf("failed to update node %s: %w", node.Name, err)
+			// Create JSON patch for taints
+			patchData, err := json.Marshal([]map[string]interface{}{
+				{
+					"op":    "replace",
+					"path":  "/spec/taints",
+					"value": newTaints,
+				},
+			})
+			if err != nil {
+				return fmt.Errorf("failed to create patch for node %s: %w", node.Name, err)
+			}
+
+			// Apply the patch
+			if _, err := clientset.CoreV1().Nodes().Patch(ctx, node.Name, types.JSONPatchType, patchData, metav1.PatchOptions{}); err != nil {
+				return fmt.Errorf("failed to patch node %s: %w", node.Name, err)
 			}
 		}
 	}
@@ -603,7 +643,6 @@ func (s *KubernetesClusterService) ToggleSingleNodeMode(ctx context.Context, use
 	}
 
 	// Update cluster in database
-	cluster.SingleNode = enable
 	updateData := bson.M{
 		"single_node": enable,
 	}
