@@ -32,6 +32,7 @@ type AddClusterRequest struct {
 	Server      string                    `json:"server" binding:"required"`
 	AuthType    models.ClusterAuthType    `json:"authType" binding:"required"`
 	Credentials models.ClusterCredentials `json:"credentials" binding:"required"`
+	SingleNode  bool                      `json:"singleNode"`
 	Labels      map[string]string         `json:"labels,omitempty"`
 }
 
@@ -44,6 +45,7 @@ type ClusterResponse struct {
 	AuthType    models.ClusterAuthType `json:"authType"`
 	Status      models.ClusterStatus   `json:"status"`
 	Default     bool                   `json:"default"`
+	SingleNode  bool                   `json:"singleNode"`
 	Labels      map[string]string      `json:"labels,omitempty"`
 	Metadata    models.ClusterMetadata `json:"metadata,omitempty"`
 }
@@ -69,6 +71,7 @@ func (h *ClusterHandler) AddCluster(c *gin.Context) {
 		Server:      req.Server,
 		AuthType:    req.AuthType,
 		Credentials: req.Credentials,
+		SingleNode:  req.SingleNode,
 		Labels:      req.Labels,
 	}
 
@@ -361,6 +364,7 @@ type UpdateClusterRequest struct {
 	Server      string                    `json:"server"`
 	AuthType    models.ClusterAuthType    `json:"authType"`
 	Credentials *models.ClusterCredentials `json:"credentials,omitempty"` // Optional - only if updating token
+	SingleNode  *bool                     `json:"singleNode,omitempty"`
 	Labels      map[string]string         `json:"labels,omitempty"`
 }
 
@@ -414,6 +418,16 @@ func (h *ClusterHandler) UpdateCluster(c *gin.Context) {
 	// Only update credentials if provided
 	if req.Credentials != nil {
 		cluster.Credentials = *req.Credentials
+	}
+
+	// Handle single node mode toggle if provided
+	if req.SingleNode != nil && cluster.SingleNode != *req.SingleNode {
+		if err := h.service.ToggleSingleNodeMode(ctx, userID, name, *req.SingleNode); err != nil {
+			h.logger.WithError(err).Error("Failed to toggle single-node mode")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to toggle single-node mode: " + err.Error()})
+			return
+		}
+		cluster.SingleNode = *req.SingleNode
 	}
 
 	// Update the cluster
@@ -525,6 +539,8 @@ func clusterToResponse(cluster *models.Cluster) ClusterResponse {
 		Server:      cluster.Server,
 		AuthType:    cluster.AuthType,
 		Status:      cluster.Status,
+		Default:     cluster.Default,
+		SingleNode:  cluster.SingleNode,
 		Labels:      cluster.Labels,
 		Metadata:    cluster.Metadata,
 	}

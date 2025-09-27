@@ -36,6 +36,7 @@ type Cluster struct {
 	Status      ClusterStatus        `bson:"status" json:"status"`
 	LastCheck   time.Time            `bson:"last_check" json:"lastCheck"`
 	Default     bool                 `bson:"default" json:"default"`
+	SingleNode  bool                 `bson:"single_node" json:"singleNode"`
 	Labels      map[string]string    `bson:"labels" json:"labels"`
 	Annotations map[string]string    `bson:"annotations" json:"annotations"`
 	Metadata    ClusterMetadata      `bson:"metadata" json:"metadata"`

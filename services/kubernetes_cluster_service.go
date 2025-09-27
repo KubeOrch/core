@@ -12,6 +12,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
@@ -132,6 +133,16 @@ func (s *KubernetesClusterService) AddCluster(ctx context.Context, userID primit
 				if err := s.clusterRepo.UpdateStatus(testCtx, cluster.ID, models.ClusterStatusConnected); err != nil {
 					s.logger.WithError(err).Error("Failed to update cluster status to connected")
 				}
+
+				// Handle single-node mode if enabled
+				if cluster.SingleNode {
+					if err := s.manageSingleNodeTaints(testCtx, clientset, true); err != nil {
+						s.logger.WithError(err).Warn("Failed to remove control-plane taints for single-node mode")
+					} else {
+						s.logger.Info("Successfully configured single-node mode (removed control-plane taints)")
+					}
+				}
+
 				// Update metadata
 				if err := s.updateClusterMetadata(testCtx, cluster, clientset); err != nil {
 					s.logger.WithError(err).Warn("Failed to update cluster metadata on add")
@@ -488,6 +499,124 @@ func (s *KubernetesClusterService) logConnection(ctx context.Context, clusterID,
 	if err := s.clusterRepo.LogConnection(ctx, log); err != nil {
 		s.logger.WithError(err).Warn("Failed to log connection")
 	}
+}
+
+// manageSingleNodeTaints manages control-plane taints for single-node clusters
+func (s *KubernetesClusterService) manageSingleNodeTaints(ctx context.Context, clientset *kubernetes.Clientset, remove bool) error {
+	// Get all nodes
+	nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to list nodes: %w", err)
+	}
+
+	controlPlaneTaintKey := "node-role.kubernetes.io/control-plane"
+	masterTaintKey := "node-role.kubernetes.io/master" // For older clusters
+
+	for _, node := range nodes.Items {
+		updated := false
+		newTaints := []corev1.Taint{}
+
+		// Process existing taints
+		for _, taint := range node.Spec.Taints {
+			// Skip control-plane taints if we're removing them
+			if remove && (taint.Key == controlPlaneTaintKey || taint.Key == masterTaintKey) {
+				s.logger.WithFields(logrus.Fields{
+					"node":  node.Name,
+					"taint": taint.Key,
+				}).Info("Removing control-plane taint for single-node mode")
+				updated = true
+				continue
+			}
+			newTaints = append(newTaints, taint)
+		}
+
+		// Add control-plane taint back if we're disabling single-node mode
+		if !remove {
+			hasTaint := false
+			for _, taint := range node.Spec.Taints {
+				if taint.Key == controlPlaneTaintKey {
+					hasTaint = true
+					break
+				}
+			}
+			if !hasTaint && s.isControlPlaneNode(&node) {
+				newTaints = append(newTaints, corev1.Taint{
+					Key:    controlPlaneTaintKey,
+					Effect: corev1.TaintEffectNoSchedule,
+				})
+				s.logger.WithFields(logrus.Fields{
+					"node": node.Name,
+				}).Info("Adding control-plane taint back (single-node mode disabled)")
+				updated = true
+			}
+		}
+
+		// Update node if taints changed
+		if updated {
+			node.Spec.Taints = newTaints
+			if _, err := clientset.CoreV1().Nodes().Update(ctx, &node, metav1.UpdateOptions{}); err != nil {
+				return fmt.Errorf("failed to update node %s: %w", node.Name, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// isControlPlaneNode checks if a node is a control-plane node
+func (s *KubernetesClusterService) isControlPlaneNode(node *corev1.Node) bool {
+	controlPlaneLabels := []string{
+		"node-role.kubernetes.io/control-plane",
+		"node-role.kubernetes.io/master",
+	}
+
+	for _, label := range controlPlaneLabels {
+		if _, exists := node.Labels[label]; exists {
+			return true
+		}
+	}
+	return false
+}
+
+// ToggleSingleNodeMode toggles single-node mode for a cluster
+func (s *KubernetesClusterService) ToggleSingleNodeMode(ctx context.Context, userID primitive.ObjectID, clusterName string, enable bool) error {
+	// Get cluster
+	cluster, err := s.GetClusterByName(ctx, userID, clusterName)
+	if err != nil {
+		return fmt.Errorf("failed to get cluster: %w", err)
+	}
+
+	// Skip if already in the desired state
+	if cluster.SingleNode == enable {
+		return nil
+	}
+
+	// Create connection
+	clientset, err := s.CreateClusterConnection(cluster)
+	if err != nil {
+		return fmt.Errorf("failed to connect to cluster: %w", err)
+	}
+
+	// Manage taints
+	if err := s.manageSingleNodeTaints(ctx, clientset, enable); err != nil {
+		return fmt.Errorf("failed to manage taints: %w", err)
+	}
+
+	// Update cluster in database
+	cluster.SingleNode = enable
+	updateData := bson.M{
+		"single_node": enable,
+	}
+	if err := s.clusterRepo.Update(ctx, cluster.ID, updateData); err != nil {
+		return fmt.Errorf("failed to update cluster: %w", err)
+	}
+
+	s.logger.WithFields(logrus.Fields{
+		"cluster":     clusterName,
+		"single_node": enable,
+	}).Info("Toggled single-node mode")
+
+	return nil
 }
 
 // Singleton instance
