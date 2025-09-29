@@ -167,6 +167,13 @@ func (e *WorkflowExecutor) executeDeploymentNode(ctx context.Context, manifestAp
 		"timestamp": time.Now().Unix(),
 	}
 
+	// Log the operation performed
+	if len(result.AppliedResources) > 0 {
+		resource := result.AppliedResources[0]
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] Deployment %s/%s: %s",
+			time.Now().Format("15:04:05"), resource.Namespace, resource.Name, resource.Operation))
+	}
+
 	// Add to output
 	run.Output[node.ID] = result
 
@@ -188,10 +195,10 @@ func (e *WorkflowExecutor) executeDeploymentNode(ctx context.Context, manifestAp
 func (e *WorkflowExecutor) prepareTemplateValues(node *models.WorkflowNode, deploymentData map[string]interface{}) map[string]interface{} {
 	values := make(map[string]interface{})
 
-	// Set name (use node ID if not specified)
 	if name, ok := deploymentData["name"].(string); ok {
 		values["Name"] = name
 	} else {
+		// Fallback to node ID if name not provided
 		values["Name"] = node.ID
 	}
 

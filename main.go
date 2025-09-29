@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/KubeOrch/core/database"
+	"github.com/KubeOrch/core/repositories"
 	"github.com/KubeOrch/core/routes"
 	"github.com/KubeOrch/core/services"
 	"github.com/KubeOrch/core/utils/config"
@@ -38,6 +39,14 @@ func main() {
 		logrus.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
 
+	// Create resource indexes after database connection
+	resourceRepo := repositories.NewResourceRepository()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := resourceRepo.CreateIndexes(ctx); err != nil {
+		logrus.Warnf("Failed to create resource indexes: %v", err)
+	}
+
 	port := config.GetPort()
 	ginMode := config.GetGinMode()
 	gin.SetMode(ginMode)
@@ -47,6 +56,10 @@ func main() {
 	// Start cluster health monitor with 60 second interval
 	healthMonitor := services.NewClusterHealthMonitor(60 * time.Second)
 	healthMonitor.Start()
+
+	// Start resource sync monitor (syncs resources every 5 minutes)
+	resourceSyncMonitor := services.NewResourceSyncMonitor(5 * time.Minute)
+	resourceSyncMonitor.Start()
 
 	// Create HTTP server
 	srv := &http.Server{
@@ -80,11 +93,11 @@ func main() {
 	logrus.Info("Health monitor stopped")
 
 	// Create a deadline to wait for server shutdown
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
 
 	// Gracefully shutdown the server with a timeout of 10 seconds
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logrus.Error("Server forced to shutdown:", err)
 	}
 
