@@ -176,7 +176,7 @@ func (s *ResourceService) syncClusterWideResources(ctx context.Context, userID p
 
 // Conversion functions
 func (s *ResourceService) deploymentToResource(deployment *appsv1.Deployment, cluster *models.Cluster, userID primitive.ObjectID) *models.Resource {
-	status := models.ResourceStatusUnknown
+	var status models.ResourceStatus
 	if deployment.Status.Replicas == 0 {
 		status = models.ResourceStatusPending
 	} else if deployment.Status.AvailableReplicas == *deployment.Spec.Replicas {
@@ -339,7 +339,7 @@ func (s *ResourceService) serviceToResource(service *corev1.Service, cluster *mo
 }
 
 func (s *ResourceService) statefulSetToResource(statefulset *appsv1.StatefulSet, cluster *models.Cluster, userID primitive.ObjectID) *models.Resource {
-	status := models.ResourceStatusUnknown
+	var status models.ResourceStatus
 	if statefulset.Status.Replicas == 0 {
 		status = models.ResourceStatusPending
 	} else if statefulset.Status.ReadyReplicas == *statefulset.Spec.Replicas {

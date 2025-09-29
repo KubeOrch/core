@@ -247,7 +247,9 @@ func (h *ResourcesHandler) GetPodLogs(c *gin.Context) {
 
 	// Convert tailLines to int64
 	var tailLinesInt64 int64 = 1000
-	fmt.Sscanf(tailLines, "%d", &tailLinesInt64)
+	if _, err := fmt.Sscanf(tailLines, "%d", &tailLinesInt64); err != nil {
+		tailLinesInt64 = 1000 // Default to 1000 if parsing fails
+	}
 
 	// If no container specified and pod has containers, use the first one
 	if container == "" && len(resource.Spec.Containers) > 0 {

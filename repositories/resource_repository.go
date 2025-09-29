@@ -118,7 +118,9 @@ func (r *ResourceRepository) List(ctx context.Context, userID primitive.ObjectID
 	if err != nil {
 		return nil, err
 	}
-	defer cursor.Close(ctx)
+	defer func() {
+		_ = cursor.Close(ctx)
+	}()
 
 	var resources []*models.Resource
 	if err = cursor.All(ctx, &resources); err != nil {
@@ -153,7 +155,7 @@ func (r *ResourceRepository) MarkDeleted(ctx context.Context, userID, clusterID 
 	if result.ModifiedCount > 0 {
 		cursor, _ := r.collection.Find(ctx, filter)
 		var resources []*models.Resource
-		cursor.All(ctx, &resources)
+		_ = cursor.All(ctx, &resources)
 
 		for _, resource := range resources {
 			r.recordHistory(ctx, resource.ID, userID, "deleted", nil, resource.Status, models.ResourceStatusDeleted, "Resource no longer exists in cluster")
@@ -206,7 +208,9 @@ func (r *ResourceRepository) GetHistory(ctx context.Context, resourceID primitiv
 	if err != nil {
 		return nil, err
 	}
-	defer cursor.Close(ctx)
+	defer func() {
+		_ = cursor.Close(ctx)
+	}()
 
 	var history []*models.ResourceHistory
 	if err = cursor.All(ctx, &history); err != nil {
@@ -258,7 +262,9 @@ func (r *ResourceRepository) GetResourceStats(ctx context.Context, userID primit
 	if err != nil {
 		return nil, err
 	}
-	defer cursor.Close(ctx)
+	defer func() {
+		_ = cursor.Close(ctx)
+	}()
 
 	var results []map[string]interface{}
 	if err = cursor.All(ctx, &results); err != nil {
@@ -290,7 +296,7 @@ func (r *ResourceRepository) recordHistory(ctx context.Context, resourceID, user
 		Message:    message,
 	}
 
-	r.historyCollection.InsertOne(ctx, history)
+	_, _ = r.historyCollection.InsertOne(ctx, history)
 }
 
 // Helper function to record access
@@ -303,7 +309,7 @@ func (r *ResourceRepository) recordAccess(ctx context.Context, resourceID, userI
 		Details:    details,
 	}
 
-	r.accessCollection.InsertOne(ctx, access)
+	_, _ = r.accessCollection.InsertOne(ctx, access)
 }
 
 // CreateIndexes creates necessary indexes for the resource collections
