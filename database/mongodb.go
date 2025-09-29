@@ -93,6 +93,8 @@ func createIndexes() error {
 		return fmt.Errorf("failed to create email index: %v", err)
 	}
 
+	// Resource indexes will be created separately after database initialization
+
 	logrus.Info("Database indexes created successfully")
 	return nil
 }

@@ -86,6 +86,18 @@ func SetupRouter() *gin.Engine {
 			clusters.POST("/:name/share", clusterHandler.ShareCluster)
 		}
 
+		// Kubernetes resources routes
+		resourcesHandler := handlers.NewResourcesHandler()
+		resources := protected.Group("/resources")
+		{
+			resources.GET("", resourcesHandler.GetResources)
+			resources.POST("/sync", resourcesHandler.SyncResources)
+			resources.GET("/:id", resourcesHandler.GetResourceByID)
+			resources.PATCH("/:id", resourcesHandler.UpdateResourceUserFields)
+			resources.GET("/:id/logs", resourcesHandler.GetPodLogs)
+			resources.GET("/:id/pods", resourcesHandler.GetDeploymentPods)
+		}
+
 		// Admin routes
 		admin := v1.Group("/api/admin")
 		admin.Use(middleware.AuthMiddleware(), middleware.AdminMiddleware())

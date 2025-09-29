@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/KubeOrch/core/database"
+	"github.com/KubeOrch/core/repositories"
 	"github.com/KubeOrch/core/routes"
 	"github.com/KubeOrch/core/services"
 	"github.com/KubeOrch/core/utils/config"
@@ -38,6 +39,13 @@ func main() {
 		logrus.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
 
+	// Create resource indexes after database connection
+	resourceRepo := repositories.NewResourceRepository()
+	ctx := context.Background()
+	if err := resourceRepo.CreateIndexes(ctx); err != nil {
+		logrus.Warnf("Failed to create resource indexes: %v", err)
+	}
+
 	port := config.GetPort()
 	ginMode := config.GetGinMode()
 	gin.SetMode(ginMode)
@@ -47,6 +55,10 @@ func main() {
 	// Start cluster health monitor with 60 second interval
 	healthMonitor := services.NewClusterHealthMonitor(60 * time.Second)
 	healthMonitor.Start()
+
+	// Start resource sync monitor (syncs resources every 5 minutes)
+	resourceSyncMonitor := services.NewResourceSyncMonitor(5 * time.Minute)
+	resourceSyncMonitor.Start()
 
 	// Create HTTP server
 	srv := &http.Server{
