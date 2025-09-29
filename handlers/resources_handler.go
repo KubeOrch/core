@@ -2,8 +2,9 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/KubeOrch/core/middleware"
 	"github.com/KubeOrch/core/services"
@@ -51,7 +52,9 @@ func (h *ResourcesHandler) GetResources(c *gin.Context) {
 			cluster, err := h.clusterService.GetClusterByName(ctx, userID, clusterName)
 			if err == nil {
 				go func() {
-					if err := h.resourceService.SyncClusterResources(context.Background(), userID, cluster); err != nil {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+					defer cancel()
+					if err := h.resourceService.SyncClusterResources(ctx, userID, cluster); err != nil {
 						h.logger.WithError(err).Errorf("Failed to sync cluster %s", clusterName)
 					}
 				}()
@@ -61,8 +64,10 @@ func (h *ResourcesHandler) GetResources(c *gin.Context) {
 			clusters, err := h.clusterService.ListUserClusters(ctx, userID)
 			if err == nil {
 				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+					defer cancel()
 					for _, cluster := range clusters {
-						if err := h.resourceService.SyncClusterResources(context.Background(), userID, cluster); err != nil {
+						if err := h.resourceService.SyncClusterResources(ctx, userID, cluster); err != nil {
 							h.logger.WithError(err).Errorf("Failed to sync cluster %s", cluster.Name)
 						}
 					}
@@ -121,7 +126,10 @@ func (h *ResourcesHandler) GetResourceByID(c *gin.Context) {
 	}
 
 	// Get resource history
-	history, _ := h.resourceService.GetResourceHistory(ctx, objID)
+	history, err := h.resourceService.GetResourceHistory(ctx, objID)
+	if err != nil {
+		h.logger.WithError(err).Warnf("Failed to get history for resource %s", resourceID)
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"resource": resource,
@@ -188,8 +196,10 @@ func (h *ResourcesHandler) SyncResources(c *gin.Context) {
 
 	// Start sync for all clusters in background
 	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
 		for _, cluster := range clusters {
-			if err := h.resourceService.SyncClusterResources(context.Background(), userID, cluster); err != nil {
+			if err := h.resourceService.SyncClusterResources(ctx, userID, cluster); err != nil {
 				h.logger.WithError(err).Errorf("Failed to sync cluster %s", cluster.Name)
 			}
 		}
@@ -246,8 +256,8 @@ func (h *ResourcesHandler) GetPodLogs(c *gin.Context) {
 	}
 
 	// Convert tailLines to int64
-	var tailLinesInt64 int64 = 1000
-	if _, err := fmt.Sscanf(tailLines, "%d", &tailLinesInt64); err != nil {
+	tailLinesInt64, err := strconv.ParseInt(tailLines, 10, 64)
+	if err != nil {
 		tailLinesInt64 = 1000 // Default to 1000 if parsing fails
 	}
 
@@ -270,7 +280,12 @@ func (h *ResourcesHandler) GetPodLogs(c *gin.Context) {
 		return
 	}
 
-	// Access logging can be added here if needed
+	// Record access for viewing logs
+	if err := h.resourceService.RecordResourceAccess(ctx, objID, userID, "view_logs", map[string]string{
+		"container": container,
+	}); err != nil {
+		h.logger.WithError(err).Warn("Failed to record access log")
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"logs":      string(logs),

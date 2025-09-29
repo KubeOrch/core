@@ -77,7 +77,9 @@ func (s *ResourceService) SyncClusterResources(ctx context.Context, userID primi
 func (s *ResourceService) syncNamespaceResources(ctx context.Context, userID primitive.ObjectID, cluster *models.Cluster, clientset *kubernetes.Clientset, namespace string) error {
 	// Sync Deployments
 	deployments, err := clientset.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{})
-	if err == nil {
+	if err != nil {
+		s.logger.WithError(err).Warnf("Failed to list deployments in namespace %s", namespace)
+	} else {
 		for _, deployment := range deployments.Items {
 			resource := s.deploymentToResource(&deployment, cluster, userID)
 			if err := s.resourceRepo.CreateOrUpdate(ctx, resource); err != nil {
@@ -88,7 +90,9 @@ func (s *ResourceService) syncNamespaceResources(ctx context.Context, userID pri
 
 	// Sync Pods
 	pods, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
-	if err == nil {
+	if err != nil {
+		s.logger.WithError(err).Warnf("Failed to list pods in namespace %s", namespace)
+	} else {
 		for _, pod := range pods.Items {
 			resource := s.podToResource(&pod, cluster, userID)
 			if err := s.resourceRepo.CreateOrUpdate(ctx, resource); err != nil {
@@ -99,7 +103,9 @@ func (s *ResourceService) syncNamespaceResources(ctx context.Context, userID pri
 
 	// Sync Services
 	services, err := clientset.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{})
-	if err == nil {
+	if err != nil {
+		s.logger.WithError(err).Warnf("Failed to list services in namespace %s", namespace)
+	} else {
 		for _, service := range services.Items {
 			resource := s.serviceToResource(&service, cluster, userID)
 			if err := s.resourceRepo.CreateOrUpdate(ctx, resource); err != nil {
@@ -110,7 +116,9 @@ func (s *ResourceService) syncNamespaceResources(ctx context.Context, userID pri
 
 	// Sync StatefulSets
 	statefulsets, err := clientset.AppsV1().StatefulSets(namespace).List(ctx, metav1.ListOptions{})
-	if err == nil {
+	if err != nil {
+		s.logger.WithError(err).Warnf("Failed to list statefulsets in namespace %s", namespace)
+	} else {
 		for _, statefulset := range statefulsets.Items {
 			resource := s.statefulSetToResource(&statefulset, cluster, userID)
 			if err := s.resourceRepo.CreateOrUpdate(ctx, resource); err != nil {
@@ -121,7 +129,9 @@ func (s *ResourceService) syncNamespaceResources(ctx context.Context, userID pri
 
 	// Sync ConfigMaps
 	configmaps, err := clientset.CoreV1().ConfigMaps(namespace).List(ctx, metav1.ListOptions{})
-	if err == nil {
+	if err != nil {
+		s.logger.WithError(err).Warnf("Failed to list configmaps in namespace %s", namespace)
+	} else {
 		for _, configmap := range configmaps.Items {
 			resource := s.configMapToResource(&configmap, cluster, userID)
 			if err := s.resourceRepo.CreateOrUpdate(ctx, resource); err != nil {
@@ -132,7 +142,9 @@ func (s *ResourceService) syncNamespaceResources(ctx context.Context, userID pri
 
 	// Sync Secrets
 	secrets, err := clientset.CoreV1().Secrets(namespace).List(ctx, metav1.ListOptions{})
-	if err == nil {
+	if err != nil {
+		s.logger.WithError(err).Warnf("Failed to list secrets in namespace %s", namespace)
+	} else {
 		for _, secret := range secrets.Items {
 			// Skip service account tokens
 			if secret.Type == corev1.SecretTypeServiceAccountToken {
@@ -151,7 +163,9 @@ func (s *ResourceService) syncNamespaceResources(ctx context.Context, userID pri
 func (s *ResourceService) syncClusterWideResources(ctx context.Context, userID primitive.ObjectID, cluster *models.Cluster, clientset *kubernetes.Clientset) error {
 	// Sync Nodes
 	nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-	if err == nil {
+	if err != nil {
+		s.logger.WithError(err).Warn("Failed to list nodes")
+	} else {
 		for _, node := range nodes.Items {
 			resource := s.nodeToResource(&node, cluster, userID)
 			if err := s.resourceRepo.CreateOrUpdate(ctx, resource); err != nil {
@@ -162,7 +176,9 @@ func (s *ResourceService) syncClusterWideResources(ctx context.Context, userID p
 
 	// Sync Namespaces as resources too
 	namespaces, err := clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
-	if err == nil {
+	if err != nil {
+		s.logger.WithError(err).Warn("Failed to list namespaces")
+	} else {
 		for _, namespace := range namespaces.Items {
 			resource := s.namespaceToResource(&namespace, cluster, userID)
 			if err := s.resourceRepo.CreateOrUpdate(ctx, resource); err != nil {
@@ -456,7 +472,7 @@ func (s *ResourceService) nodeToResource(node *corev1.Node, cluster *models.Clus
 		ClusterID:       cluster.ID,
 		ClusterName:     cluster.Name,
 		Name:            node.Name,
-		Namespace:       "kube-system",
+		Namespace:       "",
 		Type:            models.ResourceTypeNode,
 		UID:             string(node.UID),
 		ResourceVersion: node.ResourceVersion,
@@ -511,4 +527,10 @@ func (s *ResourceService) UpdateResourceUserFields(ctx context.Context, id, user
 // GetResourceHistory retrieves history for a resource
 func (s *ResourceService) GetResourceHistory(ctx context.Context, resourceID primitive.ObjectID) ([]*models.ResourceHistory, error) {
 	return s.resourceRepo.GetHistory(ctx, resourceID, 100)
+}
+
+// RecordResourceAccess records an access event for a resource
+func (s *ResourceService) RecordResourceAccess(ctx context.Context, resourceID, userID primitive.ObjectID, action string, details map[string]string) error {
+	s.resourceRepo.RecordAccess(ctx, resourceID, userID, action, details)
+	return nil
 }

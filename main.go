@@ -41,7 +41,8 @@ func main() {
 
 	// Create resource indexes after database connection
 	resourceRepo := repositories.NewResourceRepository()
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	if err := resourceRepo.CreateIndexes(ctx); err != nil {
 		logrus.Warnf("Failed to create resource indexes: %v", err)
 	}
@@ -92,11 +93,11 @@ func main() {
 	logrus.Info("Health monitor stopped")
 
 	// Create a deadline to wait for server shutdown
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
 
 	// Gracefully shutdown the server with a timeout of 10 seconds
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logrus.Error("Server forced to shutdown:", err)
 	}
 

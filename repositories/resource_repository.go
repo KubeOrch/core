@@ -6,6 +6,7 @@ import (
 
 	"github.com/KubeOrch/core/database"
 	"github.com/KubeOrch/core/models"
+	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -16,6 +17,7 @@ type ResourceRepository struct {
 	collection        *mongo.Collection
 	historyCollection *mongo.Collection
 	accessCollection  *mongo.Collection
+	logger            *logrus.Logger
 }
 
 func NewResourceRepository() *ResourceRepository {
@@ -24,6 +26,7 @@ func NewResourceRepository() *ResourceRepository {
 		collection:        db.Collection("resources"),
 		historyCollection: db.Collection("resource_history"),
 		accessCollection:  db.Collection("resource_access"),
+		logger:            logrus.New(),
 	}
 }
 
@@ -153,9 +156,18 @@ func (r *ResourceRepository) MarkDeleted(ctx context.Context, userID, clusterID 
 
 	// Record deletion in history for each resource
 	if result.ModifiedCount > 0 {
-		cursor, _ := r.collection.Find(ctx, filter)
+		cursor, err := r.collection.Find(ctx, filter)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			_ = cursor.Close(ctx)
+		}()
+
 		var resources []*models.Resource
-		_ = cursor.All(ctx, &resources)
+		if err = cursor.All(ctx, &resources); err != nil {
+			return err
+		}
 
 		for _, resource := range resources {
 			r.recordHistory(ctx, resource.ID, userID, "deleted", nil, resource.Status, models.ResourceStatusDeleted, "Resource no longer exists in cluster")
@@ -225,11 +237,7 @@ func (r *ResourceRepository) SearchResources(ctx context.Context, userID primiti
 	filter := bson.M{
 		"userId": userID,
 		"deletedAt": bson.M{"$exists": false},
-		"$or": []bson.M{
-			{"name": bson.M{"$regex": query, "$options": "i"}},
-			{"namespace": bson.M{"$regex": query, "$options": "i"}},
-			{"userTags": bson.M{"$in": []string{query}}},
-		},
+		"$text": bson.M{"$search": query},
 	}
 
 	return r.List(ctx, userID, filter)
@@ -296,7 +304,9 @@ func (r *ResourceRepository) recordHistory(ctx context.Context, resourceID, user
 		Message:    message,
 	}
 
-	_, _ = r.historyCollection.InsertOne(ctx, history)
+	if _, err := r.historyCollection.InsertOne(ctx, history); err != nil {
+		r.logger.WithError(err).Warn("Failed to insert resource history")
+	}
 }
 
 // Helper function to record access
@@ -309,7 +319,14 @@ func (r *ResourceRepository) recordAccess(ctx context.Context, resourceID, userI
 		Details:    details,
 	}
 
-	_, _ = r.accessCollection.InsertOne(ctx, access)
+	if _, err := r.accessCollection.InsertOne(ctx, access); err != nil {
+		r.logger.WithError(err).Warn("Failed to insert resource access log")
+	}
+}
+
+// RecordAccess exposes the recordAccess method for external use
+func (r *ResourceRepository) RecordAccess(ctx context.Context, resourceID, userID primitive.ObjectID, action string, details map[string]string) {
+	r.recordAccess(ctx, resourceID, userID, action, details)
 }
 
 // CreateIndexes creates necessary indexes for the resource collections
@@ -347,6 +364,13 @@ func (r *ResourceRepository) CreateIndexes(ctx context.Context) error {
 		{
 			Keys: bson.D{
 				{Key: "lastSeenAt", Value: 1},
+			},
+		},
+		{
+			Keys: bson.D{
+				{Key: "name", Value: "text"},
+				{Key: "namespace", Value: "text"},
+				{Key: "userTags", Value: "text"},
 			},
 		},
 	}
