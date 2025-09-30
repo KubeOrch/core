@@ -31,16 +31,29 @@ func NewKubernetesClusterService() *KubernetesClusterService {
 	}
 }
 
-// CreateClusterConnection creates a Kubernetes client from stored cluster credentials
+// CreateClusterConnection creates a Kubernetes client from stored cluster credentials with a 5-second timeout
 func (s *KubernetesClusterService) CreateClusterConnection(cluster *models.Cluster) (*kubernetes.Clientset, error) {
+	return s.createClusterConnection(cluster, 5*time.Second)
+}
+
+// CreateStreamingClusterConnection creates a Kubernetes client optimized for streaming operations (no timeout)
+func (s *KubernetesClusterService) CreateStreamingClusterConnection(cluster *models.Cluster) (*kubernetes.Clientset, error) {
+	return s.createClusterConnection(cluster, 0)
+}
+
+// createClusterConnection is a private helper to create a Kubernetes client with a specific timeout
+func (s *KubernetesClusterService) createClusterConnection(cluster *models.Cluster, timeout time.Duration) (*kubernetes.Clientset, error) {
 	auth := s.clusterToAuthConfig(cluster)
+
+	timeoutStr := timeout.String()
+	if timeout == 0 {
+		timeoutStr = "none (streaming)"
+	}
 
 	s.logger.WithFields(logrus.Fields{
 		"server":    cluster.Server,
 		"auth_type": cluster.AuthType,
-		"has_token": cluster.Credentials.Token != "",
-		"has_ca":    cluster.Credentials.CAData != "",
-		"insecure":  cluster.Credentials.Insecure,
+		"timeout":   timeoutStr,
 	}).Debug("Building REST config for cluster")
 
 	config, err := auth.BuildRESTConfig()
@@ -52,14 +65,13 @@ func (s *KubernetesClusterService) CreateClusterConnection(cluster *models.Clust
 		return nil, fmt.Errorf("failed to build REST config: %w", err)
 	}
 
-	// Set a reasonable timeout for connection attempts
-	config.Timeout = 5 * time.Second
+	config.Timeout = timeout
 	config.QPS = 100
 	config.Burst = 100
 
 	s.logger.WithFields(logrus.Fields{
 		"server":  cluster.Server,
-		"timeout": config.Timeout,
+		"timeout": timeoutStr,
 	}).Debug("Creating Kubernetes clientset")
 
 	clientset, err := kubernetes.NewForConfig(config)

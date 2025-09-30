@@ -61,10 +61,13 @@ func main() {
 	resourceSyncMonitor := services.NewResourceSyncMonitor(5 * time.Minute)
 	resourceSyncMonitor.Start()
 
-	// Create HTTP server
+	// Create HTTP server with extended timeouts for SSE streaming
 	srv := &http.Server{
-		Addr:    ":" + port,
-		Handler: router,
+		Addr:         ":" + port,
+		Handler:      router,
+		ReadTimeout:  15 * time.Second, // Time to read request
+		WriteTimeout: 0,                // Disable write timeout for SSE streams (no timeout)
+		IdleTimeout:  120 * time.Second,
 	}
 
 	// Start server in a goroutine
