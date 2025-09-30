@@ -94,7 +94,7 @@ func SetupRouter() *gin.Engine {
 			resources.POST("/sync", resourcesHandler.SyncResources)
 			resources.GET("/:id", resourcesHandler.GetResourceByID)
 			resources.PATCH("/:id", resourcesHandler.UpdateResourceUserFields)
-			resources.GET("/:id/logs", resourcesHandler.GetPodLogs)
+			resources.GET("/:id/logs/stream", resourcesHandler.StreamPodLogs)
 			resources.GET("/:id/pods", resourcesHandler.GetDeploymentPods)
 		}
 

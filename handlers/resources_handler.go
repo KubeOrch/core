@@ -1,12 +1,16 @@
 package handlers
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/KubeOrch/core/middleware"
+	"github.com/KubeOrch/core/models"
 	"github.com/KubeOrch/core/services"
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
@@ -19,6 +23,19 @@ type ResourcesHandler struct {
 	resourceService *services.ResourceService
 	clusterService  *services.KubernetesClusterService
 	logger          *logrus.Logger
+}
+
+// ResourceSummaryResponse represents the minimal resource data for list views
+type ResourceSummaryResponse struct {
+	ID          string                 `json:"id"`
+	Name        string                 `json:"name"`
+	Namespace   string                 `json:"namespace"`
+	Type        string                 `json:"type"`
+	ClusterName string                 `json:"clusterName"`
+	Status      string                 `json:"status"`
+	CreatedAt   time.Time              `json:"createdAt"`
+	IsFavorite  bool                   `json:"isFavorite"`
+	Summary     map[string]interface{} `json:"summary"`
 }
 
 func NewResourcesHandler() *ResourcesHandler {
@@ -96,9 +113,26 @@ func (h *ResourcesHandler) GetResources(c *gin.Context) {
 		return
 	}
 
+	// Return minimal list for table view (optimization)
+	minimalList := make([]ResourceSummaryResponse, len(resources))
+	for i, r := range resources {
+		summary := buildResourceSummary(r)
+		minimalList[i] = ResourceSummaryResponse{
+			ID:          r.ID.Hex(),
+			Name:        r.Name,
+			Namespace:   r.Namespace,
+			Type:        string(r.Type),
+			ClusterName: r.ClusterName,
+			Status:      string(r.Status),
+			CreatedAt:   r.CreatedAt,
+			IsFavorite:  r.IsFavorite,
+			Summary:     summary,
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"resources": resources,
-		"count":     len(resources),
+		"resources": minimalList,
+		"count":     len(minimalList),
 	})
 }
 
@@ -208,94 +242,6 @@ func (h *ResourcesHandler) SyncResources(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"message": "Sync started for all clusters"})
 }
 
-// GetPodLogs fetches logs for a specific pod
-func (h *ResourcesHandler) GetPodLogs(c *gin.Context) {
-	resourceID := c.Param("id")
-	container := c.Query("container")
-	tailLines := c.DefaultQuery("tail", "1000")
-	previous := c.Query("previous") == "true"
-
-	userID, err := middleware.GetUserID(c)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
-		return
-	}
-
-	objID, err := primitive.ObjectIDFromHex(resourceID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid resource ID"})
-		return
-	}
-
-	ctx := c.Request.Context()
-
-	// Get the resource from database
-	resource, err := h.resourceService.GetResourceByID(ctx, objID, userID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Resource not found"})
-		return
-	}
-
-	// Verify it's a pod
-	if resource.Type != "Pod" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Resource is not a pod"})
-		return
-	}
-
-	// Get the cluster connection
-	cluster, err := h.clusterService.GetClusterByName(ctx, userID, resource.ClusterName)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Cluster not found"})
-		return
-	}
-
-	clientset, err := h.clusterService.CreateClusterConnection(cluster)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to connect to cluster"})
-		return
-	}
-
-	// Convert tailLines to int64
-	tailLinesInt64, err := strconv.ParseInt(tailLines, 10, 64)
-	if err != nil {
-		tailLinesInt64 = 1000 // Default to 1000 if parsing fails
-	}
-
-	// If no container specified and pod has containers, use the first one
-	if container == "" && len(resource.Spec.Containers) > 0 {
-		container = resource.Spec.Containers[0].Name
-	}
-
-	podLogOptions := &corev1.PodLogOptions{
-		Container: container,
-		TailLines: &tailLinesInt64,
-		Previous:  previous,
-	}
-
-	req := clientset.CoreV1().Pods(resource.Namespace).GetLogs(resource.Name, podLogOptions)
-	logs, err := req.DoRaw(ctx)
-	if err != nil {
-		h.logger.WithError(err).Error("Failed to fetch pod logs")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch logs"})
-		return
-	}
-
-	// Record access for viewing logs
-	if err := h.resourceService.RecordResourceAccess(ctx, objID, userID, "view_logs", map[string]string{
-		"container": container,
-	}); err != nil {
-		h.logger.WithError(err).Warn("Failed to record access log")
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"logs":      string(logs),
-		"pod":       resource.Name,
-		"container": container,
-		"namespace": resource.Namespace,
-		"cluster":   resource.ClusterName,
-	})
-}
-
 // GetDeploymentPods gets all pods belonging to a deployment
 func (h *ResourcesHandler) GetDeploymentPods(c *gin.Context) {
 	resourceID := c.Param("id")
@@ -351,4 +297,230 @@ func (h *ResourcesHandler) GetDeploymentPods(c *gin.Context) {
 		"pods":       pods,
 		"count":      len(pods),
 	})
+}
+
+// StreamPodLogs streams pod logs via Server-Sent Events (SSE)
+// First sends historical logs, then streams live logs
+func (h *ResourcesHandler) StreamPodLogs(c *gin.Context) {
+	resourceID := c.Param("id")
+	container := c.Query("container")
+	follow := c.DefaultQuery("follow", "true") == "true"
+	tailLines := c.DefaultQuery("tail", "100")
+	sinceSeconds := c.Query("sinceSeconds") // Optional: logs from last N seconds
+
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	objID, err := primitive.ObjectIDFromHex(resourceID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid resource ID"})
+		return
+	}
+
+	// Use request context only for initial DB queries
+	reqCtx := c.Request.Context()
+
+	// Get the resource from database
+	resource, err := h.resourceService.GetResourceByID(reqCtx, objID, userID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Resource not found"})
+		return
+	}
+
+	// Verify it's a pod
+	if resource.Type != models.ResourceTypePod {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Only pods have logs. This resource is not a pod."})
+		return
+	}
+
+	// Get the cluster connection
+	cluster, err := h.clusterService.GetClusterByName(reqCtx, userID, resource.ClusterName)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Cluster not found"})
+		return
+	}
+
+	// Create a special clientset for streaming with no timeout
+	// The default CreateClusterConnection sets a 5-second timeout which breaks streaming
+	clientset, err := h.clusterService.CreateStreamingClusterConnection(cluster)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to connect to cluster for streaming"})
+		return
+	}
+
+	// Convert tailLines to int64 and validate range (50-5000)
+	tailLinesInt64, err := strconv.ParseInt(tailLines, 10, 64)
+	if err != nil {
+		tailLinesInt64 = 100
+	}
+
+	// Clamp the value to the supported range to prevent abuse
+	const maxTailLines = 5000
+	const minTailLines = 50
+	if tailLinesInt64 > maxTailLines {
+		tailLinesInt64 = maxTailLines
+	} else if tailLinesInt64 < minTailLines {
+		tailLinesInt64 = minTailLines
+	}
+
+	// If no container specified and pod has containers, use the first one
+	if container == "" && len(resource.Spec.Containers) > 0 {
+		container = resource.Spec.Containers[0].Name
+	}
+
+	// Build log options
+	podLogOptions := &corev1.PodLogOptions{
+		Container:  container,
+		Follow:     follow,
+		Timestamps: true,
+		TailLines:  &tailLinesInt64,
+	}
+
+	// If sinceSeconds is provided, use it instead of tailLines
+	if sinceSeconds != "" {
+		sinceSecondsInt64, err := strconv.ParseInt(sinceSeconds, 10, 64)
+		if err == nil && sinceSecondsInt64 > 0 {
+			podLogOptions.SinceSeconds = &sinceSecondsInt64
+			podLogOptions.TailLines = nil // Can't use both
+		}
+	}
+
+	// Set SSE headers
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	// Create a context that gets cancelled only when client disconnects
+	// Use background context for the stream to avoid request timeout
+	streamCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Monitor client disconnect
+	go func() {
+		<-c.Request.Context().Done()
+		h.logger.Info("Client disconnected from log stream")
+		cancel()
+	}()
+
+	// Get log stream
+	req := clientset.CoreV1().Pods(resource.Namespace).GetLogs(resource.Name, podLogOptions)
+	stream, err := req.Stream(streamCtx)
+	if err != nil {
+		c.SSEvent("error", fmt.Sprintf("Failed to stream logs: %v", err))
+		c.Writer.Flush()
+		return
+	}
+	defer func() {
+		if closeErr := stream.Close(); closeErr != nil {
+			h.logger.Error("Failed to close stream")
+		}
+	}()
+
+	// Send initial metadata as JSON string
+	metadataJSON, err := json.Marshal(map[string]string{
+		"pod":       resource.Name,
+		"container": container,
+		"namespace": resource.Namespace,
+		"cluster":   resource.ClusterName,
+	})
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to marshal metadata for SSE stream")
+		c.SSEvent("error", "Failed to create stream metadata")
+		c.Writer.Flush()
+		return
+	}
+	c.SSEvent("metadata", string(metadataJSON))
+	c.Writer.Flush()
+
+	// Record access
+	if err := h.resourceService.RecordResourceAccess(reqCtx, objID, userID, "stream_logs", map[string]string{
+		"container": container,
+	}); err != nil {
+		h.logger.WithError(err).Warn("Failed to record access log")
+	}
+
+	// Stream logs line by line
+	scanner := bufio.NewScanner(stream)
+	for scanner.Scan() {
+		line := scanner.Text()
+		c.SSEvent("log", line)
+		c.Writer.Flush()
+
+		// Check for write errors (client disconnected)
+		if c.Errors.Last() != nil {
+			h.logger.WithError(c.Errors.Last()).Warn("Error writing SSE event, breaking stream")
+			return
+		}
+
+		// Check if stream context was cancelled (client disconnected)
+		select {
+		case <-streamCtx.Done():
+			return
+		default:
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		c.SSEvent("error", fmt.Sprintf("Stream error: %v", err))
+		c.Writer.Flush()
+	}
+
+	// Send completion event
+	c.SSEvent("complete", "Log stream completed")
+	c.Writer.Flush()
+}
+
+// buildResourceSummary creates a summary object for a resource
+func buildResourceSummary(r *models.Resource) map[string]interface{} {
+	summary := make(map[string]interface{})
+
+	switch r.Type {
+	case models.ResourceTypeDeployment, models.ResourceTypeStatefulSet:
+		if r.Spec.Replicas != nil && r.Spec.ReadyReplicas != nil {
+			summary["replicas"] = fmt.Sprintf("%d/%d", *r.Spec.ReadyReplicas, *r.Spec.Replicas)
+		}
+		if r.Spec.AvailableReplicas != nil {
+			summary["available"] = *r.Spec.AvailableReplicas
+		}
+
+	case models.ResourceTypePod:
+		if len(r.Spec.Containers) > 0 {
+			summary["containers"] = len(r.Spec.Containers)
+			// Count restarts
+			totalRestarts := int32(0)
+			for _, c := range r.Spec.Containers {
+				totalRestarts += c.RestartCount
+			}
+			summary["restarts"] = totalRestarts
+		}
+		summary["nodeName"] = r.Spec.NodeName
+		summary["podIP"] = r.Spec.PodIP
+
+	case models.ResourceTypeService:
+		summary["type"] = r.Spec.ServiceType
+		summary["clusterIP"] = r.Spec.ClusterIP
+		if len(r.Spec.Ports) > 0 {
+			summary["ports"] = len(r.Spec.Ports)
+		}
+
+	case models.ResourceTypeNode:
+		summary["cpu"] = r.Spec.NodeCapacity.CPU
+		summary["memory"] = r.Spec.NodeCapacity.Memory
+	}
+
+	// Calculate age
+	age := time.Since(r.CreatedAt)
+	if age.Hours() < 1 {
+		summary["age"] = fmt.Sprintf("%dm", int(age.Minutes()))
+	} else if age.Hours() < 24 {
+		summary["age"] = fmt.Sprintf("%dh", int(age.Hours()))
+	} else {
+		summary["age"] = fmt.Sprintf("%dd", int(age.Hours()/24))
+	}
+
+	return summary
 }
