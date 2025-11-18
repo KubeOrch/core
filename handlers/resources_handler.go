@@ -484,8 +484,17 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		// TODO: In production, validate origin properly
-		return true
+		// In debug mode, allow any origin for development
+		if gin.Mode() == gin.DebugMode {
+			return true
+		}
+		// In production, validate origin against allowed list
+		// TODO: Load allowed origins from configuration
+		origin := r.Header.Get("Origin")
+		// For now, deny all in production mode to be secure by default
+		// Configure allowed origins in production environment
+		logrus.WithField("origin", origin).Warn("WebSocket origin validation: denying by default in production mode")
+		return false
 	},
 }
 
@@ -500,9 +509,6 @@ type TerminalMessage struct {
 // TerminalSession handles the bidirectional terminal stream
 type TerminalSession struct {
 	ws        *websocket.Conn
-	stdin     io.Writer
-	stdout    io.Reader
-	stderr    io.Reader
 	sizeChan  chan remotecommand.TerminalSize
 	inputChan chan []byte
 	logger    *logrus.Logger
@@ -560,6 +566,21 @@ func (h *ResourcesHandler) HandleTerminalSession(c *gin.Context) {
 	resourceID := c.Param("id")
 	container := c.Query("container")
 	shell := c.DefaultQuery("shell", "/bin/sh") // Default to sh, can be /bin/bash
+
+	// Validate shell parameter against allowed list
+	allowedShells := []string{"/bin/sh", "/bin/bash", "sh", "bash"}
+	isAllowed := false
+	for _, s := range allowedShells {
+		if shell == s {
+			isAllowed = true
+			break
+		}
+	}
+	if !isAllowed {
+		h.logger.WithField("shell", shell).Warn("Invalid shell specified")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid shell specified"})
+		return
+	}
 
 	h.logger.WithFields(map[string]interface{}{
 		"resourceID": resourceID,
@@ -649,7 +670,11 @@ func (h *ResourcesHandler) HandleTerminalSession(c *gin.Context) {
 		}).Error("Failed to upgrade to WebSocket")
 		return
 	}
-	defer ws.Close()
+	defer func() {
+		if err := ws.Close(); err != nil {
+			h.logger.WithError(err).Debug("Error closing WebSocket connection")
+		}
+	}()
 
 	h.logger.Info("WebSocket upgraded successfully")
 
@@ -697,15 +722,21 @@ func (h *ResourcesHandler) HandleTerminalSession(c *gin.Context) {
 	exec, err := remotecommand.NewSPDYExecutor(restConfig, "POST", req.URL())
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to create executor")
-		ws.WriteJSON(TerminalMessage{Type: "error", Data: "Failed to create terminal session"})
+		if writeErr := ws.WriteJSON(TerminalMessage{Type: "error", Data: "Failed to create terminal session"}); writeErr != nil {
+			h.logger.WithError(writeErr).Debug("Failed to send error message to WebSocket")
+		}
 		return
 	}
 
 	// Record access audit
-	go h.resourceService.RecordResourceAccess(context.Background(), objID, userID, "exec", map[string]string{
-		"container": container,
-		"shell":     shell,
-	})
+	go func() {
+		if err := h.resourceService.RecordResourceAccess(context.Background(), objID, userID, "exec", map[string]string{
+			"container": container,
+			"shell":     shell,
+		}); err != nil {
+			h.logger.WithError(err).Warn("Failed to record resource access")
+		}
+	}()
 
 	// Create channels for input handling
 	inputChan := make(chan []byte, 10)
@@ -775,9 +806,13 @@ func (h *ResourcesHandler) HandleTerminalSession(c *gin.Context) {
 
 	if err != nil {
 		h.logger.WithError(err).Error("Terminal session error")
-		ws.WriteJSON(TerminalMessage{Type: "error", Data: fmt.Sprintf("Terminal session ended: %v", err)})
+		if writeErr := ws.WriteJSON(TerminalMessage{Type: "error", Data: "Terminal session ended unexpectedly"}); writeErr != nil {
+			h.logger.WithError(writeErr).Debug("Failed to send error message to WebSocket")
+		}
 	} else {
-		ws.WriteJSON(TerminalMessage{Type: "close", Data: "Terminal session completed"})
+		if writeErr := ws.WriteJSON(TerminalMessage{Type: "close", Data: "Terminal session completed"}); writeErr != nil {
+			h.logger.WithError(writeErr).Debug("Failed to send close message to WebSocket")
+		}
 	}
 }
 
