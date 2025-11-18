@@ -72,7 +72,7 @@ func (e *WorkflowExecutor) ExecuteWorkflow(ctx context.Context, workflowID primi
 		return workflowRun, fmt.Errorf("failed to get cluster: %w", err)
 	}
 
-	auth := e.clusterService.clusterToAuthConfig(cluster)
+	auth := e.clusterService.ClusterToAuthConfig(cluster)
 	config, err := auth.BuildRESTConfig()
 	if err != nil {
 		e.updateWorkflowRunStatus(workflowRun, models.WorkflowRunStatusFailed, err.Error())
