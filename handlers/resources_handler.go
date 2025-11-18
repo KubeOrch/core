@@ -499,33 +499,36 @@ type TerminalMessage struct {
 
 // TerminalSession handles the bidirectional terminal stream
 type TerminalSession struct {
-	ws       *websocket.Conn
-	stdin    io.Writer
-	stdout   io.Reader
-	stderr   io.Reader
-	sizeChan chan remotecommand.TerminalSize
-	logger   *logrus.Logger
-	mu       sync.Mutex
+	ws        *websocket.Conn
+	stdin     io.Writer
+	stdout    io.Reader
+	stderr    io.Reader
+	sizeChan  chan remotecommand.TerminalSize
+	inputChan chan []byte
+	logger    *logrus.Logger
+	mu        sync.Mutex
 }
 
 // Read reads from WebSocket and writes to stdin
 func (t *TerminalSession) Read(p []byte) (int, error) {
-	_, msg, err := t.ws.ReadMessage()
-	if err != nil {
-		return 0, err
+	// Read from the input channel instead of directly from WebSocket
+	// This prevents race conditions with the WebSocket reader goroutine
+	data, ok := <-t.inputChan
+	if !ok {
+		// Channel closed, WebSocket connection ended
+		return 0, io.EOF
 	}
 
-	var termMsg TerminalMessage
-	if err := json.Unmarshal(msg, &termMsg); err != nil {
-		return 0, err
-	}
+	// Copy data to the provided buffer
+	n := copy(p, data)
 
-	if termMsg.Type == "input" {
-		copy(p, termMsg.Data)
-		return len(termMsg.Data), nil
-	}
+	// Log the input for debugging
+	t.logger.WithFields(map[string]interface{}{
+		"data_len": len(data),
+		"copied": n,
+	}).Debug("Read input from channel")
 
-	return 0, nil
+	return n, nil
 }
 
 // Write writes output from stdout/stderr to WebSocket
@@ -558,6 +561,13 @@ func (h *ResourcesHandler) HandleTerminalSession(c *gin.Context) {
 	container := c.Query("container")
 	shell := c.DefaultQuery("shell", "/bin/sh") // Default to sh, can be /bin/bash
 
+	h.logger.WithFields(map[string]interface{}{
+		"resourceID": resourceID,
+		"container":  container,
+		"shell":      shell,
+		"path":       c.Request.URL.Path,
+	}).Info("Terminal session request received")
+
 	// Get authenticated user ID
 	userID, err := middleware.GetUserID(c)
 	if err != nil {
@@ -587,6 +597,10 @@ func (h *ResourcesHandler) HandleTerminalSession(c *gin.Context) {
 
 	// Validate resource type - only pods support exec
 	if resource.Type != models.ResourceTypePod {
+		h.logger.WithFields(map[string]interface{}{
+			"resourceType": resource.Type,
+			"resourceName": resource.Name,
+		}).Warn("Terminal access requested for non-pod resource")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Only pods support terminal access"})
 		return
 	}
@@ -622,12 +636,22 @@ func (h *ResourcesHandler) HandleTerminalSession(c *gin.Context) {
 	}
 
 	// Upgrade HTTP connection to WebSocket
+	h.logger.WithFields(map[string]interface{}{
+		"headers": c.Request.Header,
+		"method":  c.Request.Method,
+	}).Info("Attempting WebSocket upgrade")
+
 	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		h.logger.WithError(err).Error("Failed to upgrade to WebSocket")
+		h.logger.WithFields(map[string]interface{}{
+			"error":   err.Error(),
+			"headers": c.Request.Header,
+		}).Error("Failed to upgrade to WebSocket")
 		return
 	}
 	defer ws.Close()
+
+	h.logger.Info("WebSocket upgraded successfully")
 
 	// Send initial metadata
 	metadata := TerminalMessage{
@@ -683,32 +707,64 @@ func (h *ResourcesHandler) HandleTerminalSession(c *gin.Context) {
 		"shell":     shell,
 	})
 
-	// Handle resize messages in background
+	// Create channels for input handling
+	inputChan := make(chan []byte, 10)
+	session.inputChan = inputChan
+
+	// Handle all WebSocket messages in a single goroutine
 	go func() {
 		for {
 			_, msg, err := ws.ReadMessage()
 			if err != nil {
+				h.logger.WithError(err).Debug("WebSocket read error")
+				close(inputChan)
 				return
 			}
 
 			var termMsg TerminalMessage
 			if err := json.Unmarshal(msg, &termMsg); err != nil {
+				h.logger.WithError(err).Warn("Failed to unmarshal terminal message")
 				continue
 			}
 
-			if termMsg.Type == "resize" && termMsg.Rows > 0 && termMsg.Cols > 0 {
+			h.logger.WithFields(map[string]interface{}{
+				"type": termMsg.Type,
+				"data_len": len(termMsg.Data),
+			}).Debug("Received terminal message")
+
+			switch termMsg.Type {
+			case "input":
+				// Send input to the channel for Read method to consume
 				select {
-				case session.sizeChan <- remotecommand.TerminalSize{
-					Width:  termMsg.Cols,
-					Height: termMsg.Rows,
-				}:
+				case inputChan <- []byte(termMsg.Data):
+					h.logger.Debug("Input sent to channel")
 				default:
+					h.logger.Warn("Input channel full, dropping message")
+				}
+			case "resize":
+				if termMsg.Rows > 0 && termMsg.Cols > 0 {
+					select {
+					case session.sizeChan <- remotecommand.TerminalSize{
+						Width:  termMsg.Cols,
+						Height: termMsg.Rows,
+					}:
+						h.logger.Debug("Resize event sent")
+					default:
+						h.logger.Debug("Resize channel full")
+					}
 				}
 			}
 		}
 	}()
 
 	// Stream the terminal session (blocks until session ends)
+	h.logger.WithFields(map[string]interface{}{
+		"pod":       resource.Name,
+		"namespace": resource.Namespace,
+		"container": container,
+		"shell":     shell,
+	}).Info("Starting terminal stream to pod")
+
 	err = exec.StreamWithContext(context.Background(), remotecommand.StreamOptions{
 		Stdin:             session,
 		Stdout:            session,
