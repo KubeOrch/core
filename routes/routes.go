@@ -16,7 +16,7 @@ func SetupRouter() *gin.Engine {
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:  []string{"*"}, // TODO(naman): restrict this to specific origins
 		AllowMethods:  []string{"GET", "POST", "PUT", "DELETE", "PATCH"},
-		AllowHeaders:  []string{"Origin", "Content-Type", "Authorization"},
+		AllowHeaders:  []string{"Origin", "Content-Type", "Authorization", "Upgrade", "Connection", "Sec-WebSocket-Key", "Sec-WebSocket-Version", "Sec-WebSocket-Extensions"},
 		ExposeHeaders: []string{"Content-Length"},
 		MaxAge:        12 * time.Hour,
 	}))
@@ -95,6 +95,7 @@ func SetupRouter() *gin.Engine {
 			resources.GET("/:id", resourcesHandler.GetResourceByID)
 			resources.PATCH("/:id", resourcesHandler.UpdateResourceUserFields)
 			resources.GET("/:id/logs/stream", resourcesHandler.StreamPodLogs)
+			resources.GET("/:id/exec/terminal", resourcesHandler.HandleTerminalSession)
 			resources.GET("/:id/pods", resourcesHandler.GetDeploymentPods)
 		}
 

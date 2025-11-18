@@ -10,6 +10,17 @@ import (
 
 func LogsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Log incoming WebSocket/Terminal requests
+		if c.GetHeader("Upgrade") == "websocket" {
+			logrus.WithFields(logrus.Fields{
+				"method":     c.Request.Method,
+				"path":       c.Request.URL.Path,
+				"upgrade":    c.GetHeader("Upgrade"),
+				"connection": c.GetHeader("Connection"),
+				"origin":     c.GetHeader("Origin"),
+			}).Info("Incoming WebSocket/Terminal request in LogsMiddleware")
+		}
+
 		start := time.Now()
 		c.Next()
 		duration := time.Since(start)

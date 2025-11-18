@@ -5,18 +5,23 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/KubeOrch/core/middleware"
 	"github.com/KubeOrch/core/models"
 	"github.com/KubeOrch/core/services"
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/tools/remotecommand"
+	"k8s.io/kubectl/pkg/scheme"
 )
 
 type ResourcesHandler struct {
@@ -472,6 +477,343 @@ func (h *ResourcesHandler) StreamPodLogs(c *gin.Context) {
 	// Send completion event
 	c.SSEvent("complete", "Log stream completed")
 	c.Writer.Flush()
+}
+
+// WebSocket upgrader configuration
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		// In debug mode, allow any origin for development
+		if gin.Mode() == gin.DebugMode {
+			return true
+		}
+		// In production, validate origin against allowed list
+		// TODO: Load allowed origins from configuration
+		origin := r.Header.Get("Origin")
+		// For now, deny all in production mode to be secure by default
+		// Configure allowed origins in production environment
+		logrus.WithField("origin", origin).Warn("WebSocket origin validation: denying by default in production mode")
+		return false
+	},
+}
+
+// TerminalMessage represents WebSocket messages for terminal communication
+type TerminalMessage struct {
+	Type string `json:"type"` // "input", "output", "resize", "error", "close"
+	Data string `json:"data"`
+	Rows uint16 `json:"rows,omitempty"`
+	Cols uint16 `json:"cols,omitempty"`
+}
+
+// TerminalSession handles the bidirectional terminal stream
+type TerminalSession struct {
+	ws        *websocket.Conn
+	sizeChan  chan remotecommand.TerminalSize
+	inputChan chan []byte
+	logger    *logrus.Logger
+	mu        sync.Mutex
+}
+
+// Read reads from WebSocket and writes to stdin
+func (t *TerminalSession) Read(p []byte) (int, error) {
+	// Read from the input channel instead of directly from WebSocket
+	// This prevents race conditions with the WebSocket reader goroutine
+	data, ok := <-t.inputChan
+	if !ok {
+		// Channel closed, WebSocket connection ended
+		return 0, io.EOF
+	}
+
+	// Copy data to the provided buffer
+	n := copy(p, data)
+
+	// Log the input for debugging
+	t.logger.WithFields(map[string]interface{}{
+		"data_len": len(data),
+		"copied": n,
+	}).Debug("Read input from channel")
+
+	return n, nil
+}
+
+// Write writes output from stdout/stderr to WebSocket
+func (t *TerminalSession) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	msg := TerminalMessage{
+		Type: "output",
+		Data: string(p),
+	}
+
+	if err := t.ws.WriteJSON(msg); err != nil {
+		return 0, err
+	}
+
+	return len(p), nil
+}
+
+// Next handles terminal resize events
+func (t *TerminalSession) Next() *remotecommand.TerminalSize {
+	size := <-t.sizeChan
+	return &size
+}
+
+// HandleTerminalSession manages the WebSocket terminal connection
+func (h *ResourcesHandler) HandleTerminalSession(c *gin.Context) {
+	// Extract resource ID and parameters
+	resourceID := c.Param("id")
+	container := c.Query("container")
+	shell := c.DefaultQuery("shell", "/bin/sh") // Default to sh, can be /bin/bash
+
+	// Validate shell parameter against allowed list
+	allowedShells := []string{"/bin/sh", "/bin/bash", "sh", "bash"}
+	isAllowed := false
+	for _, s := range allowedShells {
+		if shell == s {
+			isAllowed = true
+			break
+		}
+	}
+	if !isAllowed {
+		h.logger.WithField("shell", shell).Warn("Invalid shell specified")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid shell specified"})
+		return
+	}
+
+	h.logger.WithFields(map[string]interface{}{
+		"resourceID": resourceID,
+		"container":  container,
+		"shell":      shell,
+		"path":       c.Request.URL.Path,
+	}).Info("Terminal session request received")
+
+	// Get authenticated user ID
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to get user ID")
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	// Convert resource ID to ObjectID
+	objID, err := primitive.ObjectIDFromHex(resourceID)
+	if err != nil {
+		h.logger.WithError(err).Error("Invalid resource ID format")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid resource ID"})
+		return
+	}
+
+	// Get resource from database
+	reqCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	resource, err := h.resourceService.GetResourceByID(reqCtx, objID, userID)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to get resource")
+		c.JSON(http.StatusNotFound, gin.H{"error": "Resource not found"})
+		return
+	}
+
+	// Validate resource type - only pods support exec
+	if resource.Type != models.ResourceTypePod {
+		h.logger.WithFields(map[string]interface{}{
+			"resourceType": resource.Type,
+			"resourceName": resource.Name,
+		}).Warn("Terminal access requested for non-pod resource")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Only pods support terminal access"})
+		return
+	}
+
+	// If no container specified, use the first container
+	if container == "" && len(resource.Spec.Containers) > 0 {
+		container = resource.Spec.Containers[0].Name
+	}
+
+	// Get Kubernetes cluster connection
+	cluster, err := h.clusterService.GetClusterByName(reqCtx, userID, resource.ClusterName)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to get cluster")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to connect to cluster"})
+		return
+	}
+
+	// Create streaming connection (no timeout)
+	clientset, err := h.clusterService.CreateStreamingClusterConnection(cluster)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to create cluster connection")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to connect to cluster"})
+		return
+	}
+
+	// Get REST config for exec
+	auth := h.clusterService.ClusterToAuthConfig(cluster)
+	restConfig, err := auth.BuildRESTConfig()
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to build REST config")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to configure cluster connection"})
+		return
+	}
+
+	// Upgrade HTTP connection to WebSocket
+	h.logger.WithFields(map[string]interface{}{
+		"headers": c.Request.Header,
+		"method":  c.Request.Method,
+	}).Info("Attempting WebSocket upgrade")
+
+	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		h.logger.WithFields(map[string]interface{}{
+			"error":   err.Error(),
+			"headers": c.Request.Header,
+		}).Error("Failed to upgrade to WebSocket")
+		return
+	}
+	defer func() {
+		if err := ws.Close(); err != nil {
+			h.logger.WithError(err).Debug("Error closing WebSocket connection")
+		}
+	}()
+
+	h.logger.Info("WebSocket upgraded successfully")
+
+	// Send initial metadata
+	metadata := TerminalMessage{
+		Type: "metadata",
+		Data: fmt.Sprintf(`{"pod":"%s","container":"%s","namespace":"%s","cluster":"%s"}`,
+			resource.Name, container, resource.Namespace, resource.ClusterName),
+	}
+	if err := ws.WriteJSON(metadata); err != nil {
+		h.logger.WithError(err).Error("Failed to send metadata")
+		return
+	}
+
+	// Create terminal session
+	session := &TerminalSession{
+		ws:       ws,
+		sizeChan: make(chan remotecommand.TerminalSize, 1),
+		logger:   h.logger,
+	}
+
+	// Set initial terminal size (default)
+	session.sizeChan <- remotecommand.TerminalSize{
+		Width:  80,
+		Height: 24,
+	}
+
+	// Create exec request
+	req := clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(resource.Name).
+		Namespace(resource.Namespace).
+		SubResource("exec")
+
+	req.VersionedParams(&corev1.PodExecOptions{
+		Container: container,
+		Command:   []string{shell},
+		Stdin:     true,
+		Stdout:    true,
+		Stderr:    true,
+		TTY:       true,
+	}, scheme.ParameterCodec)
+
+	// Create SPDY executor
+	exec, err := remotecommand.NewSPDYExecutor(restConfig, "POST", req.URL())
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to create executor")
+		if writeErr := ws.WriteJSON(TerminalMessage{Type: "error", Data: "Failed to create terminal session"}); writeErr != nil {
+			h.logger.WithError(writeErr).Debug("Failed to send error message to WebSocket")
+		}
+		return
+	}
+
+	// Record access audit
+	go func() {
+		if err := h.resourceService.RecordResourceAccess(context.Background(), objID, userID, "exec", map[string]string{
+			"container": container,
+			"shell":     shell,
+		}); err != nil {
+			h.logger.WithError(err).Warn("Failed to record resource access")
+		}
+	}()
+
+	// Create channels for input handling
+	inputChan := make(chan []byte, 10)
+	session.inputChan = inputChan
+
+	// Handle all WebSocket messages in a single goroutine
+	go func() {
+		for {
+			_, msg, err := ws.ReadMessage()
+			if err != nil {
+				h.logger.WithError(err).Debug("WebSocket read error")
+				close(inputChan)
+				return
+			}
+
+			var termMsg TerminalMessage
+			if err := json.Unmarshal(msg, &termMsg); err != nil {
+				h.logger.WithError(err).Warn("Failed to unmarshal terminal message")
+				continue
+			}
+
+			h.logger.WithFields(map[string]interface{}{
+				"type": termMsg.Type,
+				"data_len": len(termMsg.Data),
+			}).Debug("Received terminal message")
+
+			switch termMsg.Type {
+			case "input":
+				// Send input to the channel for Read method to consume
+				select {
+				case inputChan <- []byte(termMsg.Data):
+					h.logger.Debug("Input sent to channel")
+				default:
+					h.logger.Warn("Input channel full, dropping message")
+				}
+			case "resize":
+				if termMsg.Rows > 0 && termMsg.Cols > 0 {
+					select {
+					case session.sizeChan <- remotecommand.TerminalSize{
+						Width:  termMsg.Cols,
+						Height: termMsg.Rows,
+					}:
+						h.logger.Debug("Resize event sent")
+					default:
+						h.logger.Debug("Resize channel full")
+					}
+				}
+			}
+		}
+	}()
+
+	// Stream the terminal session (blocks until session ends)
+	h.logger.WithFields(map[string]interface{}{
+		"pod":       resource.Name,
+		"namespace": resource.Namespace,
+		"container": container,
+		"shell":     shell,
+	}).Info("Starting terminal stream to pod")
+
+	err = exec.StreamWithContext(context.Background(), remotecommand.StreamOptions{
+		Stdin:             session,
+		Stdout:            session,
+		Stderr:            session,
+		Tty:               true,
+		TerminalSizeQueue: session,
+	})
+
+	if err != nil {
+		h.logger.WithError(err).Error("Terminal session error")
+		if writeErr := ws.WriteJSON(TerminalMessage{Type: "error", Data: "Terminal session ended unexpectedly"}); writeErr != nil {
+			h.logger.WithError(writeErr).Debug("Failed to send error message to WebSocket")
+		}
+	} else {
+		if writeErr := ws.WriteJSON(TerminalMessage{Type: "close", Data: "Terminal session completed"}); writeErr != nil {
+			h.logger.WithError(writeErr).Debug("Failed to send close message to WebSocket")
+		}
+	}
 }
 
 // buildResourceSummary creates a summary object for a resource

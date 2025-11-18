@@ -43,7 +43,7 @@ func (s *KubernetesClusterService) CreateStreamingClusterConnection(cluster *mod
 
 // createClusterConnection is a private helper to create a Kubernetes client with a specific timeout
 func (s *KubernetesClusterService) createClusterConnection(cluster *models.Cluster, timeout time.Duration) (*kubernetes.Clientset, error) {
-	auth := s.clusterToAuthConfig(cluster)
+	auth := s.ClusterToAuthConfig(cluster)
 
 	timeoutStr := timeout.String()
 	if timeout == 0 {
@@ -442,7 +442,7 @@ func (s *KubernetesClusterService) RefreshClusterMetadata(ctx context.Context, u
 
 // Helper functions
 
-func (s *KubernetesClusterService) clusterToAuthConfig(cluster *models.Cluster) *k8sauth.AuthConfig {
+func (s *KubernetesClusterService) ClusterToAuthConfig(cluster *models.Cluster) *k8sauth.AuthConfig {
 	auth := k8sauth.NewAuthConfig(cluster.AuthType)
 	auth.ServerURL = cluster.Server
 
