@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/KubeOrch/core/models"
+	"github.com/KubeOrch/core/pkg/template"
 	"github.com/KubeOrch/core/services"
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
@@ -464,4 +465,28 @@ func GetWorkflowRunsHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"runs": runs})
+}
+
+// GetTemplatesHandler returns all available component templates
+func GetTemplatesHandler(c *gin.Context) {
+	_, ok := getUserIDFromContext(c)
+	if !ok {
+		return
+	}
+
+	// Get templates directory from config
+	templatesDir := "./templates"
+
+	// Create registry and load templates
+	registry := template.NewRegistry(templatesDir)
+	if err := registry.LoadTemplates(); err != nil {
+		logrus.Errorf("Failed to load templates: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load templates"})
+		return
+	}
+
+	// Get all templates
+	templates := registry.GetAllTemplates()
+
+	c.JSON(http.StatusOK, gin.H{"templates": templates})
 }

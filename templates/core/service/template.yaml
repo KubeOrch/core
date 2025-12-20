@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace | default "default" }}
+  labels:
+    app: {{ .Name }}
+    managed-by: kubeorch
+    {{- range $key, $value := .Labels }}
+    {{ $key }}: {{ $value }}
+    {{- end }}
+  {{- if .Annotations }}
+  annotations:
+    {{- range $key, $value := .Annotations }}
+    {{ $key }}: {{ $value }}
+    {{- end }}
+  {{- end }}
+spec:
+  type: {{ .Type | default "ClusterIP" }}
+  {{- if eq (.Type | default "ClusterIP") "LoadBalancer" }}
+  {{- if .LoadBalancerIP }}
+  loadBalancerIP: {{ .LoadBalancerIP }}
+  {{- end }}
+  {{- if .LoadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+  {{- range .LoadBalancerSourceRanges }}
+  - {{ . }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- if or (eq (.Type | default "ClusterIP") "NodePort") (eq (.Type | default "ClusterIP") "LoadBalancer") }}
+  {{- if .ExternalTrafficPolicy }}
+  externalTrafficPolicy: {{ .ExternalTrafficPolicy }}
+  {{- end }}
+  {{- end }}
+  {{- if .SessionAffinity }}
+  sessionAffinity: {{ .SessionAffinity }}
+  {{- if eq .SessionAffinity "ClientIP" }}
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: {{ .SessionAffinityTimeout | default 10800 }}
+  {{- end }}
+  {{- end }}
+  selector:
+    {{- if .Selector }}
+    {{- range $key, $value := .Selector }}
+    {{ $key }}: {{ $value }}
+    {{- end }}
+    {{- else }}
+    app: {{ .TargetApp }}
+    {{- end }}
+  ports:
+  {{- if .Ports }}
+  {{- range .Ports }}
+  - name: {{ .Name | default "http" }}
+    protocol: {{ .Protocol | default "TCP" }}
+    port: {{ .Port }}
+    targetPort: {{ .TargetPort | default .Port }}
+    {{- if .NodePort }}
+    {{- if or (eq ($ .Type | default "ClusterIP") "NodePort") (eq ($.Type | default "ClusterIP") "LoadBalancer") }}
+    nodePort: {{ .NodePort }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+  {{- else }}
+  - name: http
+    protocol: TCP
+    port: {{ .Port | default 80 }}
+    targetPort: {{ .TargetPort | default .Port | default 8080 }}
+  {{- end }}

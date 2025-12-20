@@ -87,13 +87,45 @@ func (e *WorkflowExecutor) ExecuteWorkflow(ctx context.Context, workflowID primi
 		return workflowRun, fmt.Errorf("failed to create manifest applier: %w", err)
 	}
 
-	for _, node := range workflow.Nodes {
-		if node.Type == "deployment" {
-			if err := e.executeDeploymentNode(ctx, manifestApplier, &node, workflowRun); err != nil {
+	// Build node map and connection graph
+	nodeMap := e.buildNodeMap(workflow.Nodes)
+	connectionGraph := e.buildConnectionGraph(workflow.Edges)
+
+	// Get execution order using topological sort
+	executionOrder := e.getExecutionOrder(workflow.Nodes, workflow.Edges)
+
+	// Track executed node data for passing between connected nodes
+	executedNodeData := make(map[string]map[string]interface{})
+
+	workflowRun.Logs = append(workflowRun.Logs, fmt.Sprintf("[%s] Execution order: %v",
+		time.Now().Format("15:04:05"), executionOrder))
+
+	for _, nodeID := range executionOrder {
+		node, exists := nodeMap[nodeID]
+		if !exists {
+			continue
+		}
+
+		// Get connected source nodes data
+		connectedData := e.getConnectedSourceData(nodeID, connectionGraph, executedNodeData)
+
+		switch node.Type {
+		case "deployment":
+			if err := e.executeDeploymentNode(ctx, manifestApplier, node, workflowRun); err != nil {
 				e.updateWorkflowRunStatus(workflowRun, models.WorkflowRunStatusFailed, err.Error())
 				e.updateWorkflowStats(workflowID, false)
 				return workflowRun, fmt.Errorf("failed to execute node %s: %w", node.ID, err)
 			}
+			// Store deployment data for connected nodes
+			executedNodeData[node.ID] = node.Data
+		case "service":
+			if err := e.executeServiceNodeWithConnections(ctx, manifestApplier, node, workflowRun, connectedData); err != nil {
+				e.updateWorkflowRunStatus(workflowRun, models.WorkflowRunStatusFailed, err.Error())
+				e.updateWorkflowStats(workflowID, false)
+				return workflowRun, fmt.Errorf("failed to execute node %s: %w", node.ID, err)
+			}
+			// Store service data for any downstream nodes
+			executedNodeData[node.ID] = node.Data
 		}
 	}
 	completedAt := time.Now()
@@ -105,6 +137,97 @@ func (e *WorkflowExecutor) ExecuteWorkflow(ctx context.Context, workflowID primi
 	e.updateWorkflowStats(workflowID, true)
 
 	return workflowRun, nil
+}
+
+// buildNodeMap creates a map of node ID to node for quick lookup
+func (e *WorkflowExecutor) buildNodeMap(nodes []models.WorkflowNode) map[string]*models.WorkflowNode {
+	nodeMap := make(map[string]*models.WorkflowNode)
+	for i := range nodes {
+		nodeMap[nodes[i].ID] = &nodes[i]
+	}
+	return nodeMap
+}
+
+// buildConnectionGraph builds a map of target node ID to its source node IDs
+func (e *WorkflowExecutor) buildConnectionGraph(edges []models.WorkflowEdge) map[string][]string {
+	// Map: targetNodeID -> []sourceNodeIDs
+	graph := make(map[string][]string)
+	for _, edge := range edges {
+		graph[edge.Target] = append(graph[edge.Target], edge.Source)
+	}
+	return graph
+}
+
+// getExecutionOrder returns nodes in topological order based on edges
+func (e *WorkflowExecutor) getExecutionOrder(nodes []models.WorkflowNode, edges []models.WorkflowEdge) []string {
+	// Build adjacency list and in-degree count
+	inDegree := make(map[string]int)
+	adjacencyList := make(map[string][]string)
+
+	// Initialize all nodes with 0 in-degree
+	for _, node := range nodes {
+		inDegree[node.ID] = 0
+		adjacencyList[node.ID] = []string{}
+	}
+
+	// Process edges
+	for _, edge := range edges {
+		adjacencyList[edge.Source] = append(adjacencyList[edge.Source], edge.Target)
+		inDegree[edge.Target]++
+	}
+
+	// Queue for nodes with no incoming edges
+	var queue []string
+	for _, node := range nodes {
+		if inDegree[node.ID] == 0 {
+			queue = append(queue, node.ID)
+		}
+	}
+
+	var result []string
+	for len(queue) > 0 {
+		// Pop from queue
+		nodeID := queue[0]
+		queue = queue[1:]
+		result = append(result, nodeID)
+
+		// Process all outgoing edges
+		for _, targetID := range adjacencyList[nodeID] {
+			inDegree[targetID]--
+			if inDegree[targetID] == 0 {
+				queue = append(queue, targetID)
+			}
+		}
+	}
+
+	// If result doesn't contain all nodes, there's a cycle - add remaining nodes
+	if len(result) < len(nodes) {
+		nodeSet := make(map[string]bool)
+		for _, id := range result {
+			nodeSet[id] = true
+		}
+		for _, node := range nodes {
+			if !nodeSet[node.ID] {
+				result = append(result, node.ID)
+			}
+		}
+	}
+
+	return result
+}
+
+// getConnectedSourceData retrieves data from all source nodes connected to this node
+func (e *WorkflowExecutor) getConnectedSourceData(nodeID string, connectionGraph map[string][]string, executedNodeData map[string]map[string]interface{}) []map[string]interface{} {
+	var connectedData []map[string]interface{}
+
+	sourceIDs := connectionGraph[nodeID]
+	for _, sourceID := range sourceIDs {
+		if data, exists := executedNodeData[sourceID]; exists {
+			connectedData = append(connectedData, data)
+		}
+	}
+
+	return connectedData
 }
 
 // executeDeploymentNode executes a deployment node
@@ -189,6 +312,264 @@ func (e *WorkflowExecutor) executeDeploymentNode(ctx context.Context, manifestAp
 	}
 
 	return nil
+}
+
+// executeServiceNodeWithConnections executes a service node with data from connected nodes
+func (e *WorkflowExecutor) executeServiceNodeWithConnections(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun, connectedData []map[string]interface{}) error {
+	e.logger.WithFields(logrus.Fields{
+		"node_id":         node.ID,
+		"node_type":       node.Type,
+		"connected_nodes": len(connectedData),
+	}).Info("Executing service node with connections")
+
+	// Add log entry
+	run.Logs = append(run.Logs, fmt.Sprintf("[%s] Executing service node: %s (connected to %d source nodes)",
+		time.Now().Format("15:04:05"), node.ID, len(connectedData)))
+
+	// Extract service data from node
+	serviceData := node.Data
+	if serviceData == nil {
+		serviceData = make(map[string]interface{})
+	}
+
+	// Apply connected deployment data to service
+	// If connected to a deployment, auto-populate targetApp and port if not set
+	for _, sourceData := range connectedData {
+		// If targetApp is not set, use connected deployment's name
+		if _, hasTargetApp := serviceData["targetApp"]; !hasTargetApp {
+			if deploymentName, ok := sourceData["name"].(string); ok {
+				serviceData["targetApp"] = deploymentName
+				run.Logs = append(run.Logs, fmt.Sprintf("[%s] Auto-linked service to deployment: %s",
+					time.Now().Format("15:04:05"), deploymentName))
+			}
+		}
+
+		// If targetPort is not set, use connected deployment's port
+		if _, hasTargetPort := serviceData["targetPort"]; !hasTargetPort {
+			if port, ok := sourceData["port"]; ok {
+				serviceData["targetPort"] = port
+				run.Logs = append(run.Logs, fmt.Sprintf("[%s] Auto-set targetPort from deployment: %v",
+					time.Now().Format("15:04:05"), port))
+			}
+		}
+
+		// Inherit namespace from deployment if not set
+		if _, hasNamespace := serviceData["namespace"]; !hasNamespace {
+			if namespace, ok := sourceData["namespace"].(string); ok {
+				serviceData["namespace"] = namespace
+			}
+		}
+	}
+
+	// Prepare template values for service
+	templateValues := e.prepareServiceTemplateValues(node, serviceData)
+
+	// Get template ID (default to core/service)
+	templateID := "core/service"
+	if tid, ok := serviceData["templateId"].(string); ok {
+		templateID = tid
+	}
+
+	// Validate parameters based on resource type
+	validationResult, err := e.validator.ValidateResourceParams(templateID, templateValues)
+	if err != nil {
+		return fmt.Errorf("validation error: %w", err)
+	}
+	if !validationResult.Valid {
+		return fmt.Errorf("validation failed: %v", validationResult.Errors)
+	}
+
+	// Render template to YAML
+	renderedYAML, err := e.templateEngine.RenderTemplate(templateID, templateValues)
+	if err != nil {
+		return fmt.Errorf("failed to render template: %w", err)
+	}
+
+	// Apply the rendered YAML directly to Kubernetes
+	result, err := manifestApplier.ApplyYAML(ctx, renderedYAML)
+	if err != nil {
+		run.NodeStates[node.ID] = map[string]interface{}{
+			"status": "failed",
+			"error":  err.Error(),
+		}
+		return fmt.Errorf("failed to apply manifest: %w", err)
+	}
+
+	// Update node state
+	run.NodeStates[node.ID] = map[string]interface{}{
+		"status":        "completed",
+		"result":        result,
+		"timestamp":     time.Now().Unix(),
+		"connectedFrom": len(connectedData),
+	}
+
+	// Log the operation performed
+	if len(result.AppliedResources) > 0 {
+		resource := result.AppliedResources[0]
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] Service %s/%s: %s",
+			time.Now().Format("15:04:05"), resource.Namespace, resource.Name, resource.Operation))
+	}
+
+	// Add to output
+	run.Output[node.ID] = result
+
+	// Add log entries for each applied resource
+	for _, resource := range result.AppliedResources {
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] %s %s/%s: %s",
+			time.Now().Format("15:04:05"), resource.Kind, resource.Namespace, resource.Name, resource.Operation))
+	}
+
+	// Save updated workflow run
+	if err := e.saveWorkflowRun(run); err != nil {
+		e.logger.WithError(err).Error("Failed to save updated workflow run")
+	}
+
+	return nil
+}
+
+// executeServiceNode executes a service node
+func (e *WorkflowExecutor) executeServiceNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun) error {
+	e.logger.WithFields(logrus.Fields{
+		"node_id":   node.ID,
+		"node_type": node.Type,
+	}).Info("Executing service node")
+
+	// Add log entry
+	run.Logs = append(run.Logs, fmt.Sprintf("[%s] Executing service node: %s",
+		time.Now().Format("15:04:05"), node.ID))
+
+	// Extract service data from node
+	serviceData := node.Data
+	if serviceData == nil {
+		return fmt.Errorf("invalid service data in node")
+	}
+
+	// Prepare template values for service
+	templateValues := e.prepareServiceTemplateValues(node, serviceData)
+
+	// Get template ID (default to core/service)
+	templateID := "core/service"
+	if tid, ok := serviceData["templateId"].(string); ok {
+		templateID = tid
+	}
+
+	// Validate parameters based on resource type
+	validationResult, err := e.validator.ValidateResourceParams(templateID, templateValues)
+	if err != nil {
+		return fmt.Errorf("validation error: %w", err)
+	}
+	if !validationResult.Valid {
+		return fmt.Errorf("validation failed: %v", validationResult.Errors)
+	}
+
+	// Render template to YAML
+	renderedYAML, err := e.templateEngine.RenderTemplate(templateID, templateValues)
+	if err != nil {
+		return fmt.Errorf("failed to render template: %w", err)
+	}
+
+	// Apply the rendered YAML directly to Kubernetes
+	result, err := manifestApplier.ApplyYAML(ctx, renderedYAML)
+	if err != nil {
+		run.NodeStates[node.ID] = map[string]interface{}{
+			"status": "failed",
+			"error":  err.Error(),
+		}
+		return fmt.Errorf("failed to apply manifest: %w", err)
+	}
+
+	// Update node state
+	run.NodeStates[node.ID] = map[string]interface{}{
+		"status":    "completed",
+		"result":    result,
+		"timestamp": time.Now().Unix(),
+	}
+
+	// Log the operation performed
+	if len(result.AppliedResources) > 0 {
+		resource := result.AppliedResources[0]
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] Service %s/%s: %s",
+			time.Now().Format("15:04:05"), resource.Namespace, resource.Name, resource.Operation))
+	}
+
+	// Add to output
+	run.Output[node.ID] = result
+
+	// Add log entries for each applied resource
+	for _, resource := range result.AppliedResources {
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] %s %s/%s: %s",
+			time.Now().Format("15:04:05"), resource.Kind, resource.Namespace, resource.Name, resource.Operation))
+	}
+
+	// Save updated workflow run
+	if err := e.saveWorkflowRun(run); err != nil {
+		e.logger.WithError(err).Error("Failed to save updated workflow run")
+	}
+
+	return nil
+}
+
+// prepareServiceTemplateValues prepares values for service template rendering
+func (e *WorkflowExecutor) prepareServiceTemplateValues(node *models.WorkflowNode, serviceData map[string]interface{}) map[string]interface{} {
+	values := make(map[string]interface{})
+
+	if name, ok := serviceData["name"].(string); ok {
+		values["Name"] = name
+	} else {
+		// Fallback to node ID if name not provided
+		values["Name"] = node.ID
+	}
+
+	// Copy service parameters
+	// Support both "type" and "serviceType" (frontend sends "serviceType")
+	if serviceType, ok := serviceData["serviceType"].(string); ok {
+		values["Type"] = serviceType
+	} else if serviceType, ok := serviceData["type"].(string); ok {
+		values["Type"] = serviceType
+	}
+	if targetApp, ok := serviceData["targetApp"].(string); ok {
+		values["TargetApp"] = targetApp
+	}
+	if port, ok := serviceData["port"]; ok {
+		values["Port"] = port
+	}
+	if targetPort, ok := serviceData["targetPort"]; ok {
+		values["TargetPort"] = targetPort
+	}
+	if ports, ok := serviceData["ports"].([]interface{}); ok {
+		values["Ports"] = ports
+	}
+	if selector, ok := serviceData["selector"].(map[string]interface{}); ok {
+		values["Selector"] = selector
+	}
+	if sessionAffinity, ok := serviceData["sessionAffinity"].(string); ok {
+		values["SessionAffinity"] = sessionAffinity
+	}
+	if labels, ok := serviceData["labels"].(map[string]interface{}); ok {
+		values["Labels"] = labels
+	}
+	if annotations, ok := serviceData["annotations"].(map[string]interface{}); ok {
+		values["Annotations"] = annotations
+	}
+
+	// LoadBalancer-specific fields
+	if loadBalancerIP, ok := serviceData["loadBalancerIP"].(string); ok {
+		values["LoadBalancerIP"] = loadBalancerIP
+	}
+	if sourceRanges, ok := serviceData["loadBalancerSourceRanges"].([]interface{}); ok {
+		values["LoadBalancerSourceRanges"] = sourceRanges
+	}
+	if externalTrafficPolicy, ok := serviceData["externalTrafficPolicy"].(string); ok {
+		values["ExternalTrafficPolicy"] = externalTrafficPolicy
+	}
+
+	// Add metadata
+	values["Namespace"] = "default"
+	if namespace, ok := serviceData["namespace"].(string); ok {
+		values["Namespace"] = namespace
+	}
+
+	return values
 }
 
 // prepareTemplateValues prepares values for template rendering

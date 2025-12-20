@@ -67,6 +67,9 @@ func SetupRouter() *gin.Engine {
 			workflows.GET("/:id/runs", handlers.GetWorkflowRunsHandler)
 		}
 
+		// Template routes
+		protected.GET("/templates", handlers.GetTemplatesHandler)
+
 		// Kubernetes cluster management routes
 		clusterHandler := handlers.NewClusterHandler()
 		clusters := protected.Group("/clusters")
