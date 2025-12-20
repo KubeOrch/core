@@ -20,7 +20,7 @@ type ResourceService struct {
 	resourceRepo   *repositories.ResourceRepository
 	clusterService *KubernetesClusterService
 	logger         *logrus.Logger
-}ok
+}
 
 func NewResourceService() *ResourceService {
 	return &ResourceService{

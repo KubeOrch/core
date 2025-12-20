@@ -4,8 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"gopkg.in/yaml.v3"
+)
+
+var (
+	globalRegistry     *Registry
+	globalRegistryOnce sync.Once
 )
 
 // TemplateParameter represents a parameter in a template
@@ -144,4 +150,21 @@ func (r *Registry) GetTemplatesByTag(tag string) []*TemplateMetadata {
 		}
 	}
 	return templates
+}
+
+// InitializeGlobalRegistry initializes the global template registry
+// This should be called once at application startup
+func InitializeGlobalRegistry(templatesDir string) error {
+	var initErr error
+	globalRegistryOnce.Do(func() {
+		globalRegistry = NewRegistry(templatesDir)
+		initErr = globalRegistry.LoadTemplates()
+	})
+	return initErr
+}
+
+// GetGlobalRegistry returns the global template registry instance
+// Returns nil if not initialized
+func GetGlobalRegistry() *Registry {
+	return globalRegistry
 }

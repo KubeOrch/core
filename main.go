@@ -9,12 +9,14 @@ import (
 	"time"
 
 	"github.com/KubeOrch/core/database"
+	"github.com/KubeOrch/core/pkg/template"
 	"github.com/KubeOrch/core/repositories"
 	"github.com/KubeOrch/core/routes"
 	"github.com/KubeOrch/core/services"
 	"github.com/KubeOrch/core/utils/config"
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
+	"github.com/spf13/viper"
 )
 
 func main() {
@@ -45,6 +47,17 @@ func main() {
 	defer cancel()
 	if err := resourceRepo.CreateIndexes(ctx); err != nil {
 		logrus.Warnf("Failed to create resource indexes: %v", err)
+	}
+
+	// Initialize template registry
+	templatesDir := viper.GetString("TEMPLATES_DIR")
+	if templatesDir == "" {
+		templatesDir = "./templates"
+	}
+	if err := template.InitializeGlobalRegistry(templatesDir); err != nil {
+		logrus.Warnf("Failed to initialize template registry: %v", err)
+	} else {
+		logrus.Infof("Template registry initialized with directory: %s", templatesDir)
 	}
 
 	port := config.GetPort()

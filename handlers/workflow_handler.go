@@ -474,14 +474,11 @@ func GetTemplatesHandler(c *gin.Context) {
 		return
 	}
 
-	// Get templates directory from config
-	templatesDir := "./templates"
-
-	// Create registry and load templates
-	registry := template.NewRegistry(templatesDir)
-	if err := registry.LoadTemplates(); err != nil {
-		logrus.Errorf("Failed to load templates: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load templates"})
+	// Get the global template registry
+	registry := template.GetGlobalRegistry()
+	if registry == nil {
+		logrus.Error("Template registry not initialized")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Template registry not initialized"})
 		return
 	}
 
