@@ -335,8 +335,9 @@ func (e *WorkflowExecutor) executeServiceNodeWithConnections(ctx context.Context
 	// Apply connected deployment data to service
 	// If connected to a deployment, auto-populate targetApp and port if not set
 	for _, sourceData := range connectedData {
-		// If targetApp is not set, use connected deployment's name
-		if _, hasTargetApp := serviceData["targetApp"]; !hasTargetApp {
+		// If targetApp is not set or empty, use connected deployment's name
+		existingTargetApp, _ := serviceData["targetApp"].(string)
+		if existingTargetApp == "" {
 			if deploymentName, ok := sourceData["name"].(string); ok {
 				serviceData["targetApp"] = deploymentName
 				run.Logs = append(run.Logs, fmt.Sprintf("[%s] Auto-linked service to deployment: %s",
@@ -408,6 +409,26 @@ func (e *WorkflowExecutor) executeServiceNodeWithConnections(ctx context.Context
 		resource := result.AppliedResources[0]
 		run.Logs = append(run.Logs, fmt.Sprintf("[%s] Service %s/%s: %s",
 			time.Now().Format("15:04:05"), resource.Namespace, resource.Name, resource.Operation))
+
+		// Fetch and save service status to workflow node
+		serviceName := resource.Name
+		namespace := resource.Namespace
+		if namespace == "" {
+			namespace = "default"
+		}
+
+		serviceStatus, err := manifestApplier.GetServiceStatus(ctx, serviceName, namespace)
+		if err != nil {
+			e.logger.WithError(err).Warn("Failed to get service status")
+		} else {
+			// Update workflow node data with status
+			if err := e.updateNodeStatus(run.WorkflowID, node.ID, serviceStatus); err != nil {
+				e.logger.WithError(err).Warn("Failed to update node status in workflow")
+			} else {
+				run.Logs = append(run.Logs, fmt.Sprintf("[%s] Service status: %s, ClusterIP: %s",
+					time.Now().Format("15:04:05"), serviceStatus.State, serviceStatus.ClusterIP))
+			}
+		}
 	}
 
 	// Add to output
@@ -672,4 +693,57 @@ func (e *WorkflowExecutor) updateWorkflowStats(workflowID primitive.ObjectID, su
 	if _, err := database.WorkflowColl.UpdateOne(ctx, filter, update); err != nil {
 		e.logger.WithError(err).Error("Failed to update workflow statistics")
 	}
+}
+
+// updateNodeStatus updates a workflow node's _status field with service status
+func (e *WorkflowExecutor) updateNodeStatus(workflowID primitive.ObjectID, nodeID string, status *applier.ServiceStatus) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Get the current workflow
+	var workflow models.Workflow
+	filter := bson.M{"_id": workflowID}
+	err := database.WorkflowColl.FindOne(ctx, filter).Decode(&workflow)
+	if err != nil {
+		return fmt.Errorf("failed to get workflow: %w", err)
+	}
+
+	// Find and update the node with status
+	for i, node := range workflow.Nodes {
+		if node.ID == nodeID {
+			if workflow.Nodes[i].Data == nil {
+				workflow.Nodes[i].Data = make(map[string]interface{})
+			}
+			workflow.Nodes[i].Data["_status"] = map[string]interface{}{
+				"state":      status.State,
+				"clusterIP":  status.ClusterIP,
+				"externalIP": status.ExternalIP,
+				"nodePort":   status.NodePort,
+				"message":    status.Message,
+			}
+			break
+		}
+	}
+
+	// Update the workflow with new nodes
+	update := bson.M{
+		"$set": bson.M{
+			"nodes":      workflow.Nodes,
+			"updated_at": time.Now(),
+		},
+	}
+
+	_, err = database.WorkflowColl.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("failed to update workflow: %w", err)
+	}
+
+	e.logger.WithFields(logrus.Fields{
+		"workflow_id": workflowID.Hex(),
+		"node_id":     nodeID,
+		"state":       status.State,
+		"cluster_ip":  status.ClusterIP,
+	}).Info("Updated node status in workflow")
+
+	return nil
 }

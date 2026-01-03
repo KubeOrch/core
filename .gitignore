@@ -53,3 +53,5 @@ Thumbs.db
 kubeorch
 
 tmp/
+# Claude Code rules
+CLAUDE.md

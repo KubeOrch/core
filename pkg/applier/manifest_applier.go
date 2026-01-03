@@ -318,3 +318,54 @@ func (r *ApplyResult) ToJSON() string {
 	data, _ := json.MarshalIndent(r, "", "  ")
 	return string(data)
 }
+
+// ServiceStatus represents the status of a Kubernetes Service
+type ServiceStatus struct {
+	State      string `json:"state"`       // pending, running, error
+	ClusterIP  string `json:"clusterIP,omitempty"`
+	ExternalIP string `json:"externalIP,omitempty"`
+	NodePort   int32  `json:"nodePort,omitempty"`
+	Message    string `json:"message,omitempty"`
+}
+
+// GetServiceStatus gets the status of a Kubernetes Service
+func (a *ManifestApplier) GetServiceStatus(ctx context.Context, name, namespace string) (*ServiceStatus, error) {
+	if namespace == "" {
+		namespace = a.namespace
+	}
+
+	svc, err := a.clientset.CoreV1().Services(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get service: %w", err)
+	}
+
+	status := &ServiceStatus{
+		State:     "running",
+		ClusterIP: svc.Spec.ClusterIP,
+	}
+
+	// Get NodePort if present
+	for _, port := range svc.Spec.Ports {
+		if port.NodePort > 0 {
+			status.NodePort = port.NodePort
+			break
+		}
+	}
+
+	// Get External IP for LoadBalancer
+	if svc.Spec.Type == "LoadBalancer" {
+		if len(svc.Status.LoadBalancer.Ingress) > 0 {
+			ingress := svc.Status.LoadBalancer.Ingress[0]
+			if ingress.IP != "" {
+				status.ExternalIP = ingress.IP
+			} else if ingress.Hostname != "" {
+				status.ExternalIP = ingress.Hostname
+			}
+		} else {
+			status.State = "pending"
+			status.Message = "Waiting for LoadBalancer IP assignment"
+		}
+	}
+
+	return status, nil
+}
