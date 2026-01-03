@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 
@@ -12,6 +13,16 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd/api"
 )
+
+// ngrokTransport wraps http.RoundTripper to add ngrok-skip-browser-warning header
+type ngrokTransport struct {
+	wrapped http.RoundTripper
+}
+
+func (t *ngrokTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.Header.Set("ngrok-skip-browser-warning", "true")
+	return t.wrapped.RoundTrip(req)
+}
 
 // Package-level logger initialized once
 var logger = logrus.WithField("package", "kubernetes")
@@ -157,6 +168,14 @@ func (a *AuthConfig) buildTokenAuth() (*rest.Config, error) {
 	if err := a.applyTLSConfig(config); err != nil {
 		logger.WithError(err).Error("Failed to apply TLS config")
 		return nil, err
+	}
+
+	// Add ngrok header wrapper for ngrok URLs
+	if strings.Contains(a.ServerURL, "ngrok") {
+		config.WrapTransport = func(rt http.RoundTripper) http.RoundTripper {
+			return &ngrokTransport{wrapped: rt}
+		}
+		logger.Info("Added ngrok-skip-browser-warning header wrapper for ngrok URL")
 	}
 
 	logger.WithFields(logrus.Fields{
