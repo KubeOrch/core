@@ -321,7 +321,7 @@ func (r *ApplyResult) ToJSON() string {
 
 // ServiceStatus represents the status of a Kubernetes Service
 type ServiceStatus struct {
-	State      string `json:"state"`       // pending, running, error
+	State      string `json:"state"` // healthy, partial, error
 	ClusterIP  string `json:"clusterIP,omitempty"`
 	ExternalIP string `json:"externalIP,omitempty"`
 	NodePort   int32  `json:"nodePort,omitempty"`
@@ -340,7 +340,7 @@ func (a *ManifestApplier) GetServiceStatus(ctx context.Context, name, namespace 
 	}
 
 	status := &ServiceStatus{
-		State:     "running",
+		State:     "healthy",
 		ClusterIP: svc.Spec.ClusterIP,
 	}
 
@@ -362,8 +362,89 @@ func (a *ManifestApplier) GetServiceStatus(ctx context.Context, name, namespace 
 				status.ExternalIP = ingress.Hostname
 			}
 		} else {
-			status.State = "pending"
+			status.State = "partial"
 			status.Message = "Waiting for LoadBalancer IP assignment"
+		}
+	}
+
+	return status, nil
+}
+
+// DeleteDeployment deletes a Kubernetes Deployment by name and namespace
+func (a *ManifestApplier) DeleteDeployment(ctx context.Context, name, namespace string) error {
+	if namespace == "" {
+		namespace = a.namespace
+	}
+
+	a.logger.WithFields(logrus.Fields{
+		"kind":      "Deployment",
+		"name":      name,
+		"namespace": namespace,
+	}).Info("Deleting deployment")
+
+	err := a.clientset.AppsV1().Deployments(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete deployment %s/%s: %w", namespace, name, err)
+	}
+
+	return nil
+}
+
+// DeleteService deletes a Kubernetes Service by name and namespace
+func (a *ManifestApplier) DeleteService(ctx context.Context, name, namespace string) error {
+	if namespace == "" {
+		namespace = a.namespace
+	}
+
+	a.logger.WithFields(logrus.Fields{
+		"kind":      "Service",
+		"name":      name,
+		"namespace": namespace,
+	}).Info("Deleting service")
+
+	err := a.clientset.CoreV1().Services(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete service %s/%s: %w", namespace, name, err)
+	}
+
+	return nil
+}
+
+// DeploymentStatus represents the status of a Kubernetes Deployment
+type DeploymentStatus struct {
+	State         string `json:"state"` // healthy, partial, error
+	Replicas      int32  `json:"replicas"`
+	ReadyReplicas int32  `json:"readyReplicas"`
+	Message       string `json:"message,omitempty"`
+}
+
+// GetDeploymentStatus gets the status of a Kubernetes Deployment
+func (a *ManifestApplier) GetDeploymentStatus(ctx context.Context, name, namespace string) (*DeploymentStatus, error) {
+	if namespace == "" {
+		namespace = a.namespace
+	}
+
+	deployment, err := a.clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get deployment: %w", err)
+	}
+
+	status := &DeploymentStatus{
+		Replicas:      deployment.Status.Replicas,
+		ReadyReplicas: deployment.Status.ReadyReplicas,
+	}
+
+	// Determine state based on replica counts
+	if deployment.Status.ReadyReplicas == 0 && deployment.Status.Replicas > 0 {
+		status.State = "error"
+		status.Message = "No pods are ready"
+	} else if deployment.Status.ReadyReplicas < deployment.Status.Replicas {
+		status.State = "partial"
+		status.Message = fmt.Sprintf("%d/%d pods ready", deployment.Status.ReadyReplicas, deployment.Status.Replicas)
+	} else {
+		status.State = "healthy"
+		if deployment.Status.Replicas > 0 {
+			status.Message = fmt.Sprintf("All %d pods ready", deployment.Status.ReadyReplicas)
 		}
 	}
 

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
@@ -361,12 +362,30 @@ func UpdateWorkflowStatusHandler(c *gin.Context) {
 		return
 	}
 
+	// If archiving, cleanup K8s resources first
+	var cleanupWarning string
+	if status == models.WorkflowStatusArchived {
+		executor := services.NewWorkflowExecutor()
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		if err := executor.CleanupWorkflowResources(ctx, workflow, userID); err != nil {
+			// Log the error but proceed with archiving
+			logrus.WithError(err).WithField("workflow_id", workflowID.Hex()).Warn("Failed to cleanup K8s resources during archive")
+			cleanupWarning = "K8s resources may not have been fully cleaned up: " + err.Error()
+		}
+	}
+
 	if err := services.UpdateWorkflowStatus(workflowID, status); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update workflow status"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Workflow status updated successfully"})
+	response := gin.H{"message": "Workflow status updated successfully"}
+	if cleanupWarning != "" {
+		response["warning"] = cleanupWarning
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // RunWorkflowHandler creates a version snapshot and runs the workflow

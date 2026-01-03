@@ -295,6 +295,26 @@ func (e *WorkflowExecutor) executeDeploymentNode(ctx context.Context, manifestAp
 		resource := result.AppliedResources[0]
 		run.Logs = append(run.Logs, fmt.Sprintf("[%s] Deployment %s/%s: %s",
 			time.Now().Format("15:04:05"), resource.Namespace, resource.Name, resource.Operation))
+
+		// Fetch and save deployment status to workflow node
+		deploymentName := resource.Name
+		namespace := resource.Namespace
+		if namespace == "" {
+			namespace = "default"
+		}
+
+		deploymentStatus, err := manifestApplier.GetDeploymentStatus(ctx, deploymentName, namespace)
+		if err != nil {
+			e.logger.WithError(err).Warn("Failed to get deployment status")
+		} else {
+			// Update workflow node data with status
+			if err := e.updateDeploymentNodeStatus(run.WorkflowID, node.ID, deploymentStatus); err != nil {
+				e.logger.WithError(err).Warn("Failed to update deployment node status in workflow")
+			} else {
+				run.Logs = append(run.Logs, fmt.Sprintf("[%s] Deployment status: %s, Replicas: %d/%d",
+					time.Now().Format("15:04:05"), deploymentStatus.State, deploymentStatus.ReadyReplicas, deploymentStatus.Replicas))
+			}
+		}
 	}
 
 	// Add to output
@@ -695,6 +715,59 @@ func (e *WorkflowExecutor) updateWorkflowStats(workflowID primitive.ObjectID, su
 	}
 }
 
+// updateDeploymentNodeStatus updates a workflow node's _status field with deployment status
+func (e *WorkflowExecutor) updateDeploymentNodeStatus(workflowID primitive.ObjectID, nodeID string, status *applier.DeploymentStatus) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Get the current workflow
+	var workflow models.Workflow
+	filter := bson.M{"_id": workflowID}
+	err := database.WorkflowColl.FindOne(ctx, filter).Decode(&workflow)
+	if err != nil {
+		return fmt.Errorf("failed to get workflow: %w", err)
+	}
+
+	// Find and update the node with status
+	for i, node := range workflow.Nodes {
+		if node.ID == nodeID {
+			if workflow.Nodes[i].Data == nil {
+				workflow.Nodes[i].Data = make(map[string]interface{})
+			}
+			workflow.Nodes[i].Data["_status"] = map[string]interface{}{
+				"state":         status.State,
+				"replicas":      status.Replicas,
+				"readyReplicas": status.ReadyReplicas,
+				"message":       status.Message,
+			}
+			break
+		}
+	}
+
+	// Update the workflow with new nodes
+	update := bson.M{
+		"$set": bson.M{
+			"nodes":      workflow.Nodes,
+			"updated_at": time.Now(),
+		},
+	}
+
+	_, err = database.WorkflowColl.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("failed to update workflow: %w", err)
+	}
+
+	e.logger.WithFields(logrus.Fields{
+		"workflow_id":    workflowID.Hex(),
+		"node_id":        nodeID,
+		"state":          status.State,
+		"replicas":       status.Replicas,
+		"ready_replicas": status.ReadyReplicas,
+	}).Info("Updated deployment node status in workflow")
+
+	return nil
+}
+
 // updateNodeStatus updates a workflow node's _status field with service status
 func (e *WorkflowExecutor) updateNodeStatus(workflowID primitive.ObjectID, nodeID string, status *applier.ServiceStatus) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -746,4 +819,113 @@ func (e *WorkflowExecutor) updateNodeStatus(workflowID primitive.ObjectID, nodeI
 	}).Info("Updated node status in workflow")
 
 	return nil
+}
+
+// CleanupWorkflowResources deletes all Kubernetes resources created by a workflow
+func (e *WorkflowExecutor) CleanupWorkflowResources(ctx context.Context, workflow *models.Workflow, userID primitive.ObjectID) error {
+	e.logger.WithFields(logrus.Fields{
+		"workflow_id":   workflow.ID.Hex(),
+		"workflow_name": workflow.Name,
+		"node_count":    len(workflow.Nodes),
+	}).Info("Starting cleanup of workflow K8s resources")
+
+	// Get cluster for this workflow
+	cluster, err := e.getClusterForWorkflow(ctx, workflow.ClusterID, userID)
+	if err != nil {
+		return fmt.Errorf("failed to get cluster: %w", err)
+	}
+
+	auth := e.clusterService.ClusterToAuthConfig(cluster)
+	config, err := auth.BuildRESTConfig()
+	if err != nil {
+		return fmt.Errorf("failed to build REST config: %w", err)
+	}
+
+	manifestApplier, err := applier.NewManifestApplier(config, "default")
+	if err != nil {
+		return fmt.Errorf("failed to create manifest applier: %w", err)
+	}
+
+	var cleanupErrors []string
+
+	// Delete resources in reverse order (services first, then deployments)
+	// This ensures services are removed before their backend deployments
+	for _, node := range workflow.Nodes {
+		if node.Type == "service" {
+			if err := e.deleteServiceNode(ctx, manifestApplier, &node); err != nil {
+				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete service")
+				cleanupErrors = append(cleanupErrors, err.Error())
+			}
+		}
+	}
+
+	for _, node := range workflow.Nodes {
+		if node.Type == "deployment" {
+			if err := e.deleteDeploymentNode(ctx, manifestApplier, &node); err != nil {
+				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete deployment")
+				cleanupErrors = append(cleanupErrors, err.Error())
+			}
+		}
+	}
+
+	if len(cleanupErrors) > 0 {
+		return fmt.Errorf("cleanup completed with errors: %v", cleanupErrors)
+	}
+
+	e.logger.WithField("workflow_id", workflow.ID.Hex()).Info("Workflow K8s resources cleanup completed")
+	return nil
+}
+
+// deleteDeploymentNode deletes a Kubernetes Deployment created by a deployment node
+func (e *WorkflowExecutor) deleteDeploymentNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode) error {
+	if node.Data == nil {
+		return nil
+	}
+
+	// Get deployment name from node data
+	name, ok := node.Data["name"].(string)
+	if !ok || name == "" {
+		name = node.ID // Fallback to node ID
+	}
+
+	// Get namespace from node data
+	namespace := "default"
+	if ns, ok := node.Data["namespace"].(string); ok && ns != "" {
+		namespace = ns
+	}
+
+	e.logger.WithFields(logrus.Fields{
+		"deployment": name,
+		"namespace":  namespace,
+		"node_id":    node.ID,
+	}).Info("Deleting deployment from workflow cleanup")
+
+	return manifestApplier.DeleteDeployment(ctx, name, namespace)
+}
+
+// deleteServiceNode deletes a Kubernetes Service created by a service node
+func (e *WorkflowExecutor) deleteServiceNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode) error {
+	if node.Data == nil {
+		return nil
+	}
+
+	// Get service name from node data
+	name, ok := node.Data["name"].(string)
+	if !ok || name == "" {
+		name = node.ID // Fallback to node ID
+	}
+
+	// Get namespace from node data
+	namespace := "default"
+	if ns, ok := node.Data["namespace"].(string); ok && ns != "" {
+		namespace = ns
+	}
+
+	e.logger.WithFields(logrus.Fields{
+		"service":   name,
+		"namespace": namespace,
+		"node_id":   node.ID,
+	}).Info("Deleting service from workflow cleanup")
+
+	return manifestApplier.DeleteService(ctx, name, namespace)
 }

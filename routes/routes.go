@@ -65,6 +65,10 @@ func SetupRouter() *gin.Engine {
 			workflows.POST("/:id/save", handlers.SaveWorkflowHandler)
 			workflows.POST("/:id/run", handlers.RunWorkflowHandler)
 			workflows.GET("/:id/runs", handlers.GetWorkflowRunsHandler)
+			// Node diagnostics and auto-fix routes
+			workflows.GET("/:id/nodes/:nodeId/diagnostics", handlers.GetNodeDiagnosticsHandler)
+			workflows.GET("/:id/nodes/:nodeId/fix-template/:fixType", handlers.GetFixTemplateHandler)
+			workflows.POST("/:id/nodes/:nodeId/fix", handlers.ApplyNodeFixHandler)
 		}
 
 		// Template routes
