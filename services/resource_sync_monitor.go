@@ -12,24 +12,26 @@ import (
 
 // ResourceSyncMonitor periodically syncs Kubernetes resources to the database
 type ResourceSyncMonitor struct {
-	interval        time.Duration
-	ticker          *time.Ticker
-	stopChan        chan struct{}
-	running         bool
-	mu              sync.Mutex
-	logger          *logrus.Entry
-	resourceService *ResourceService
-	clusterService  *KubernetesClusterService
+	interval         time.Duration
+	ticker           *time.Ticker
+	stopChan         chan struct{}
+	running          bool
+	mu               sync.Mutex
+	logger           *logrus.Entry
+	resourceService  *ResourceService
+	clusterService   *KubernetesClusterService
+	workflowExecutor *WorkflowExecutor
 }
 
 // NewResourceSyncMonitor creates a new resource sync monitor
 func NewResourceSyncMonitor(interval time.Duration) *ResourceSyncMonitor {
 	return &ResourceSyncMonitor{
-		interval:        interval,
-		stopChan:        make(chan struct{}),
-		logger:          logrus.WithField("component", "resource-sync-monitor"),
-		resourceService: GetResourceService(),
-		clusterService:  GetKubernetesClusterService(),
+		interval:         interval,
+		stopChan:         make(chan struct{}),
+		logger:           logrus.WithField("component", "resource-sync-monitor"),
+		resourceService:  GetResourceService(),
+		clusterService:   GetKubernetesClusterService(),
+		workflowExecutor: NewWorkflowExecutor(),
 	}
 }
 
@@ -121,6 +123,11 @@ func (m *ResourceSyncMonitor) syncAllResources() {
 				} else {
 					syncCount++
 				}
+
+				// Also sync workflow node statuses
+				if err := m.workflowExecutor.SyncWorkflowStatuses(ctx, userID, cluster); err != nil {
+					m.logger.WithError(err).Warnf("Failed to sync workflow statuses for cluster %s", cluster.Name)
+				}
 			}
 		}
 	}
@@ -144,6 +151,10 @@ func (m *ResourceSyncMonitor) SyncUserResources(userID primitive.ObjectID) {
 			if cluster.Status == models.ClusterStatusConnected {
 				if err := m.resourceService.SyncClusterResources(ctx, userID, cluster); err != nil {
 					m.logger.WithError(err).Errorf("Failed to sync cluster %s", cluster.Name)
+				}
+				// Also sync workflow node statuses
+				if err := m.workflowExecutor.SyncWorkflowStatuses(ctx, userID, cluster); err != nil {
+					m.logger.WithError(err).Warnf("Failed to sync workflow statuses for cluster %s", cluster.Name)
 				}
 			}
 		}

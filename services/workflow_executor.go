@@ -821,6 +821,87 @@ func (e *WorkflowExecutor) updateNodeStatus(workflowID primitive.ObjectID, nodeI
 	return nil
 }
 
+// SyncWorkflowStatuses updates the status of all workflow nodes based on current K8s state
+func (e *WorkflowExecutor) SyncWorkflowStatuses(ctx context.Context, userID primitive.ObjectID, cluster *models.Cluster) error {
+	// Get all published workflows for this user and cluster (ClusterID in workflow is the cluster Name)
+	workflows, err := GetWorkflowsByUserAndCluster(userID, cluster.Name)
+	if err != nil {
+		return fmt.Errorf("failed to get workflows: %w", err)
+	}
+
+	auth := e.clusterService.ClusterToAuthConfig(cluster)
+	config, err := auth.BuildRESTConfig()
+	if err != nil {
+		return fmt.Errorf("failed to build K8s config: %w", err)
+	}
+
+	manifestApplier, err := applier.NewManifestApplier(config, "default")
+	if err != nil {
+		return fmt.Errorf("failed to create manifest applier: %w", err)
+	}
+
+	for _, workflow := range workflows {
+		// Only sync published workflows that have been run
+		if workflow.Status != models.WorkflowStatusPublished || workflow.RunCount == 0 {
+			continue
+		}
+
+		updated := false
+		for i, node := range workflow.Nodes {
+			nodeType, _ := node.Data["templateId"].(string)
+			name, _ := node.Data["name"].(string)
+			namespace, _ := node.Data["namespace"].(string)
+			if namespace == "" {
+				namespace = "default"
+			}
+
+			if nodeType == "core/deployment" {
+				status, err := manifestApplier.GetDeploymentStatus(ctx, name, namespace)
+				if err != nil {
+					continue // Resource might not exist
+				}
+				workflow.Nodes[i].Data["_status"] = map[string]interface{}{
+					"state":         status.State,
+					"replicas":      status.Replicas,
+					"readyReplicas": status.ReadyReplicas,
+					"message":       status.Message,
+				}
+				updated = true
+			} else if nodeType == "core/service" {
+				status, err := manifestApplier.GetServiceStatus(ctx, name, namespace)
+				if err != nil {
+					continue // Resource might not exist
+				}
+				workflow.Nodes[i].Data["_status"] = map[string]interface{}{
+					"state":      status.State,
+					"clusterIP":  status.ClusterIP,
+					"externalIP": status.ExternalIP,
+					"nodePort":   status.NodePort,
+					"message":    status.Message,
+				}
+				updated = true
+			}
+		}
+
+		if updated {
+			// Save updated workflow
+			filter := bson.M{"_id": workflow.ID}
+			update := bson.M{
+				"$set": bson.M{
+					"nodes":      workflow.Nodes,
+					"updated_at": time.Now(),
+				},
+			}
+			_, err = database.WorkflowColl.UpdateOne(ctx, filter, update)
+			if err != nil {
+				e.logger.WithError(err).Warnf("Failed to update workflow %s status", workflow.ID.Hex())
+			}
+		}
+	}
+
+	return nil
+}
+
 // CleanupWorkflowResources deletes all Kubernetes resources created by a workflow
 func (e *WorkflowExecutor) CleanupWorkflowResources(ctx context.Context, workflow *models.Workflow, userID primitive.ObjectID) error {
 	e.logger.WithFields(logrus.Fields{
