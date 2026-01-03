@@ -1010,3 +1010,61 @@ func (e *WorkflowExecutor) deleteServiceNode(ctx context.Context, manifestApplie
 
 	return manifestApplier.DeleteService(ctx, name, namespace)
 }
+
+// CleanupDeletedNodes deletes Kubernetes resources for specific nodes that were removed from a workflow
+func (e *WorkflowExecutor) CleanupDeletedNodes(ctx context.Context, workflow *models.Workflow, deletedNodes []models.WorkflowNode, userID primitive.ObjectID) error {
+	if len(deletedNodes) == 0 {
+		return nil
+	}
+
+	e.logger.WithFields(logrus.Fields{
+		"workflow_id":     workflow.ID.Hex(),
+		"workflow_name":   workflow.Name,
+		"deleted_count":   len(deletedNodes),
+	}).Info("Starting cleanup of deleted workflow nodes")
+
+	// Get cluster for this workflow
+	cluster, err := e.getClusterForWorkflow(ctx, workflow.ClusterID, userID)
+	if err != nil {
+		return fmt.Errorf("failed to get cluster: %w", err)
+	}
+
+	auth := e.clusterService.ClusterToAuthConfig(cluster)
+	config, err := auth.BuildRESTConfig()
+	if err != nil {
+		return fmt.Errorf("failed to build REST config: %w", err)
+	}
+
+	manifestApplier, err := applier.NewManifestApplier(config, "default")
+	if err != nil {
+		return fmt.Errorf("failed to create manifest applier: %w", err)
+	}
+
+	var cleanupErrors []string
+
+	// Delete services first (reverse order), then deployments
+	for _, node := range deletedNodes {
+		if node.Type == "service" {
+			if err := e.deleteServiceNode(ctx, manifestApplier, &node); err != nil {
+				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete service")
+				cleanupErrors = append(cleanupErrors, err.Error())
+			}
+		}
+	}
+
+	for _, node := range deletedNodes {
+		if node.Type == "deployment" {
+			if err := e.deleteDeploymentNode(ctx, manifestApplier, &node); err != nil {
+				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete deployment")
+				cleanupErrors = append(cleanupErrors, err.Error())
+			}
+		}
+	}
+
+	if len(cleanupErrors) > 0 {
+		return fmt.Errorf("cleanup completed with errors: %v", cleanupErrors)
+	}
+
+	e.logger.WithField("workflow_id", workflow.ID.Hex()).Info("Deleted nodes cleanup completed")
+	return nil
+}

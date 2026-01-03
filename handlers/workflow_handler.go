@@ -216,12 +216,44 @@ func SaveWorkflowHandler(c *gin.Context) {
 		return
 	}
 
+	// Detect deleted nodes - only cleanup if workflow has been run before
+	var deletedNodes []models.WorkflowNode
+	if workflow.RunCount > 0 {
+		// Build a map of new node IDs
+		newNodeIDs := make(map[string]bool)
+		for _, node := range request.Nodes {
+			newNodeIDs[node.ID] = true
+		}
+
+		// Find nodes that existed before but are not in the new nodes
+		for _, node := range workflow.Nodes {
+			if !newNodeIDs[node.ID] {
+				// Only cleanup deployment and service nodes
+				if node.Type == "deployment" || node.Type == "service" {
+					deletedNodes = append(deletedNodes, node)
+				}
+			}
+		}
+	}
+
+	// Cleanup K8s resources for deleted nodes (non-blocking)
+	if len(deletedNodes) > 0 {
+		executor := services.NewWorkflowExecutor()
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		if err := executor.CleanupDeletedNodes(ctx, workflow, deletedNodes, userID); err != nil {
+			// Log the error but proceed with the save
+			logrus.WithError(err).WithField("workflow_id", workflowID.Hex()).Warn("Failed to cleanup deleted nodes K8s resources")
+		}
+	}
+
 	// Build updates for the current workflow
 	updates := bson.M{
 		"nodes": request.Nodes,
 		"edges": request.Edges,
 	}
-	
+
 	if request.Description != nil {
 		updates["description"] = *request.Description
 	}
