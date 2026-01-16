@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"text/template"
 
 	"github.com/sirupsen/logrus"
@@ -18,6 +19,15 @@ type FixTemplate struct {
 	YAML        string `json:"yaml"`
 	ApplyMethod string `json:"applyMethod"` // "kubectl-apply", "direct-api"
 	FixType     string `json:"fixType"`
+}
+
+// EnvironmentInfo contains detected cluster environment information
+type EnvironmentInfo struct {
+	IsCloudProvider bool   // Has cloud provider (AWS, GCP, Azure, Alibaba, etc.)
+	Provider        string // Provider name if detected
+	IsMinikube      bool   // Running on minikube
+	IsBareMetal     bool   // Self-hosted bare metal
+	HasMetalLB      bool   // MetalLB is installed
 }
 
 // FixTemplateService generates fix templates
@@ -48,8 +58,92 @@ func (fts *FixTemplateService) GetFixTemplate(ctx context.Context, fixType strin
 	}
 }
 
+// detectEnvironment detects the cluster environment type
+func (fts *FixTemplateService) detectEnvironment(ctx context.Context) (*EnvironmentInfo, error) {
+	envInfo := &EnvironmentInfo{}
+
+	// Get nodes to check providerID and labels
+	nodes, err := fts.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil || len(nodes.Items) == 0 {
+		return envInfo, fmt.Errorf("failed to get nodes: %w", err)
+	}
+
+	node := nodes.Items[0]
+
+	// Check providerID - if exists and not empty, it's a cloud provider
+	// Examples: "aws://us-east-1a/i-abc123", "gce://project/zone/instance", "azure://...", "alicloud://..."
+	if node.Spec.ProviderID != "" {
+		envInfo.IsCloudProvider = true
+
+		// Extract provider name from providerID (format: "provider://...")
+		if idx := strings.Index(node.Spec.ProviderID, "://"); idx > 0 {
+			envInfo.Provider = node.Spec.ProviderID[:idx]
+		} else {
+			envInfo.Provider = "unknown cloud provider"
+		}
+
+		fts.logger.WithFields(logrus.Fields{
+			"providerID": node.Spec.ProviderID,
+			"provider":   envInfo.Provider,
+		}).Info("Detected cloud provider cluster")
+
+		return envInfo, nil
+	}
+
+	// No providerID - it's self-hosted (bare metal or local dev)
+	// Check node labels to distinguish minikube/k3s/kind from bare metal
+	labels := node.Labels
+
+	if _, hasMinikube := labels["minikube.k8s.io/name"]; hasMinikube {
+		envInfo.IsMinikube = true
+		fts.logger.Info("Detected minikube cluster")
+	} else if _, hasK3s := labels["k3s.io/hostname"]; hasK3s {
+		envInfo.IsBareMetal = true // k3s is often used for prod
+		fts.logger.Info("Detected k3s cluster")
+	} else if _, hasKind := labels["kind.x-k8s.io/cluster"]; hasKind {
+		envInfo.IsMinikube = true // Treat kind like minikube (local dev)
+		fts.logger.Info("Detected kind cluster")
+	} else {
+		envInfo.IsBareMetal = true
+		fts.logger.Info("Detected bare metal cluster")
+	}
+
+	// Check if MetalLB is installed (look for metallb-system namespace)
+	_, err = fts.clientset.CoreV1().Namespaces().Get(ctx, "metallb-system", metav1.GetOptions{})
+	if err == nil {
+		envInfo.HasMetalLB = true
+		fts.logger.Info("MetalLB installation detected")
+	} else {
+		fts.logger.Info("MetalLB not found in cluster")
+	}
+
+	return envInfo, nil
+}
+
 // getMetalLBPoolTemplate generates MetalLB IP pool configuration
+// This includes both IP pool AND strictARP fix for comprehensive setup
 func (fts *FixTemplateService) getMetalLBPoolTemplate(ctx context.Context, params map[string]interface{}) (*FixTemplate, error) {
+	// Detect environment
+	envInfo, err := fts.detectEnvironment(ctx)
+	if err != nil {
+		fts.logger.WithError(err).Warn("Failed to detect environment, proceeding with default")
+		// Use default env info if detection fails
+		envInfo = &EnvironmentInfo{
+			HasMetalLB:  true, // Assume MetalLB exists if we're trying to fix it
+			IsBareMetal: true,
+		}
+	}
+
+	// If cloud provider detected, LoadBalancer should work - no MetalLB needed
+	if envInfo.IsCloudProvider {
+		return nil, fmt.Errorf("cluster appears to be running on a cloud provider (%s) - LoadBalancer services should work without MetalLB", envInfo.Provider)
+	}
+
+	// Check if MetalLB is installed
+	if !envInfo.HasMetalLB {
+		return nil, fmt.Errorf("MetalLB is not installed - please install MetalLB first for LoadBalancer support on self-hosted clusters")
+	}
+
 	// Try to detect appropriate IP range
 	ipRange, err := fts.detectIPRange(ctx)
 	if err != nil {
@@ -61,7 +155,10 @@ func (fts *FixTemplateService) getMetalLBPoolTemplate(ctx context.Context, param
 		}
 	}
 
-	tmpl := `apiVersion: v1
+	// Generate comprehensive fix: IP pool + strictARP
+	tmpl := `---
+# MetalLB IP Address Pool
+apiVersion: v1
 kind: ConfigMap
 metadata:
   namespace: metallb-system
@@ -72,7 +169,21 @@ data:
     - name: default
       protocol: layer2
       addresses:
-      - {{.IPRange}}`
+      - {{.IPRange}}
+---
+# kube-proxy strictARP Configuration (Required for MetalLB Layer 2)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kube-proxy
+  namespace: kube-system
+data:
+  config.conf: |
+    apiVersion: kubeproxy.config.k8s.io/v1alpha1
+    kind: KubeProxyConfiguration
+    mode: "iptables"
+    ipvs:
+      strictARP: true`
 
 	t, err := template.New("metallb").Parse(tmpl)
 	if err != nil {
@@ -85,9 +196,12 @@ data:
 		return nil, err
 	}
 
+	// Build simple description
+	description := fmt.Sprintf("Configures MetalLB IP pool (%s) and strictARP", ipRange)
+
 	return &FixTemplate{
-		Name:        "Configure MetalLB IP Pool",
-		Description: fmt.Sprintf("Creates an IP address pool (%s) for MetalLB to assign LoadBalancer IPs", ipRange),
+		Name:        "Configure MetalLB",
+		Description: description,
 		YAML:        buf.String(),
 		ApplyMethod: "kubectl-apply",
 		FixType:     "metallb-pool",

@@ -260,27 +260,57 @@ func ApplyNodeFixHandler(c *gin.Context) {
 	}
 
 	// Apply the YAML
-	logger.WithField("fix_type", req.FixType).Info("Applying fix")
+	logger.WithFields(logrus.Fields{
+		"fix_type": req.FixType,
+		"mode":     req.Mode,
+	}).Info("Applying fix")
+
 	result, err := manifestApplier.ApplyYAML(ctx, []byte(req.YAML))
 	if err != nil {
 		logger.WithError(err).Error("Failed to apply fix")
+
+		// Provide detailed error message
+		errorDetails := err.Error()
+		if len(errorDetails) > 200 {
+			errorDetails = errorDetails[:200] + "..."
+		}
+
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Failed to apply fix",
-			"details": err.Error(),
+			"error":   "Failed to apply Kubernetes manifest",
+			"details": errorDetails,
+			"fixType": req.FixType,
+			"mode":    req.Mode,
 		})
 		return
 	}
 
-	// For MetalLB fixes, trigger a controller restart
-	if req.FixType == "metallb-pool" {
+	// Build success message based on fix type
+	successMessage := "Fix applied successfully"
+	switch req.FixType {
+	case "metallb-pool":
+		successMessage = "MetalLB IP pool configured. LoadBalancer services will now receive external IPs."
+		// Trigger controller restart for MetalLB fixes
 		if err := restartMetalLBController(ctx, config); err != nil {
 			logger.WithError(err).Warn("Failed to restart MetalLB controller")
+			successMessage += " Note: Controller restart failed - you may need to restart MetalLB manually."
+		} else {
+			successMessage += " MetalLB controller restarted."
 		}
+	case "selector-fix":
+		successMessage = "Service selector updated. Endpoints should now match pod labels."
+	case "port-fix":
+		successMessage = "Service ports updated. Connections should now route correctly."
 	}
+
+	logger.WithFields(logrus.Fields{
+		"fix_type": req.FixType,
+		"mode":     req.Mode,
+		"result":   result,
+	}).Info("Fix applied successfully")
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "Fix applied successfully",
+		"message": successMessage,
 		"result":  result,
 		"fixType": req.FixType,
 		"mode":    req.Mode,

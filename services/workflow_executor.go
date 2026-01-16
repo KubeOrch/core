@@ -315,6 +315,23 @@ func (e *WorkflowExecutor) executeDeploymentNode(ctx context.Context, manifestAp
 					time.Now().Format("15:04:05"), deploymentStatus.State, deploymentStatus.ReadyReplicas, deploymentStatus.Replicas))
 			}
 		}
+
+		// Start watching the deployment for real-time status updates (pod readiness)
+		watcherManager := GetResourceWatcherManager()
+		restConfig := manifestApplier.GetRestConfig()
+
+		err = watcherManager.StartWatcher(run.WorkflowID, node.ID, deploymentName, namespace, "deployment", restConfig)
+		if err != nil {
+			e.logger.WithError(err).Warn("Failed to start deployment watcher (falling back to periodic polling)")
+		} else {
+			e.logger.WithFields(logrus.Fields{
+				"deployment_name": deploymentName,
+				"namespace":       namespace,
+				"node_id":         node.ID,
+			}).Info("Started watching deployment for pod readiness")
+			run.Logs = append(run.Logs, fmt.Sprintf("[%s] Watching deployment for pod readiness",
+				time.Now().Format("15:04:05")))
+		}
 	}
 
 	// Add to output
@@ -447,6 +464,27 @@ func (e *WorkflowExecutor) executeServiceNodeWithConnections(ctx context.Context
 			} else {
 				run.Logs = append(run.Logs, fmt.Sprintf("[%s] Service status: %s, ClusterIP: %s",
 					time.Now().Format("15:04:05"), serviceStatus.State, serviceStatus.ClusterIP))
+			}
+
+			// Start watching the service for real-time status updates (LoadBalancer IP assignment)
+			// Only watch LoadBalancer services as they need time to get external IP
+			serviceType, _ := serviceData["serviceType"].(string)
+			if serviceType == "LoadBalancer" {
+				watcherManager := GetResourceWatcherManager()
+				restConfig := manifestApplier.GetRestConfig()
+
+				err := watcherManager.StartWatcher(run.WorkflowID, node.ID, serviceName, namespace, "service", restConfig)
+				if err != nil {
+					e.logger.WithError(err).Warn("Failed to start service watcher (falling back to periodic polling)")
+				} else {
+					e.logger.WithFields(logrus.Fields{
+						"service_name": serviceName,
+						"namespace":    namespace,
+						"node_id":      node.ID,
+					}).Info("Started watching service for LoadBalancer IP assignment")
+					run.Logs = append(run.Logs, fmt.Sprintf("[%s] Watching service for LoadBalancer IP assignment",
+						time.Now().Format("15:04:05")))
+				}
 			}
 		}
 	}
@@ -765,6 +803,24 @@ func (e *WorkflowExecutor) updateDeploymentNodeStatus(workflowID primitive.Objec
 		"ready_replicas": status.ReadyReplicas,
 	}).Info("Updated deployment node status in workflow")
 
+	// Publish status update event to SSE subscribers
+	broadcaster := GetSSEBroadcaster()
+	broadcaster.Publish(StreamEvent{
+		Type:      "workflow",
+		StreamKey: fmt.Sprintf("workflow:%s", workflowID.Hex()),
+		EventType: "node_update",
+		Data: map[string]interface{}{
+			"node_id": nodeID,
+			"type":    "deployment",
+			"status": map[string]interface{}{
+				"state":         status.State,
+				"replicas":      status.Replicas,
+				"readyReplicas": status.ReadyReplicas,
+				"message":       status.Message,
+			},
+		},
+	})
+
 	return nil
 }
 
@@ -818,6 +874,25 @@ func (e *WorkflowExecutor) updateNodeStatus(workflowID primitive.ObjectID, nodeI
 		"cluster_ip":  status.ClusterIP,
 	}).Info("Updated node status in workflow")
 
+	// Publish status update event to SSE subscribers
+	broadcaster := GetSSEBroadcaster()
+	broadcaster.Publish(StreamEvent{
+		Type:      "workflow",
+		StreamKey: fmt.Sprintf("workflow:%s", workflowID.Hex()),
+		EventType: "node_update",
+		Data: map[string]interface{}{
+			"node_id": nodeID,
+			"type":    "service",
+			"status": map[string]interface{}{
+				"state":      status.State,
+				"clusterIP":  status.ClusterIP,
+				"externalIP": status.ExternalIP,
+				"nodePort":   status.NodePort,
+				"message":    status.Message,
+			},
+		},
+	})
+
 	return nil
 }
 
@@ -828,6 +903,12 @@ func (e *WorkflowExecutor) SyncWorkflowStatuses(ctx context.Context, userID prim
 	if err != nil {
 		return fmt.Errorf("failed to get workflows: %w", err)
 	}
+
+	e.logger.WithFields(logrus.Fields{
+		"user_id":        userID.Hex(),
+		"cluster_name":   cluster.Name,
+		"workflow_count": len(workflows),
+	}).Debug("Syncing workflow statuses")
 
 	auth := e.clusterService.ClusterToAuthConfig(cluster)
 	config, err := auth.BuildRESTConfig()
@@ -843,8 +924,19 @@ func (e *WorkflowExecutor) SyncWorkflowStatuses(ctx context.Context, userID prim
 	for _, workflow := range workflows {
 		// Only sync published workflows that have been run
 		if workflow.Status != models.WorkflowStatusPublished || workflow.RunCount == 0 {
+			e.logger.WithFields(logrus.Fields{
+				"workflow_id": workflow.ID.Hex(),
+				"status":      workflow.Status,
+				"run_count":   workflow.RunCount,
+			}).Debug("Skipping workflow - not published or not run")
 			continue
 		}
+
+		e.logger.WithFields(logrus.Fields{
+			"workflow_id": workflow.ID.Hex(),
+			"name":        workflow.Name,
+			"node_count":  len(workflow.Nodes),
+		}).Info("Syncing workflow status")
 
 		updated := false
 		for i, node := range workflow.Nodes {
@@ -895,7 +987,25 @@ func (e *WorkflowExecutor) SyncWorkflowStatuses(ctx context.Context, userID prim
 			_, err = database.WorkflowColl.UpdateOne(ctx, filter, update)
 			if err != nil {
 				e.logger.WithError(err).Warnf("Failed to update workflow %s status", workflow.ID.Hex())
+			} else {
+				e.logger.WithFields(logrus.Fields{
+					"workflow_id": workflow.ID.Hex(),
+					"node_count":  len(workflow.Nodes),
+				}).Info("Workflow status updated, broadcasting to SSE subscribers")
+
+				// Publish workflow sync event to SSE subscribers
+				broadcaster := GetSSEBroadcaster()
+				broadcaster.Publish(StreamEvent{
+					Type:      "workflow",
+					StreamKey: fmt.Sprintf("workflow:%s", workflow.ID.Hex()),
+					EventType: "workflow_sync",
+					Data: map[string]interface{}{
+						"nodes": workflow.Nodes,
+					},
+				})
 			}
+		} else {
+			e.logger.WithField("workflow_id", workflow.ID.Hex()).Debug("No status changes detected for workflow")
 		}
 	}
 
@@ -909,6 +1019,10 @@ func (e *WorkflowExecutor) CleanupWorkflowResources(ctx context.Context, workflo
 		"workflow_name": workflow.Name,
 		"node_count":    len(workflow.Nodes),
 	}).Info("Starting cleanup of workflow K8s resources")
+
+	// Stop all watchers for this workflow
+	watcherManager := GetResourceWatcherManager()
+	watcherManager.StopWorkflowWatchers(workflow.ID)
 
 	// Get cluster for this workflow
 	cluster, err := e.getClusterForWorkflow(ctx, workflow.ClusterID, userID)

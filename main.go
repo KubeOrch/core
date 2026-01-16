@@ -70,9 +70,13 @@ func main() {
 	healthMonitor := services.NewClusterHealthMonitor(60 * time.Second)
 	healthMonitor.Start()
 
-	// Start resource sync monitor (syncs resources every 5 minutes)
-	resourceSyncMonitor := services.NewResourceSyncMonitor(5 * time.Minute)
-	resourceSyncMonitor.Start()
+	// Resource sync monitor disabled - real-time watchers now handle status updates
+	// resourceSyncMonitor := services.NewResourceSyncMonitor(5 * time.Minute)
+	// resourceSyncMonitor.Start()
+
+	// Initialize unified SSE broadcaster for real-time updates (workflows, pod logs, etc.)
+	broadcaster := services.GetSSEBroadcaster()
+	defer broadcaster.Close()
 
 	// Create HTTP server with extended timeouts for SSE streaming
 	srv := &http.Server{
@@ -104,7 +108,17 @@ func main() {
 	<-quit
 	logrus.Info("Shutting down server...")
 
-	// Stop health monitor first
+	// Stop all resource watchers
+	watcherManager := services.GetResourceWatcherManager()
+	watcherManager.Shutdown()
+	logrus.Info("Resource watchers stopped")
+
+	// Stop SSE broadcaster
+	sseBroadcaster := services.GetSSEBroadcaster()
+	sseBroadcaster.Close()
+	logrus.Info("SSE broadcaster stopped")
+
+	// Stop health monitor
 	healthMonitor.Stop()
 	logrus.Info("Health monitor stopped")
 

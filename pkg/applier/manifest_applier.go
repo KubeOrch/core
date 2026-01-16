@@ -31,6 +31,7 @@ type ManifestApplier struct {
 	mapper        meta.RESTMapper
 	namespace     string
 	logger        *logrus.Logger
+	restConfig    *rest.Config
 }
 
 // NewManifestApplier creates a new manifest applier
@@ -68,6 +69,7 @@ func NewManifestApplier(config *rest.Config, namespace string) (*ManifestApplier
 		mapper:        mapper,
 		namespace:     namespace,
 		logger:        logrus.New(),
+		restConfig:    config,
 	}, nil
 }
 
@@ -449,4 +451,15 @@ func (a *ManifestApplier) GetDeploymentStatus(ctx context.Context, name, namespa
 	}
 
 	return status, nil
+}
+// GetClientset returns the Kubernetes clientset
+// This is used by service watchers to access the K8s API
+func (a *ManifestApplier) GetClientset() *kubernetes.Clientset {
+	return a.clientset
+}
+
+// GetRestConfig returns the Kubernetes REST config
+// This is used by resource watchers to create dynamic clients
+func (a *ManifestApplier) GetRestConfig() *rest.Config {
+	return a.restConfig
 }

@@ -407,25 +407,11 @@ func (h *ResourcesHandler) StreamPodLogs(c *gin.Context) {
 	// Monitor client disconnect
 	go func() {
 		<-c.Request.Context().Done()
-		h.logger.Info("Client disconnected from log stream")
+		h.logger.WithField("resource_id", resourceID).Info("Client disconnected from log stream")
 		cancel()
 	}()
 
-	// Get log stream
-	req := clientset.CoreV1().Pods(resource.Namespace).GetLogs(resource.Name, podLogOptions)
-	stream, err := req.Stream(streamCtx)
-	if err != nil {
-		c.SSEvent("error", fmt.Sprintf("Failed to stream logs: %v", err))
-		c.Writer.Flush()
-		return
-	}
-	defer func() {
-		if closeErr := stream.Close(); closeErr != nil {
-			h.logger.Error("Failed to close stream")
-		}
-	}()
-
-	// Send initial metadata as JSON string
+	// Send initial metadata
 	metadataJSON, err := json.Marshal(map[string]string{
 		"pod":       resource.Name,
 		"container": container,
@@ -448,35 +434,139 @@ func (h *ResourcesHandler) StreamPodLogs(c *gin.Context) {
 		h.logger.WithError(err).Warn("Failed to record access log")
 	}
 
-	// Stream logs line by line
-	scanner := bufio.NewScanner(stream)
-	for scanner.Scan() {
-		line := scanner.Text()
-		c.SSEvent("log", line)
-		c.Writer.Flush()
+	h.logger.WithField("resource_id", resourceID).Info("Client connected to pod log stream")
 
-		// Check for write errors (client disconnected)
-		if c.Errors.Last() != nil {
-			h.logger.WithError(c.Errors.Last()).Warn("Error writing SSE event, breaking stream")
-			return
+	// STEP 1: Fetch historical logs (if follow is true, we need both history + live stream)
+	// Each subscriber gets their own historical logs independently
+	if follow {
+		h.logger.WithFields(map[string]interface{}{
+			"resource_id": resourceID,
+			"tail_lines":  tailLinesInt64,
+		}).Info("Fetching historical logs for subscriber")
+
+		// Fetch historical logs (follow=false, with tailLines)
+		historicalOptions := &corev1.PodLogOptions{
+			Container:  container,
+			Follow:     false, // Don't follow for historical logs
+			Timestamps: true,
+			TailLines:  &tailLinesInt64,
 		}
 
-		// Check if stream context was cancelled (client disconnected)
+		histReq := clientset.CoreV1().Pods(resource.Namespace).GetLogs(resource.Name, historicalOptions)
+		histStream, err := histReq.Stream(streamCtx)
+		if err != nil {
+			h.logger.WithError(err).Warn("Failed to fetch historical logs, continuing with live stream")
+		} else {
+			// Send historical logs to this subscriber only
+			scanner := bufio.NewScanner(histStream)
+			for scanner.Scan() {
+				line := scanner.Text()
+				c.SSEvent("log", line)
+				c.Writer.Flush()
+
+				// Check if client disconnected while sending history
+				if c.Errors.Last() != nil {
+					histStream.Close()
+					return
+				}
+			}
+			histStream.Close()
+
+			if err := scanner.Err(); err != nil && err != io.EOF {
+				h.logger.WithError(err).Warn("Error reading historical logs")
+			}
+
+			h.logger.WithField("resource_id", resourceID).Info("Historical logs sent to subscriber")
+		}
+	}
+
+	// STEP 2: Subscribe to unified broadcaster for real-time logs
+	broadcaster := services.GetSSEBroadcaster()
+	streamKey := fmt.Sprintf("pod-logs:%s", resourceID)
+	eventChan := broadcaster.Subscribe(streamKey, 100) // Buffer size 100 for logs
+	defer broadcaster.Unsubscribe(streamKey, eventChan)
+
+	// STEP 3: Start K8s follow stream via manager (if not already running)
+	// Follow stream should NOT include tail lines - only new logs from now onwards
+	logStreamManager := services.GetPodLogStreamManager()
+	followOptions := &corev1.PodLogOptions{
+		Container:  container,
+		Follow:     true,  // Follow for new logs
+		Timestamps: true,
+		TailLines:  nil,   // No tail lines - we already sent historical logs above
+	}
+
+	started, err := logStreamManager.StartLogStream(resourceID, clientset, resource.Namespace, resource.Name, container, followOptions)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to start follow log stream")
+		c.SSEvent("error", fmt.Sprintf("Failed to start follow stream: %v", err))
+		c.Writer.Flush()
+		return
+	}
+
+	if started {
+		h.logger.WithField("resource_id", resourceID).Info("Started new K8s follow stream")
+	} else {
+		h.logger.WithField("resource_id", resourceID).Info("Joined existing K8s follow stream")
+	}
+
+	// Relay events from broadcaster to SSE
+	for {
 		select {
 		case <-streamCtx.Done():
+			// Client disconnected
+			h.logger.WithField("resource_id", resourceID).Info("Client disconnected, checking for cleanup")
+			// Check if we should stop the K8s stream (no more subscribers)
+			if broadcaster.GetSubscriberCount(streamKey) == 0 {
+				logStreamManager.StopLogStream(resourceID)
+			}
 			return
-		default:
+
+		case event, ok := <-eventChan:
+			if !ok {
+				// Channel closed
+				c.SSEvent("complete", "Stream closed")
+				c.Writer.Flush()
+				return
+			}
+
+			// Only process pod-logs events
+			if event.Type != "pod-logs" {
+				continue
+			}
+
+			// Handle different event types
+			switch event.EventType {
+			case "log":
+				// Extract log line from event data
+				if line, ok := event.Data["line"].(string); ok {
+					c.SSEvent("log", line)
+				}
+			case "error":
+				// Extract error message
+				if msg, ok := event.Data["message"].(string); ok {
+					c.SSEvent("error", msg)
+				}
+			case "complete":
+				// Stream completed
+				if msg, ok := event.Data["message"].(string); ok {
+					c.SSEvent("complete", msg)
+				} else {
+					c.SSEvent("complete", "Log stream completed")
+				}
+				c.Writer.Flush()
+				return
+			}
+
+			c.Writer.Flush()
+
+			// Check for write errors (client disconnected)
+			if c.Errors.Last() != nil {
+				h.logger.WithError(c.Errors.Last()).Warn("Error writing SSE event, breaking stream")
+				return
+			}
 		}
 	}
-
-	if err := scanner.Err(); err != nil {
-		c.SSEvent("error", fmt.Sprintf("Stream error: %v", err))
-		c.Writer.Flush()
-	}
-
-	// Send completion event
-	c.SSEvent("complete", "Log stream completed")
-	c.Writer.Flush()
 }
 
 // WebSocket upgrader configuration

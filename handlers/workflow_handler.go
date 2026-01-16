@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -537,4 +539,187 @@ func GetTemplatesHandler(c *gin.Context) {
 	templates := registry.GetAllTemplates()
 
 	c.JSON(http.StatusOK, gin.H{"templates": templates})
+}
+
+// StreamWorkflowStatusHandler streams real-time workflow status updates via Server-Sent Events (SSE)
+func StreamWorkflowStatusHandler(c *gin.Context) {
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
+		return
+	}
+
+	workflowID, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid workflow ID"})
+		return
+	}
+
+	// Use request context only for initial DB query
+	reqCtx := c.Request.Context()
+
+	// Check ownership
+	workflow, err := services.GetWorkflowByID(workflowID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Workflow not found"})
+		return
+	}
+
+	if workflow.OwnerID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+		return
+	}
+
+	// Set SSE headers
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	// Create a context that gets cancelled only when client disconnects
+	// Use background context for the stream to avoid request timeout
+	streamCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Monitor client disconnect
+	go func() {
+		<-reqCtx.Done()
+		logrus.WithField("workflow_id", workflowID.Hex()).Info("Client disconnected from workflow status stream")
+		cancel()
+	}()
+
+	// Subscribe to workflow status updates with unified broadcaster
+	broadcaster := services.GetSSEBroadcaster()
+	streamKey := fmt.Sprintf("workflow:%s", workflowID.Hex())
+	eventChan := broadcaster.Subscribe(streamKey, 10) // Buffer size 10 for status updates
+	defer broadcaster.Unsubscribe(streamKey, eventChan)
+
+	logrus.WithField("workflow_id", workflowID.Hex()).Info("Client connected to workflow status stream")
+
+	// Send initial workflow state as metadata
+	metadataJSON, err := json.Marshal(workflow)
+	if err != nil {
+		logrus.WithError(err).Error("Failed to marshal workflow metadata for SSE stream")
+		c.SSEvent("error", "Failed to create stream metadata")
+		c.Writer.Flush()
+		return
+	}
+	c.SSEvent("metadata", string(metadataJSON))
+	c.Writer.Flush()
+
+	// Start watchers for deployed resources if workflow has been run
+	// This ensures watchers restart after backend restarts
+	if workflow.RunCount > 0 {
+		go startWatchersForWorkflow(workflow, userID)
+	}
+
+	// Listen for events from the broadcaster
+	for {
+		select {
+		case <-streamCtx.Done():
+			// Client disconnected
+			return
+
+		case event, ok := <-eventChan:
+			if !ok {
+				// Channel closed, send complete event and exit
+				c.SSEvent("complete", "Stream closed")
+				c.Writer.Flush()
+				return
+			}
+
+			// Only process workflow events (filter out other stream types)
+			if event.Type != "workflow" {
+				continue
+			}
+
+			// Marshal event data to JSON (not BSON!)
+			eventJSON, err := json.Marshal(event)
+			if err != nil {
+				logrus.WithError(err).Warn("Failed to marshal workflow status event")
+				continue
+			}
+
+			// Send SSE event using EventType (node_update, workflow_sync, etc.)
+			c.SSEvent(event.EventType, string(eventJSON))
+			c.Writer.Flush()
+
+			// Check for write errors (client disconnected)
+			if c.Errors.Last() != nil {
+				logrus.WithError(c.Errors.Last()).Warn("Error writing SSE event, breaking stream")
+				return
+			}
+		}
+	}
+}
+
+// startWatchersForWorkflow starts resource watchers for all nodes in a workflow
+// This is called when a client connects to the SSE stream and the workflow has been run
+func startWatchersForWorkflow(workflow *models.Workflow, userID primitive.ObjectID) {
+	logger := logrus.WithFields(logrus.Fields{
+		"workflow_id":   workflow.ID.Hex(),
+		"workflow_name": workflow.Name,
+	})
+
+	// Get K8s config for the cluster
+	clusterService := services.GetKubernetesClusterService()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cluster, err := clusterService.GetClusterByName(ctx, userID, workflow.ClusterID)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to get cluster for watchers")
+		return
+	}
+
+	auth := clusterService.ClusterToAuthConfig(cluster)
+	restConfig, err := auth.BuildRESTConfig()
+	if err != nil {
+		logger.WithError(err).Warn("Failed to build REST config for watchers")
+		return
+	}
+
+	watcherManager := services.GetResourceWatcherManager()
+	watchersStarted := 0
+
+	for _, node := range workflow.Nodes {
+		// Skip nodes that don't have status (not deployed)
+		if node.Data == nil {
+			continue
+		}
+
+		// Get resource name and namespace
+		resourceName, _ := node.Data["name"].(string)
+		namespace, _ := node.Data["namespace"].(string)
+		if namespace == "" {
+			namespace = "default"
+		}
+
+		if resourceName == "" {
+			continue
+		}
+
+		// Only watch supported resource types
+		resourceType := node.Type
+		if resourceType != "deployment" && resourceType != "service" &&
+		   resourceType != "statefulset" && resourceType != "daemonset" &&
+		   resourceType != "job" && resourceType != "pod" {
+			continue
+		}
+
+		// Start watcher (manager handles deduplication)
+		err := watcherManager.StartWatcher(workflow.ID, node.ID, resourceName, namespace, resourceType, restConfig)
+		if err != nil {
+			logger.WithError(err).WithFields(logrus.Fields{
+				"node_id":       node.ID,
+				"resource_type": resourceType,
+				"resource_name": resourceName,
+			}).Warn("Failed to start watcher for node")
+		} else {
+			watchersStarted++
+		}
+	}
+
+	if watchersStarted > 0 {
+		logger.WithField("watchers_started", watchersStarted).Info("Started watchers for workflow nodes")
+	}
 }
