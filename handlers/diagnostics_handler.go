@@ -20,6 +20,8 @@ import (
 	"k8s.io/client-go/rest"
 )
 
+const maxErrorDetailsLength = 200
+
 // GetNodeDiagnosticsHandler returns diagnostics for a workflow node
 // GET /v1/api/workflows/:id/nodes/:nodeId/diagnostics
 func GetNodeDiagnosticsHandler(c *gin.Context) {
@@ -57,9 +59,9 @@ func GetNodeDiagnosticsHandler(c *gin.Context) {
 
 	// Find the node
 	var node *models.WorkflowNode
-	for _, n := range workflow.Nodes {
-		if n.ID == nodeID {
-			node = &n
+	for i := range workflow.Nodes {
+		if workflow.Nodes[i].ID == nodeID {
+			node = &workflow.Nodes[i]
 			break
 		}
 	}
@@ -145,9 +147,9 @@ func GetFixTemplateHandler(c *gin.Context) {
 
 	// Find the node
 	var node *models.WorkflowNode
-	for _, n := range workflow.Nodes {
-		if n.ID == nodeID {
-			node = &n
+	for i := range workflow.Nodes {
+		if workflow.Nodes[i].ID == nodeID {
+			node = &workflow.Nodes[i]
 			break
 		}
 	}
@@ -271,8 +273,8 @@ func ApplyNodeFixHandler(c *gin.Context) {
 
 		// Provide detailed error message
 		errorDetails := err.Error()
-		if len(errorDetails) > 200 {
-			errorDetails = errorDetails[:200] + "..."
+		if len(errorDetails) > maxErrorDetailsLength {
+			errorDetails = errorDetails[:maxErrorDetailsLength] + "..."
 		}
 
 		c.JSON(http.StatusInternalServerError, gin.H{

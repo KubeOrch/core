@@ -10,6 +10,8 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
+const metadataStalenessThreshold = 10 * time.Minute
+
 type ClusterHealthMonitor struct {
 	clusterService *KubernetesClusterService
 	logger         *logrus.Logger
@@ -143,8 +145,8 @@ func (m *ClusterHealthMonitor) checkClusterHealth(ctx context.Context, cluster *
 		} else {
 			newStatus = models.ClusterStatusConnected
 
-			// Refresh metadata if empty or stale (older than 10 minutes)
-			metadataStale := cluster.Metadata.Version == "" || time.Since(cluster.Metadata.LastUpdated) > 10*time.Minute
+			// Refresh metadata if empty or stale
+			metadataStale := cluster.Metadata.Version == "" || time.Since(cluster.Metadata.LastUpdated) > metadataStalenessThreshold
 			if metadataStale {
 				if err := m.clusterService.updateClusterMetadata(ctx, cluster, clientset); err != nil {
 					m.logger.WithError(err).Debugf("Failed to refresh metadata for cluster %s", cluster.Name)

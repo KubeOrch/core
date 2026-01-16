@@ -222,7 +222,7 @@ func (fts *FixTemplateService) detectIPRange(ctx context.Context) (string, error
 			// Parse IP and suggest range in same subnet
 			ip := addr.Address
 			// Simple heuristic: use .100-.110 in same /24 subnet
-			parts := splitIP(ip)
+			parts := strings.Split(ip, ".")
 			if len(parts) == 4 {
 				return fmt.Sprintf("%s.%s.%s.100-%s.%s.%s.110", parts[0], parts[1], parts[2], parts[0], parts[1], parts[2]), nil
 			}
@@ -230,22 +230,6 @@ func (fts *FixTemplateService) detectIPRange(ctx context.Context) (string, error
 	}
 
 	return "", fmt.Errorf("cannot detect IP range from node IPs")
-}
-
-// splitIP splits an IP address into parts
-func splitIP(ip string) []string {
-	result := []string{}
-	current := ""
-	for _, c := range ip {
-		if c == '.' {
-			result = append(result, current)
-			current = ""
-		} else {
-			current += string(c)
-		}
-	}
-	result = append(result, current)
-	return result
 }
 
 // getSelectorFixTemplate generates a service selector fix

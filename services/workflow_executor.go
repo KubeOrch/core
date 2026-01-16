@@ -92,7 +92,12 @@ func (e *WorkflowExecutor) ExecuteWorkflow(ctx context.Context, workflowID primi
 	connectionGraph := e.buildConnectionGraph(workflow.Edges)
 
 	// Get execution order using topological sort
-	executionOrder := e.getExecutionOrder(workflow.Nodes, workflow.Edges)
+	executionOrder, err := e.getExecutionOrder(workflow.Nodes, workflow.Edges)
+	if err != nil {
+		e.updateWorkflowRunStatus(workflowRun, models.WorkflowRunStatusFailed, err.Error())
+		e.updateWorkflowStats(workflowID, false)
+		return workflowRun, fmt.Errorf("invalid workflow structure: %w", err)
+	}
 
 	// Track executed node data for passing between connected nodes
 	executedNodeData := make(map[string]map[string]interface{})
@@ -158,8 +163,12 @@ func (e *WorkflowExecutor) buildConnectionGraph(edges []models.WorkflowEdge) map
 	return graph
 }
 
-// getExecutionOrder returns nodes in topological order based on edges
-func (e *WorkflowExecutor) getExecutionOrder(nodes []models.WorkflowNode, edges []models.WorkflowEdge) []string {
+// ErrWorkflowCycleDetected is returned when a workflow contains a cycle
+var ErrWorkflowCycleDetected = fmt.Errorf("workflow contains a cycle - workflows must be directed acyclic graphs (DAGs)")
+
+// getExecutionOrder returns nodes in topological order based on edges.
+// Returns an error if the workflow contains a cycle.
+func (e *WorkflowExecutor) getExecutionOrder(nodes []models.WorkflowNode, edges []models.WorkflowEdge) ([]string, error) {
 	// Build adjacency list and in-degree count
 	inDegree := make(map[string]int)
 	adjacencyList := make(map[string][]string)
@@ -200,20 +209,12 @@ func (e *WorkflowExecutor) getExecutionOrder(nodes []models.WorkflowNode, edges 
 		}
 	}
 
-	// If result doesn't contain all nodes, there's a cycle - add remaining nodes
+	// If result doesn't contain all nodes, there's a cycle
 	if len(result) < len(nodes) {
-		nodeSet := make(map[string]bool)
-		for _, id := range result {
-			nodeSet[id] = true
-		}
-		for _, node := range nodes {
-			if !nodeSet[node.ID] {
-				result = append(result, node.ID)
-			}
-		}
+		return nil, ErrWorkflowCycleDetected
 	}
 
-	return result
+	return result, nil
 }
 
 // getConnectedSourceData retrieves data from all source nodes connected to this node
