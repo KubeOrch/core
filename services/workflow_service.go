@@ -310,3 +310,31 @@ func GetWorkflowRuns(workflowID primitive.ObjectID, limit int) ([]models.Workflo
 
 	return runs, nil
 }
+
+// GetWorkflowsByUserAndCluster gets all workflows for a user that use a specific cluster
+func GetWorkflowsByUserAndCluster(ownerID primitive.ObjectID, clusterID string) ([]models.Workflow, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	filter := bson.M{
+		"owner_id":   ownerID,
+		"cluster_id": clusterID,
+	}
+
+	cursor, err := database.WorkflowColl.Find(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := cursor.Close(ctx); err != nil {
+			logrus.WithError(err).Warn("Failed to close cursor")
+		}
+	}()
+
+	var workflows []models.Workflow
+	if err = cursor.All(ctx, &workflows); err != nil {
+		return nil, err
+	}
+
+	return workflows, nil
+}

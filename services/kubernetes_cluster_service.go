@@ -488,8 +488,9 @@ func (s *KubernetesClusterService) updateClusterMetadata(ctx context.Context, cl
 	}
 
 	metadata := models.ClusterMetadata{
-		Version:   version.String(),
-		NodeCount: len(nodes.Items),
+		Version:     version.String(),
+		NodeCount:   len(nodes.Items),
+		LastUpdated: time.Now(),
 	}
 
 	if namespaces != nil {

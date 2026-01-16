@@ -1,0 +1,142 @@
+id: core/service
+name: service
+displayName: Kubernetes Service
+category: core
+description: Expose your application on a network with load balancing and service discovery
+icon: 🌐
+version: "1.0.0"
+tags:
+  - networking
+  - load-balancer
+  - service-discovery
+usageFrequency: high
+difficulty: easy
+dependencies: []
+parameters:
+  - name: name
+    label: Service Name
+    description: Name of the Kubernetes Service
+    type: string
+    required: true
+    default: "my-service"
+  - name: namespace
+    label: Namespace
+    description: Kubernetes namespace
+    type: string
+    required: false
+    default: "default"
+  - name: type
+    label: Service Type
+    description: Type of Service (ClusterIP, NodePort, LoadBalancer)
+    type: select
+    required: false
+    default: "ClusterIP"
+    options:
+      - value: "ClusterIP"
+        label: "ClusterIP - Internal cluster access only"
+      - value: "NodePort"
+        label: "NodePort - Expose on each node's IP"
+      - value: "LoadBalancer"
+        label: "LoadBalancer - External load balancer"
+  - name: loadBalancerIP
+    label: LoadBalancer IP
+    description: Static IP address for the LoadBalancer (cloud provider must support this)
+    type: string
+    required: false
+    dependsOn:
+      field: type
+      value: "LoadBalancer"
+  - name: loadBalancerSourceRanges
+    label: Source IP Ranges
+    description: List of IP CIDR ranges allowed to access the LoadBalancer (e.g., 10.0.0.0/8)
+    type: array
+    required: false
+    dependsOn:
+      field: type
+      value: "LoadBalancer"
+  - name: externalTrafficPolicy
+    label: External Traffic Policy
+    description: How external traffic is routed to pods
+    type: select
+    required: false
+    options:
+      - value: "Cluster"
+        label: "Cluster - Route to any node (default, may add hop)"
+      - value: "Local"
+        label: "Local - Route only to local pods (preserves source IP)"
+    dependsOn:
+      field: type
+      values: ["NodePort", "LoadBalancer"]
+  - name: targetApp
+    label: Target Application
+    description: Name of the application to route traffic to (matches app label)
+    type: string
+    required: true
+  - name: port
+    label: Service Port
+    description: Port that the service exposes
+    type: number
+    required: true
+    default: 80
+  - name: targetPort
+    label: Target Port
+    description: Port on the pod to forward traffic to
+    type: number
+    required: false
+    default: 8080
+  - name: ports
+    label: Additional Ports
+    description: Configure multiple ports for the service
+    type: array
+    required: false
+  - name: selector
+    label: Pod Selector
+    description: Custom label selectors to match pods
+    type: object
+    required: false
+  - name: sessionAffinity
+    label: Session Affinity
+    description: Enable session affinity (ClientIP or None)
+    type: select
+    required: false
+    options:
+      - value: "None"
+        label: "None"
+      - value: "ClientIP"
+        label: "ClientIP"
+examples:
+  - name: Basic Service
+    description: Simple ClusterIP service
+    config:
+      name: "my-app-service"
+      namespace: "default"
+      type: "ClusterIP"
+      targetApp: "my-app"
+      port: 80
+      targetPort: 8080
+  - name: LoadBalancer Service
+    description: External load balancer
+    config:
+      name: "public-service"
+      namespace: "default"
+      type: "LoadBalancer"
+      targetApp: "web-app"
+      port: 443
+      targetPort: 8443
+  - name: Multi-Port Service
+    description: Service with multiple ports
+    config:
+      name: "multi-port-service"
+      namespace: "default"
+      type: "ClusterIP"
+      targetApp: "api-server"
+      ports:
+        - name: "http"
+          port: 80
+          targetPort: 8080
+        - name: "https"
+          port: 443
+          targetPort: 8443
+        - name: "metrics"
+          port: 9090
+          targetPort: 9090

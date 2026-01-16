@@ -144,12 +144,14 @@ func (v *ResourceValidator) validateService(params map[string]interface{}, resul
 		result.Errors = append(result.Errors, "Port is required for service")
 	}
 
-	// Selector validation
-	if _, ok := params["SelectorApp"].(string); !ok {
-		if _, ok := params["Selector"].(map[string]interface{}); !ok {
-			result.Valid = false
-			result.Errors = append(result.Errors, "Selector is required for service")
-		}
+	// Selector validation - accept SelectorApp, Selector map, or TargetApp (template fallback)
+	_, hasSelectorApp := params["SelectorApp"].(string)
+	_, hasSelector := params["Selector"].(map[string]interface{})
+	targetApp, hasTargetApp := params["TargetApp"].(string)
+
+	if !hasSelectorApp && !hasSelector && (!hasTargetApp || targetApp == "") {
+		result.Valid = false
+		result.Errors = append(result.Errors, "Selector is required for service (set TargetApp or Selector)")
 	}
 }
 

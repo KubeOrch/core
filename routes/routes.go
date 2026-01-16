@@ -41,6 +41,9 @@ func SetupRouter() *gin.Engine {
 			protected.GET("/profile", handlers.GetProfileHandler)
 			protected.PUT("/profile", handlers.UpdateProfileHandler)
 
+			// Search route
+			protected.GET("/search", handlers.SearchHandler)
+
 			// Settings routes
 			settings := protected.Group("/settings")
 			{
@@ -65,7 +68,16 @@ func SetupRouter() *gin.Engine {
 			workflows.POST("/:id/save", handlers.SaveWorkflowHandler)
 			workflows.POST("/:id/run", handlers.RunWorkflowHandler)
 			workflows.GET("/:id/runs", handlers.GetWorkflowRunsHandler)
+			// Node diagnostics and auto-fix routes
+			workflows.GET("/:id/nodes/:nodeId/diagnostics", handlers.GetNodeDiagnosticsHandler)
+			workflows.GET("/:id/nodes/:nodeId/fix-template/:fixType", handlers.GetFixTemplateHandler)
+			workflows.POST("/:id/nodes/:nodeId/fix", handlers.ApplyNodeFixHandler)
+			// Real-time status streaming via SSE
+			workflows.GET("/:id/status/stream", handlers.StreamWorkflowStatusHandler)
 		}
+
+		// Template routes
+		protected.GET("/templates", handlers.GetTemplatesHandler)
 
 		// Kubernetes cluster management routes
 		clusterHandler := handlers.NewClusterHandler()

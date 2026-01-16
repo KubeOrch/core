@@ -31,6 +31,7 @@ type ManifestApplier struct {
 	mapper        meta.RESTMapper
 	namespace     string
 	logger        *logrus.Logger
+	restConfig    *rest.Config
 }
 
 // NewManifestApplier creates a new manifest applier
@@ -68,6 +69,7 @@ func NewManifestApplier(config *rest.Config, namespace string) (*ManifestApplier
 		mapper:        mapper,
 		namespace:     namespace,
 		logger:        logrus.New(),
+		restConfig:    config,
 	}, nil
 }
 
@@ -317,4 +319,147 @@ type AppliedResource struct {
 func (r *ApplyResult) ToJSON() string {
 	data, _ := json.MarshalIndent(r, "", "  ")
 	return string(data)
+}
+
+// ServiceStatus represents the status of a Kubernetes Service
+type ServiceStatus struct {
+	State      string `json:"state"` // healthy, partial, error
+	ClusterIP  string `json:"clusterIP,omitempty"`
+	ExternalIP string `json:"externalIP,omitempty"`
+	NodePort   int32  `json:"nodePort,omitempty"`
+	Message    string `json:"message,omitempty"`
+}
+
+// GetServiceStatus gets the status of a Kubernetes Service
+func (a *ManifestApplier) GetServiceStatus(ctx context.Context, name, namespace string) (*ServiceStatus, error) {
+	if namespace == "" {
+		namespace = a.namespace
+	}
+
+	svc, err := a.clientset.CoreV1().Services(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get service: %w", err)
+	}
+
+	status := &ServiceStatus{
+		State:     "healthy",
+		ClusterIP: svc.Spec.ClusterIP,
+	}
+
+	// Get NodePort if present
+	for _, port := range svc.Spec.Ports {
+		if port.NodePort > 0 {
+			status.NodePort = port.NodePort
+			break
+		}
+	}
+
+	// Get External IP for LoadBalancer
+	if svc.Spec.Type == "LoadBalancer" {
+		if len(svc.Status.LoadBalancer.Ingress) > 0 {
+			ingress := svc.Status.LoadBalancer.Ingress[0]
+			if ingress.IP != "" {
+				status.ExternalIP = ingress.IP
+			} else if ingress.Hostname != "" {
+				status.ExternalIP = ingress.Hostname
+			}
+		} else {
+			status.State = "partial"
+			status.Message = "Waiting for LoadBalancer IP assignment"
+		}
+	}
+
+	return status, nil
+}
+
+// DeleteDeployment deletes a Kubernetes Deployment by name and namespace
+func (a *ManifestApplier) DeleteDeployment(ctx context.Context, name, namespace string) error {
+	if namespace == "" {
+		namespace = a.namespace
+	}
+
+	a.logger.WithFields(logrus.Fields{
+		"kind":      "Deployment",
+		"name":      name,
+		"namespace": namespace,
+	}).Info("Deleting deployment")
+
+	err := a.clientset.AppsV1().Deployments(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete deployment %s/%s: %w", namespace, name, err)
+	}
+
+	return nil
+}
+
+// DeleteService deletes a Kubernetes Service by name and namespace
+func (a *ManifestApplier) DeleteService(ctx context.Context, name, namespace string) error {
+	if namespace == "" {
+		namespace = a.namespace
+	}
+
+	a.logger.WithFields(logrus.Fields{
+		"kind":      "Service",
+		"name":      name,
+		"namespace": namespace,
+	}).Info("Deleting service")
+
+	err := a.clientset.CoreV1().Services(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete service %s/%s: %w", namespace, name, err)
+	}
+
+	return nil
+}
+
+// DeploymentStatus represents the status of a Kubernetes Deployment
+type DeploymentStatus struct {
+	State         string `json:"state"` // healthy, partial, error
+	Replicas      int32  `json:"replicas"`
+	ReadyReplicas int32  `json:"readyReplicas"`
+	Message       string `json:"message,omitempty"`
+}
+
+// GetDeploymentStatus gets the status of a Kubernetes Deployment
+func (a *ManifestApplier) GetDeploymentStatus(ctx context.Context, name, namespace string) (*DeploymentStatus, error) {
+	if namespace == "" {
+		namespace = a.namespace
+	}
+
+	deployment, err := a.clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get deployment: %w", err)
+	}
+
+	status := &DeploymentStatus{
+		Replicas:      deployment.Status.Replicas,
+		ReadyReplicas: deployment.Status.ReadyReplicas,
+	}
+
+	// Determine state based on replica counts
+	if deployment.Status.ReadyReplicas == 0 && deployment.Status.Replicas > 0 {
+		status.State = "error"
+		status.Message = "No pods are ready"
+	} else if deployment.Status.ReadyReplicas < deployment.Status.Replicas {
+		status.State = "partial"
+		status.Message = fmt.Sprintf("%d/%d pods ready", deployment.Status.ReadyReplicas, deployment.Status.Replicas)
+	} else {
+		status.State = "healthy"
+		if deployment.Status.Replicas > 0 {
+			status.Message = fmt.Sprintf("All %d pods ready", deployment.Status.ReadyReplicas)
+		}
+	}
+
+	return status, nil
+}
+// GetClientset returns the Kubernetes clientset
+// This is used by service watchers to access the K8s API
+func (a *ManifestApplier) GetClientset() *kubernetes.Clientset {
+	return a.clientset
+}
+
+// GetRestConfig returns the Kubernetes REST config
+// This is used by resource watchers to create dynamic clients
+func (a *ManifestApplier) GetRestConfig() *rest.Config {
+	return a.restConfig
 }

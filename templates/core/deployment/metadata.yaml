@@ -1,0 +1,132 @@
+id: core/deployment
+name: deployment
+displayName: Kubernetes Deployment
+category: core
+description: Deploy and manage containerized applications with automatic rollouts and rollbacks
+icon: 📦
+version: "1.0.0"
+tags:
+  - workload
+  - containers
+  - scaling
+usageFrequency: very-high
+difficulty: easy
+dependencies: []
+parameters:
+  - name: name
+    label: Deployment Name
+    description: Name of the Kubernetes Deployment
+    type: string
+    required: true
+    default: "my-deployment"
+  - name: namespace
+    label: Namespace
+    description: Kubernetes namespace
+    type: string
+    required: false
+    default: "default"
+  - name: image
+    label: Container Image
+    description: Docker image to deploy (e.g., nginx:latest)
+    type: string
+    required: true
+  - name: replicas
+    label: Replicas
+    description: Number of pod replicas to run
+    type: number
+    required: false
+    default: 1
+    min: 0
+    max: 100
+  - name: port
+    label: Container Port
+    description: Port that the container exposes
+    type: number
+    required: false
+    default: 8080
+  - name: env
+    label: Environment Variables
+    description: Environment variables for the container
+    type: object
+    required: false
+  - name: resources
+    label: Resource Limits
+    description: CPU and memory limits/requests
+    type: object
+    required: false
+  - name: labels
+    label: Labels
+    description: Additional labels for the deployment
+    type: object
+    required: false
+  - name: imagePullPolicy
+    label: Image Pull Policy
+    description: When to pull the container image
+    type: select
+    required: false
+    default: "IfNotPresent"
+    options:
+      - value: "Always"
+        label: "Always - Pull on every pod start"
+      - value: "IfNotPresent"
+        label: "IfNotPresent - Pull if not cached"
+      - value: "Never"
+        label: "Never - Never pull, use cached only"
+  - name: serviceAccountName
+    label: Service Account
+    description: Service account to use for the pod
+    type: string
+    required: false
+  - name: livenessProbe
+    label: Liveness Probe
+    description: Health check to restart unhealthy containers
+    type: object
+    required: false
+  - name: readinessProbe
+    label: Readiness Probe
+    description: Health check to determine if pod is ready
+    type: object
+    required: false
+examples:
+  - name: Basic Web App
+    description: Simple web application deployment
+    config:
+      name: "web-app"
+      namespace: "default"
+      image: "nginx:latest"
+      replicas: 3
+      port: 80
+  - name: API Server with Resources
+    description: API server with resource limits
+    config:
+      name: "api-server"
+      namespace: "production"
+      image: "my-api:v1.0.0"
+      replicas: 2
+      port: 8080
+      env:
+        DATABASE_URL: "postgres://db:5432/mydb"
+        LOG_LEVEL: "info"
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "128Mi"
+        limits:
+          cpu: "500m"
+          memory: "512Mi"
+  - name: App with Health Checks
+    description: Deployment with liveness and readiness probes
+    config:
+      name: "healthy-app"
+      namespace: "default"
+      image: "my-app:latest"
+      replicas: 2
+      port: 8080
+      livenessProbe:
+        path: "/health"
+        initialDelaySeconds: 30
+        periodSeconds: 10
+      readinessProbe:
+        path: "/ready"
+        initialDelaySeconds: 5
+        periodSeconds: 5
