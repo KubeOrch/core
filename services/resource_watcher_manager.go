@@ -50,7 +50,11 @@ func (m *ResourceWatcherManager) StartWatcher(
 	// Check if already watching
 	if watcher, exists := m.watchers[key]; exists {
 		if watcher.IsRunning() {
-			m.logger.WithField("key", key).Debug("Already watching resource")
+			m.logger.WithField("key", key).Debug("Already watching resource, broadcasting current status")
+			// Broadcast current status for new subscribers
+			if watcher.lastStatus != nil {
+				watcher.broadcastStatusUpdate(watcher.lastStatus)
+			}
 			return nil
 		}
 		delete(m.watchers, key)

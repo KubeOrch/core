@@ -639,6 +639,12 @@ func StreamWorkflowStatusHandler(c *gin.Context) {
 				continue
 			}
 
+			logrus.WithFields(logrus.Fields{
+				"workflow_id": workflowID.Hex(),
+				"event_type":  event.EventType,
+				"node_id":     event.Data["node_id"],
+			}).Info("Sending SSE event to client")
+
 			// Send SSE event using EventType (node_update, workflow_sync, etc.)
 			c.SSEvent(event.EventType, string(eventJSON))
 			c.Writer.Flush()

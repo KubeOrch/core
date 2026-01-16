@@ -466,11 +466,11 @@ func (h *ResourcesHandler) StreamPodLogs(c *gin.Context) {
 
 				// Check if client disconnected while sending history
 				if c.Errors.Last() != nil {
-					histStream.Close()
+					_ = histStream.Close()
 					return
 				}
 			}
-			histStream.Close()
+			_ = histStream.Close()
 
 			if err := scanner.Err(); err != nil && err != io.EOF {
 				h.logger.WithError(err).Warn("Error reading historical logs")

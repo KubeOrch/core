@@ -273,27 +273,23 @@ func (rw *ResourceWatcher) handleResourceUpdate(resource *unstructured.Unstructu
 
 // extractStatus extracts status from any resource type
 func (rw *ResourceWatcher) extractStatus(resource *unstructured.Unstructured) map[string]interface{} {
-	status := make(map[string]interface{})
-
 	switch rw.resourceType {
 	case "deployment":
-		status = rw.extractDeploymentStatus(resource)
+		return rw.extractDeploymentStatus(resource)
 	case "service":
-		status = rw.extractServiceStatus(resource)
+		return rw.extractServiceStatus(resource)
 	case "statefulset":
-		status = rw.extractStatefulSetStatus(resource)
+		return rw.extractStatefulSetStatus(resource)
 	case "daemonset":
-		status = rw.extractDaemonSetStatus(resource)
+		return rw.extractDaemonSetStatus(resource)
 	case "job":
-		status = rw.extractJobStatus(resource)
+		return rw.extractJobStatus(resource)
 	case "pod":
-		status = rw.extractPodStatus(resource)
+		return rw.extractPodStatus(resource)
 	default:
 		// Generic status extraction for unknown types
-		status = rw.extractGenericStatus(resource)
+		return rw.extractGenericStatus(resource)
 	}
-
-	return status
 }
 
 // extractDeploymentStatus extracts deployment-specific status

@@ -146,7 +146,7 @@ func (m *PodLogStreamManager) streamLogs(
 		})
 		return
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	// Read and publish logs line by line
 	scanner := bufio.NewScanner(stream)

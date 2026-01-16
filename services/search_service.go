@@ -98,7 +98,7 @@ func searchWorkflows(ctx context.Context, userID primitive.ObjectID, query strin
 	if err != nil {
 		return nil, err
 	}
-	defer cursor.Close(ctx)
+	defer func() { _ = cursor.Close(ctx) }()
 
 	var results []WorkflowSearchResult
 	for cursor.Next(ctx) {
@@ -154,7 +154,7 @@ func searchResources(ctx context.Context, userID primitive.ObjectID, query strin
 	if err != nil {
 		return nil, err
 	}
-	defer cursor.Close(ctx)
+	defer func() { _ = cursor.Close(ctx) }()
 
 	var results []ResourceSearchResult
 	for cursor.Next(ctx) {
@@ -209,7 +209,7 @@ func searchClusters(ctx context.Context, userID primitive.ObjectID, query string
 	if err != nil {
 		return nil, err
 	}
-	defer cursor.Close(ctx)
+	defer func() { _ = cursor.Close(ctx) }()
 
 	var results []ClusterSearchResult
 	for cursor.Next(ctx) {

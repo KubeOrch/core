@@ -55,3 +55,7 @@ kubeorch
 tmp/
 # Claude Code rules
 CLAUDE.md
+
+# Build artifacts
+core
+main
