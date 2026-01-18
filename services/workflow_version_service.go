@@ -141,7 +141,9 @@ func GetVersions(workflowID primitive.ObjectID, page, limit int) (*VersionsRespo
 	if err != nil {
 		return nil, err
 	}
-	defer cursor.Close(ctx)
+	defer func() {
+		_ = cursor.Close(ctx)
+	}()
 
 	var versions []models.WorkflowVersionDoc
 	if err = cursor.All(ctx, &versions); err != nil {
