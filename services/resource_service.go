@@ -12,6 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
@@ -153,6 +154,19 @@ func (s *ResourceService) syncNamespaceResources(ctx context.Context, userID pri
 			resource := s.secretToResource(&secret, cluster, userID)
 			if err := s.resourceRepo.CreateOrUpdate(ctx, resource); err != nil {
 				s.logger.WithError(err).Warnf("Failed to sync secret %s/%s", namespace, secret.Name)
+			}
+		}
+	}
+
+	// Sync Ingresses
+	ingresses, err := clientset.NetworkingV1().Ingresses(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		s.logger.WithError(err).Warnf("Failed to list ingresses in namespace %s", namespace)
+	} else {
+		for _, ingress := range ingresses.Items {
+			resource := s.ingressToResource(&ingress, cluster, userID)
+			if err := s.resourceRepo.CreateOrUpdate(ctx, resource); err != nil {
+				s.logger.WithError(err).Warnf("Failed to sync ingress %s/%s", namespace, ingress.Name)
 			}
 		}
 	}
@@ -418,6 +432,61 @@ func (s *ResourceService) secretToResource(secret *corev1.Secret, cluster *model
 		Labels:          secret.Labels,
 		Annotations:     secret.Annotations,
 		CreatedAt:       secret.CreationTimestamp.Time,
+	}
+}
+
+func (s *ResourceService) ingressToResource(ingress *networkingv1.Ingress, cluster *models.Cluster, userID primitive.ObjectID) *models.Resource {
+	// Determine status based on LoadBalancer IP assignment
+	status := models.ResourceStatusPending
+	var loadBalancerIP string
+	if len(ingress.Status.LoadBalancer.Ingress) > 0 {
+		status = models.ResourceStatusRunning
+		if ingress.Status.LoadBalancer.Ingress[0].IP != "" {
+			loadBalancerIP = ingress.Status.LoadBalancer.Ingress[0].IP
+		} else if ingress.Status.LoadBalancer.Ingress[0].Hostname != "" {
+			loadBalancerIP = ingress.Status.LoadBalancer.Ingress[0].Hostname
+		}
+	}
+
+	// Count rules and paths
+	rulesCount := len(ingress.Spec.Rules)
+	var pathsCount int
+	var hosts []string
+	for _, rule := range ingress.Spec.Rules {
+		if rule.Host != "" {
+			hosts = append(hosts, rule.Host)
+		}
+		if rule.HTTP != nil {
+			pathsCount += len(rule.HTTP.Paths)
+		}
+	}
+
+	// Get ingress class
+	var ingressClass string
+	if ingress.Spec.IngressClassName != nil {
+		ingressClass = *ingress.Spec.IngressClassName
+	}
+
+	return &models.Resource{
+		UserID:          userID,
+		ClusterID:       cluster.ID,
+		ClusterName:     cluster.Name,
+		Name:            ingress.Name,
+		Namespace:       ingress.Namespace,
+		Type:            models.ResourceTypeIngress,
+		UID:             string(ingress.UID),
+		ResourceVersion: ingress.ResourceVersion,
+		Status:          status,
+		Labels:          ingress.Labels,
+		Annotations:     ingress.Annotations,
+		CreatedAt:       ingress.CreationTimestamp.Time,
+		Spec: models.ResourceSpec{
+			IngressClass:   ingressClass,
+			IngressHosts:   hosts,
+			IngressRules:   rulesCount,
+			IngressPaths:   pathsCount,
+			LoadBalancerIP: loadBalancerIP,
+		},
 	}
 }
 

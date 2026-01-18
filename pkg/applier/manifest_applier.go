@@ -109,7 +109,7 @@ func (a *ManifestApplier) ApplyYAML(ctx context.Context, yamlContent []byte) (*A
 	}
 
 	if len(result.AppliedResources) == 0 && len(result.Errors) > 0 {
-		return result, fmt.Errorf("failed to apply any resources")
+		return result, fmt.Errorf("failed to apply any resources: %v", result.Errors)
 	}
 
 	return result, nil
@@ -462,4 +462,68 @@ func (a *ManifestApplier) GetClientset() *kubernetes.Clientset {
 // This is used by resource watchers to create dynamic clients
 func (a *ManifestApplier) GetRestConfig() *rest.Config {
 	return a.restConfig
+}
+
+// IngressStatus represents the status of a Kubernetes Ingress
+type IngressStatus struct {
+	State                string `json:"state"` // healthy, pending, error
+	LoadBalancerIP       string `json:"loadBalancerIP,omitempty"`
+	LoadBalancerHostname string `json:"loadBalancerHostname,omitempty"`
+	RulesCount           int    `json:"rulesCount,omitempty"`
+	Message              string `json:"message,omitempty"`
+}
+
+// GetIngressStatus gets the status of a Kubernetes Ingress
+func (a *ManifestApplier) GetIngressStatus(ctx context.Context, name, namespace string) (*IngressStatus, error) {
+	if namespace == "" {
+		namespace = a.namespace
+	}
+
+	ingress, err := a.clientset.NetworkingV1().Ingresses(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get ingress: %w", err)
+	}
+
+	status := &IngressStatus{
+		State:      "pending",
+		RulesCount: len(ingress.Spec.Rules),
+	}
+
+	// Check for LoadBalancer IP/Hostname
+	if len(ingress.Status.LoadBalancer.Ingress) > 0 {
+		lbIngress := ingress.Status.LoadBalancer.Ingress[0]
+		if lbIngress.IP != "" {
+			status.LoadBalancerIP = lbIngress.IP
+			status.State = "healthy"
+			status.Message = "Ingress is active"
+		} else if lbIngress.Hostname != "" {
+			status.LoadBalancerHostname = lbIngress.Hostname
+			status.State = "healthy"
+			status.Message = "Ingress is active"
+		}
+	} else {
+		status.Message = "Waiting for LoadBalancer address assignment"
+	}
+
+	return status, nil
+}
+
+// DeleteIngress deletes a Kubernetes Ingress by name and namespace
+func (a *ManifestApplier) DeleteIngress(ctx context.Context, name, namespace string) error {
+	if namespace == "" {
+		namespace = a.namespace
+	}
+
+	a.logger.WithFields(logrus.Fields{
+		"kind":      "Ingress",
+		"name":      name,
+		"namespace": namespace,
+	}).Info("Deleting ingress")
+
+	err := a.clientset.NetworkingV1().Ingresses(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete ingress %s/%s: %w", namespace, name, err)
+	}
+
+	return nil
 }
