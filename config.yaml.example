@@ -1,0 +1,14 @@
+# KubeOrch Core Configuration Example
+# Copy this file to config.yaml and fill in your values
+# NEVER commit config.yaml with real secrets to version control
+
+CLUSTER_LOG_TTL_HOURS: 24
+ENCRYPTION_KEY: "your-encryption-key-here"
+GIN_MODE: debug
+INVITE_CODE: "your-invite-code-here"
+JWT_SECRET: "your-jwt-secret-here"
+LOG_LEVEL: info
+MONGO_URI: "mongodb://username:password@localhost:27017/kubeorch?directConnection=true&authSource=admin"
+PORT: 3000
+REGENERATE_INVITE_AFTER_SIGNUP: true
+TOKEN_REFRESH_MAX_AGE_DAYS: 7

@@ -108,9 +108,16 @@ type ResourceSpec struct {
 	NodeAllocated NodeResources `bson:"nodeAllocated,omitempty" json:"nodeAllocated,omitempty"`
 
 	// PVC specs
-	StorageClass *string `bson:"storageClass,omitempty" json:"storageClass,omitempty"`
+	StorageClass *string  `bson:"storageClass,omitempty" json:"storageClass,omitempty"`
 	AccessModes  []string `bson:"accessModes,omitempty" json:"accessModes,omitempty"`
-	Capacity     string  `bson:"capacity,omitempty" json:"capacity,omitempty"`
+	Capacity     string   `bson:"capacity,omitempty" json:"capacity,omitempty"`
+
+	// Ingress specs
+	IngressClass   string   `bson:"ingressClass,omitempty" json:"ingressClass,omitempty"`
+	IngressHosts   []string `bson:"ingressHosts,omitempty" json:"ingressHosts,omitempty"`
+	IngressRules   int      `bson:"ingressRules,omitempty" json:"ingressRules,omitempty"`
+	IngressPaths   int      `bson:"ingressPaths,omitempty" json:"ingressPaths,omitempty"`
+	LoadBalancerIP string   `bson:"loadBalancerIP,omitempty" json:"loadBalancerIP,omitempty"`
 }
 
 // ContainerSpec represents container specifications

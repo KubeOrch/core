@@ -278,6 +278,8 @@ func (rw *ResourceWatcher) extractStatus(resource *unstructured.Unstructured) ma
 		return rw.extractDeploymentStatus(resource)
 	case "service":
 		return rw.extractServiceStatus(resource)
+	case "ingress":
+		return rw.extractIngressStatus(resource)
 	case "statefulset":
 		return rw.extractStatefulSetStatus(resource)
 	case "daemonset":
@@ -371,6 +373,42 @@ func (rw *ResourceWatcher) extractServiceStatus(resource *unstructured.Unstructu
 		"nodePort":   nodePort,
 		"state":      state,
 		"message":    message,
+	}
+}
+
+// extractIngressStatus extracts ingress-specific status
+func (rw *ResourceWatcher) extractIngressStatus(resource *unstructured.Unstructured) map[string]interface{} {
+	// Get rules count
+	rules, _, _ := unstructured.NestedSlice(resource.Object, "spec", "rules")
+	rulesCount := len(rules)
+
+	loadBalancerIP := ""
+	loadBalancerHostname := ""
+	state := "pending"
+	message := "Waiting for LoadBalancer address assignment"
+
+	// Check for LoadBalancer IP/Hostname in status
+	ingress, _, _ := unstructured.NestedSlice(resource.Object, "status", "loadBalancer", "ingress")
+	if len(ingress) > 0 {
+		if ing, ok := ingress[0].(map[string]interface{}); ok {
+			if ip, ok := ing["ip"].(string); ok && ip != "" {
+				loadBalancerIP = ip
+				state = "healthy"
+				message = "Ingress is active"
+			} else if hostname, ok := ing["hostname"].(string); ok && hostname != "" {
+				loadBalancerHostname = hostname
+				state = "healthy"
+				message = "Ingress is active"
+			}
+		}
+	}
+
+	return map[string]interface{}{
+		"loadBalancerIP":       loadBalancerIP,
+		"loadBalancerHostname": loadBalancerHostname,
+		"rulesCount":           rulesCount,
+		"state":                state,
+		"message":              message,
 	}
 }
 
@@ -552,6 +590,10 @@ func (rw *ResourceWatcher) hasStatusChanged(old, new map[string]interface{}) boo
 		return old["externalIP"] != new["externalIP"] ||
 			old["state"] != new["state"] ||
 			old["clusterIP"] != new["clusterIP"]
+	case "ingress":
+		return old["loadBalancerIP"] != new["loadBalancerIP"] ||
+			old["loadBalancerHostname"] != new["loadBalancerHostname"] ||
+			old["state"] != new["state"]
 	case "job":
 		return old["active"] != new["active"] ||
 			old["succeeded"] != new["succeeded"] ||

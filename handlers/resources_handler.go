@@ -939,6 +939,17 @@ func buildResourceSummary(r *models.Resource) map[string]interface{} {
 			summary["ports"] = len(r.Spec.Ports)
 		}
 
+	case models.ResourceTypeIngress:
+		summary["class"] = r.Spec.IngressClass
+		if len(r.Spec.IngressHosts) > 0 {
+			summary["hosts"] = r.Spec.IngressHosts
+		}
+		summary["rules"] = r.Spec.IngressRules
+		summary["paths"] = r.Spec.IngressPaths
+		if r.Spec.LoadBalancerIP != "" {
+			summary["loadBalancerIP"] = r.Spec.LoadBalancerIP
+		}
+
 	case models.ResourceTypeNode:
 		summary["cpu"] = r.Spec.NodeCapacity.CPU
 		summary["memory"] = r.Spec.NodeCapacity.Memory

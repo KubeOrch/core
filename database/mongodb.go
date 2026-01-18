@@ -15,11 +15,12 @@ import (
 )
 
 var (
-	Client           *mongo.Client
-	Database         *mongo.Database
-	UserColl         *mongo.Collection
-	WorkflowColl     *mongo.Collection
-	WorkflowRunColl  *mongo.Collection
+	Client              *mongo.Client
+	Database            *mongo.Database
+	UserColl            *mongo.Collection
+	WorkflowColl        *mongo.Collection
+	WorkflowRunColl     *mongo.Collection
+	WorkflowVersionColl *mongo.Collection
 )
 
 func Connect() error {
@@ -60,6 +61,7 @@ func Connect() error {
 	UserColl = Database.Collection("users")
 	WorkflowColl = Database.Collection("workflows")
 	WorkflowRunColl = Database.Collection("workflow_runs")
+	WorkflowVersionColl = Database.Collection("workflow_versions")
 
 	logrus.Info("MongoDB connection established")
 
@@ -93,7 +95,23 @@ func createIndexes() error {
 		return fmt.Errorf("failed to create email index: %v", err)
 	}
 
-	// Resource indexes will be created separately after database initialization
+	// Create indexes for workflow_versions collection
+	versionIndexes := []mongo.IndexModel{
+		{
+			// Unique compound index on workflow_id + version
+			Keys:    bson.D{{Key: "workflow_id", Value: 1}, {Key: "version", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		},
+		{
+			// Index for listing versions by workflow
+			Keys: bson.D{{Key: "workflow_id", Value: 1}, {Key: "created_at", Value: -1}},
+		},
+	}
+
+	_, err = WorkflowVersionColl.Indexes().CreateMany(ctx, versionIndexes)
+	if err != nil {
+		return fmt.Errorf("failed to create workflow version indexes: %v", err)
+	}
 
 	logrus.Info("Database indexes created successfully")
 	return nil
