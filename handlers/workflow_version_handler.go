@@ -4,34 +4,34 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/KubeOrch/core/models"
 	"github.com/KubeOrch/core/services"
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
+// getWorkflowFromContext retrieves the workflow set by WorkflowOwnershipMiddleware
+func getWorkflowFromContext(c *gin.Context) (*models.Workflow, primitive.ObjectID, bool) {
+	workflow, exists := c.Get("workflow")
+	if !exists {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Workflow not found in context"})
+		return nil, primitive.NilObjectID, false
+	}
+
+	ownerID, exists := c.Get("ownerID")
+	if !exists {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Owner ID not found in context"})
+		return nil, primitive.NilObjectID, false
+	}
+
+	return workflow.(*models.Workflow), ownerID.(primitive.ObjectID), true
+}
+
 // ListVersionsHandler lists all versions for a workflow with pagination
 func ListVersionsHandler(c *gin.Context) {
-	userID, ok := getUserIDFromContext(c)
+	workflow, _, ok := getWorkflowFromContext(c)
 	if !ok {
-		return
-	}
-
-	workflowID, err := primitive.ObjectIDFromHex(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid workflow ID"})
-		return
-	}
-
-	// Check ownership
-	workflow, err := services.GetWorkflowByID(workflowID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Workflow not found"})
-		return
-	}
-
-	if workflow.OwnerID != userID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
 		return
 	}
 
@@ -46,7 +46,7 @@ func ListVersionsHandler(c *gin.Context) {
 		limit = 10
 	}
 
-	response, err := services.GetVersions(workflowID, page, limit)
+	response, err := services.GetVersions(workflow.ID, page, limit)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to get workflow versions")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get versions"})
@@ -58,14 +58,8 @@ func ListVersionsHandler(c *gin.Context) {
 
 // GetVersionHandler retrieves a specific version by version number
 func GetVersionHandler(c *gin.Context) {
-	userID, ok := getUserIDFromContext(c)
+	workflow, _, ok := getWorkflowFromContext(c)
 	if !ok {
-		return
-	}
-
-	workflowID, err := primitive.ObjectIDFromHex(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid workflow ID"})
 		return
 	}
 
@@ -75,19 +69,7 @@ func GetVersionHandler(c *gin.Context) {
 		return
 	}
 
-	// Check ownership
-	workflow, err := services.GetWorkflowByID(workflowID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Workflow not found"})
-		return
-	}
-
-	if workflow.OwnerID != userID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
-		return
-	}
-
-	version, err := services.GetVersionByNumber(workflowID, versionNum)
+	version, err := services.GetVersionByNumber(workflow.ID, versionNum)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Version not found"})
 		return
@@ -98,26 +80,8 @@ func GetVersionHandler(c *gin.Context) {
 
 // CreateVersionHandler creates a new version manually
 func CreateVersionHandler(c *gin.Context) {
-	userID, ok := getUserIDFromContext(c)
+	workflow, userID, ok := getWorkflowFromContext(c)
 	if !ok {
-		return
-	}
-
-	workflowID, err := primitive.ObjectIDFromHex(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid workflow ID"})
-		return
-	}
-
-	// Check ownership
-	workflow, err := services.GetWorkflowByID(workflowID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Workflow not found"})
-		return
-	}
-
-	if workflow.OwnerID != userID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
 		return
 	}
 
@@ -133,7 +97,7 @@ func CreateVersionHandler(c *gin.Context) {
 	}
 
 	input := services.CreateVersionInput{
-		WorkflowID:  workflowID,
+		WorkflowID:  workflow.ID,
 		Nodes:       workflow.Nodes,
 		Edges:       workflow.Edges,
 		Description: request.Description,
@@ -158,32 +122,14 @@ func CreateVersionHandler(c *gin.Context) {
 
 // UpdateVersionHandler updates version metadata (name, tag, description)
 func UpdateVersionHandler(c *gin.Context) {
-	userID, ok := getUserIDFromContext(c)
+	workflow, _, ok := getWorkflowFromContext(c)
 	if !ok {
-		return
-	}
-
-	workflowID, err := primitive.ObjectIDFromHex(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid workflow ID"})
 		return
 	}
 
 	versionNum, err := strconv.Atoi(c.Param("version"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid version number"})
-		return
-	}
-
-	// Check ownership
-	workflow, err := services.GetWorkflowByID(workflowID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Workflow not found"})
-		return
-	}
-
-	if workflow.OwnerID != userID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
 		return
 	}
 
@@ -204,7 +150,7 @@ func UpdateVersionHandler(c *gin.Context) {
 		Description: request.Description,
 	}
 
-	version, err := services.UpdateVersionMetadata(workflowID, versionNum, input)
+	version, err := services.UpdateVersionMetadata(workflow.ID, versionNum, input)
 	if err != nil {
 		if err.Error() == "version not found" {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Version not found"})
@@ -223,14 +169,8 @@ func UpdateVersionHandler(c *gin.Context) {
 
 // RestoreVersionHandler restores a previous version
 func RestoreVersionHandler(c *gin.Context) {
-	userID, ok := getUserIDFromContext(c)
+	workflow, userID, ok := getWorkflowFromContext(c)
 	if !ok {
-		return
-	}
-
-	workflowID, err := primitive.ObjectIDFromHex(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid workflow ID"})
 		return
 	}
 
@@ -240,19 +180,7 @@ func RestoreVersionHandler(c *gin.Context) {
 		return
 	}
 
-	// Check ownership
-	workflow, err := services.GetWorkflowByID(workflowID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Workflow not found"})
-		return
-	}
-
-	if workflow.OwnerID != userID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
-		return
-	}
-
-	version, err := services.RestoreVersion(workflowID, versionNum, userID)
+	version, err := services.RestoreVersion(workflow.ID, versionNum, userID)
 	if err != nil {
 		if err.Error() == "version not found" {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Version not found"})
@@ -264,7 +192,7 @@ func RestoreVersionHandler(c *gin.Context) {
 	}
 
 	// Get the updated workflow to return
-	updatedWorkflow, err := services.GetWorkflowByID(workflowID)
+	updatedWorkflow, err := services.GetWorkflowByID(workflow.ID)
 	if err != nil {
 		logrus.WithError(err).Warn("Failed to get updated workflow after restore")
 	}
@@ -278,14 +206,8 @@ func RestoreVersionHandler(c *gin.Context) {
 
 // CompareVersionsHandler compares two versions and returns the differences
 func CompareVersionsHandler(c *gin.Context) {
-	userID, ok := getUserIDFromContext(c)
+	workflow, _, ok := getWorkflowFromContext(c)
 	if !ok {
-		return
-	}
-
-	workflowID, err := primitive.ObjectIDFromHex(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid workflow ID"})
 		return
 	}
 
@@ -301,19 +223,7 @@ func CompareVersionsHandler(c *gin.Context) {
 		return
 	}
 
-	// Check ownership
-	workflow, err := services.GetWorkflowByID(workflowID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Workflow not found"})
-		return
-	}
-
-	if workflow.OwnerID != userID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
-		return
-	}
-
-	diff, err := services.CompareVersions(workflowID, v1, v2)
+	diff, err := services.CompareVersions(workflow.ID, v1, v2)
 	if err != nil {
 		if err.Error() == "version not found" {
 			c.JSON(http.StatusNotFound, gin.H{"error": "One or both versions not found"})

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/KubeOrch/core/database"
@@ -386,7 +387,7 @@ func CompareVersions(workflowID primitive.ObjectID, v1, v2 int) (*models.Version
 	return diff, nil
 }
 
-// nodesEqual checks if two nodes are equal (basic comparison)
+// nodesEqual checks if two nodes are equal using deep comparison
 func nodesEqual(n1, n2 models.WorkflowNode) bool {
 	if n1.ID != n2.ID || n1.Type != n2.Type {
 		return false
@@ -394,9 +395,8 @@ func nodesEqual(n1, n2 models.WorkflowNode) bool {
 	if n1.Position.X != n2.Position.X || n1.Position.Y != n2.Position.Y {
 		return false
 	}
-	// Data comparison is complex, use simple length check for now
-	// A more thorough comparison would deep-compare the maps
-	return len(n1.Data) == len(n2.Data)
+	// Use deep equality for comparing the data maps to correctly detect changes
+	return reflect.DeepEqual(n1.Data, n2.Data)
 }
 
 // GetLatestVersion retrieves the latest version for a workflow

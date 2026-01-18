@@ -74,13 +74,17 @@ func SetupRouter() *gin.Engine {
 			workflows.POST("/:id/nodes/:nodeId/fix", handlers.ApplyNodeFixHandler)
 			// Real-time status streaming via SSE
 			workflows.GET("/:id/status/stream", handlers.StreamWorkflowStatusHandler)
-			// Version control routes
-			workflows.GET("/:id/versions", handlers.ListVersionsHandler)
-			workflows.GET("/:id/versions/:version", handlers.GetVersionHandler)
-			workflows.POST("/:id/versions", handlers.CreateVersionHandler)
-			workflows.PUT("/:id/versions/:version", handlers.UpdateVersionHandler)
-			workflows.POST("/:id/versions/:version/restore", handlers.RestoreVersionHandler)
-			workflows.GET("/:id/versions/compare", handlers.CompareVersionsHandler) // ?v1=X&v2=Y
+			// Version control routes (with ownership middleware)
+			versions := workflows.Group("/:id/versions")
+			versions.Use(middleware.WorkflowOwnershipMiddleware())
+			{
+				versions.GET("", handlers.ListVersionsHandler)
+				versions.GET("/compare", handlers.CompareVersionsHandler) // ?v1=X&v2=Y
+				versions.GET("/:version", handlers.GetVersionHandler)
+				versions.POST("", handlers.CreateVersionHandler)
+				versions.PUT("/:version", handlers.UpdateVersionHandler)
+				versions.POST("/:version/restore", handlers.RestoreVersionHandler)
+			}
 		}
 
 		// Template routes
