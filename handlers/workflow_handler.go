@@ -455,18 +455,28 @@ func RunWorkflowHandler(c *gin.Context) {
 
 	// Create a version snapshot before running
 	versionDescription := "Snapshot for run at " + time.Now().Format(time.RFC3339)
-	if err := services.SaveWorkflowVersion(workflowID, workflow.Nodes, workflow.Edges, versionDescription, userID); err != nil {
-		logrus.Errorf("Failed to create workflow version snapshot: %v", err)
+	version, versionErr := services.SaveWorkflowVersion(workflowID, workflow.Nodes, workflow.Edges, versionDescription, userID)
+	if versionErr != nil {
+		logrus.Errorf("Failed to create workflow version snapshot: %v", versionErr)
 		// Continue with run even if version snapshot fails
 	}
 
 	// Execute workflow using the new executor
 	executor := services.NewWorkflowExecutor()
 	workflowRun, err := executor.ExecuteWorkflow(c.Request.Context(), workflowID, userID)
+
+	// Update version with run info (regardless of success/failure)
+	if version != nil && workflowRun != nil {
+		runStatus := string(workflowRun.Status)
+		if updateErr := services.UpdateVersionRunStatus(version.ID, workflowRun.ID, runStatus); updateErr != nil {
+			logrus.Errorf("Failed to update version run status: %v", updateErr)
+		}
+	}
+
 	if err != nil {
 		logrus.Errorf("Failed to execute workflow: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to execute workflow",
+			"error":   "Failed to execute workflow",
 			"details": err.Error(),
 		})
 		return
@@ -474,9 +484,9 @@ func RunWorkflowHandler(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Workflow execution started",
-		"run_id": workflowRun.ID,
-		"status": workflowRun.Status,
-		"logs": workflowRun.Logs,
+		"run_id":  workflowRun.ID,
+		"status":  workflowRun.Status,
+		"logs":    workflowRun.Logs,
 	})
 }
 

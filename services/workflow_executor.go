@@ -131,6 +131,14 @@ func (e *WorkflowExecutor) ExecuteWorkflow(ctx context.Context, workflowID primi
 			}
 			// Store service data for any downstream nodes
 			executedNodeData[node.ID] = node.Data
+		case "ingress":
+			if err := e.executeIngressNodeWithConnections(ctx, manifestApplier, node, workflowRun, connectedData); err != nil {
+				e.updateWorkflowRunStatus(workflowRun, models.WorkflowRunStatusFailed, err.Error())
+				e.updateWorkflowStats(workflowID, false)
+				return workflowRun, fmt.Errorf("failed to execute node %s: %w", node.ID, err)
+			}
+			// Store ingress data for any downstream nodes
+			executedNodeData[node.ID] = node.Data
 		}
 	}
 	completedAt := time.Now()
@@ -505,6 +513,316 @@ func (e *WorkflowExecutor) executeServiceNodeWithConnections(ctx context.Context
 	}
 
 	return nil
+}
+
+// executeIngressNodeWithConnections executes an ingress node with data from connected nodes
+func (e *WorkflowExecutor) executeIngressNodeWithConnections(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun, connectedData []map[string]interface{}) error {
+	e.logger.WithFields(logrus.Fields{
+		"node_id":         node.ID,
+		"node_type":       node.Type,
+		"connected_nodes": len(connectedData),
+	}).Info("Executing ingress node with connections")
+
+	// Add log entry
+	run.Logs = append(run.Logs, fmt.Sprintf("[%s] Executing ingress node: %s (connected to %d source nodes)",
+		time.Now().Format("15:04:05"), node.ID, len(connectedData)))
+
+	// Extract ingress data from node
+	ingressData := node.Data
+	if ingressData == nil {
+		ingressData = make(map[string]interface{})
+	}
+
+	// Apply connected service data to ingress
+	// If connected to a service, auto-populate serviceName and servicePort if not set
+	for _, sourceData := range connectedData {
+		// If serviceName is not set or empty, use connected service's name
+		existingServiceName, _ := ingressData["serviceName"].(string)
+		if existingServiceName == "" {
+			if serviceName, ok := sourceData["name"].(string); ok {
+				ingressData["serviceName"] = serviceName
+				run.Logs = append(run.Logs, fmt.Sprintf("[%s] Auto-linked ingress to service: %s",
+					time.Now().Format("15:04:05"), serviceName))
+			}
+		}
+
+		// If servicePort is not set, use connected service's port
+		if _, hasServicePort := ingressData["servicePort"]; !hasServicePort {
+			if port, ok := sourceData["port"]; ok {
+				ingressData["servicePort"] = port
+				run.Logs = append(run.Logs, fmt.Sprintf("[%s] Auto-set servicePort from service: %v",
+					time.Now().Format("15:04:05"), port))
+			}
+		}
+
+		// Inherit namespace from service if not set
+		if _, hasNamespace := ingressData["namespace"]; !hasNamespace {
+			if namespace, ok := sourceData["namespace"].(string); ok {
+				ingressData["namespace"] = namespace
+			}
+		}
+	}
+
+	// Prepare template values for ingress
+	templateValues := e.prepareIngressTemplateValues(node, ingressData)
+
+	// Debug: Log template values
+	e.logger.WithFields(logrus.Fields{
+		"node_id":         node.ID,
+		"template_values": templateValues,
+		"ingress_data":    ingressData,
+	}).Info("Prepared ingress template values")
+
+	// Get template ID (default to core/ingress)
+	templateID := "core/ingress"
+	if tid, ok := ingressData["templateId"].(string); ok {
+		templateID = tid
+	}
+
+	// Validate parameters based on resource type
+	validationResult, err := e.validator.ValidateResourceParams(templateID, templateValues)
+	if err != nil {
+		return fmt.Errorf("validation error: %w", err)
+	}
+	if !validationResult.Valid {
+		return fmt.Errorf("validation failed: %v", validationResult.Errors)
+	}
+
+	// Render template to YAML
+	renderedYAML, err := e.templateEngine.RenderTemplate(templateID, templateValues)
+	if err != nil {
+		return fmt.Errorf("failed to render template: %w", err)
+	}
+
+	// Debug: Log rendered YAML
+	e.logger.WithFields(logrus.Fields{
+		"node_id":       node.ID,
+		"rendered_yaml": renderedYAML,
+	}).Info("Rendered ingress YAML")
+
+	// Apply the rendered YAML directly to Kubernetes
+	result, err := manifestApplier.ApplyYAML(ctx, renderedYAML)
+	if err != nil {
+		run.NodeStates[node.ID] = map[string]interface{}{
+			"status": "failed",
+			"error":  err.Error(),
+		}
+		e.logger.WithError(err).WithField("rendered_yaml", renderedYAML).Error("Failed to apply ingress manifest")
+		return fmt.Errorf("failed to apply manifest: %w", err)
+	}
+
+	// Update node state
+	run.NodeStates[node.ID] = map[string]interface{}{
+		"status":        "completed",
+		"result":        result,
+		"timestamp":     time.Now().Unix(),
+		"connectedFrom": len(connectedData),
+	}
+
+	// Log the operation performed
+	if len(result.AppliedResources) > 0 {
+		resource := result.AppliedResources[0]
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] Ingress %s/%s: %s",
+			time.Now().Format("15:04:05"), resource.Namespace, resource.Name, resource.Operation))
+
+		// Fetch and save ingress status to workflow node
+		ingressName := resource.Name
+		namespace := resource.Namespace
+		if namespace == "" {
+			namespace = "default"
+		}
+
+		ingressStatus, err := manifestApplier.GetIngressStatus(ctx, ingressName, namespace)
+		if err != nil {
+			e.logger.WithError(err).Warn("Failed to get ingress status")
+		} else {
+			// Update workflow node data with status
+			if err := e.updateIngressNodeStatus(run.WorkflowID, node.ID, ingressStatus); err != nil {
+				e.logger.WithError(err).Warn("Failed to update ingress node status in workflow")
+			} else {
+				run.Logs = append(run.Logs, fmt.Sprintf("[%s] Ingress status: %s",
+					time.Now().Format("15:04:05"), ingressStatus.State))
+			}
+
+			// Start watching the ingress for real-time status updates (LoadBalancer IP assignment)
+			watcherManager := GetResourceWatcherManager()
+			restConfig := manifestApplier.GetRestConfig()
+
+			err := watcherManager.StartWatcher(run.WorkflowID, node.ID, ingressName, namespace, "ingress", restConfig)
+			if err != nil {
+				e.logger.WithError(err).Warn("Failed to start ingress watcher (falling back to periodic polling)")
+			} else {
+				e.logger.WithFields(logrus.Fields{
+					"ingress_name": ingressName,
+					"namespace":    namespace,
+					"node_id":      node.ID,
+				}).Info("Started watching ingress for LoadBalancer IP assignment")
+				run.Logs = append(run.Logs, fmt.Sprintf("[%s] Watching ingress for LoadBalancer IP assignment",
+					time.Now().Format("15:04:05")))
+			}
+		}
+	}
+
+	// Add to output
+	run.Output[node.ID] = result
+
+	// Add log entries for each applied resource
+	for _, resource := range result.AppliedResources {
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] %s %s/%s: %s",
+			time.Now().Format("15:04:05"), resource.Kind, resource.Namespace, resource.Name, resource.Operation))
+	}
+
+	// Save updated workflow run
+	if err := e.saveWorkflowRun(run); err != nil {
+		e.logger.WithError(err).Error("Failed to save updated workflow run")
+	}
+
+	return nil
+}
+
+// prepareIngressTemplateValues prepares values for ingress template rendering
+func (e *WorkflowExecutor) prepareIngressTemplateValues(node *models.WorkflowNode, ingressData map[string]interface{}) map[string]interface{} {
+	values := make(map[string]interface{})
+
+	if name, ok := ingressData["name"].(string); ok {
+		values["Name"] = name
+	} else {
+		// Fallback to node ID if name not provided
+		values["Name"] = node.ID
+	}
+
+	// Copy ingress parameters
+	if host, ok := ingressData["host"].(string); ok {
+		values["Host"] = host
+	}
+
+	// Handle paths array (multi-path support)
+	// Convert paths from MongoDB BSON types (primitive.A) to []interface{}
+	var pathsSlice []interface{}
+	if rawPaths, exists := ingressData["paths"]; exists {
+		e.logger.WithFields(logrus.Fields{
+			"node_id":     node.ID,
+			"paths_type":  fmt.Sprintf("%T", rawPaths),
+		}).Info("Debug: Raw paths data from ingressData")
+
+		// Handle both primitive.A (MongoDB BSON) and []interface{} types
+		switch v := rawPaths.(type) {
+		case primitive.A:
+			pathsSlice = []interface{}(v)
+			e.logger.WithField("node_id", node.ID).Info("Debug: Converted primitive.A to []interface{}")
+		case []interface{}:
+			pathsSlice = v
+			e.logger.WithField("node_id", node.ID).Info("Debug: Using []interface{} directly")
+		}
+	}
+
+	if len(pathsSlice) > 0 {
+		e.logger.WithFields(logrus.Fields{
+			"node_id":     node.ID,
+			"paths_count": len(pathsSlice),
+		}).Info("Debug: Processing paths array")
+
+		var templatePaths []map[string]interface{}
+		for i, p := range pathsSlice {
+			e.logger.WithFields(logrus.Fields{
+				"node_id":       node.ID,
+				"path_index":    i,
+				"path_type":     fmt.Sprintf("%T", p),
+			}).Info("Debug: Processing path entry")
+
+			// Convert path data from primitive.M to map[string]interface{} if needed
+			var pathData map[string]interface{}
+			switch pd := p.(type) {
+			case primitive.M:
+				pathData = map[string]interface{}(pd)
+			case map[string]interface{}:
+				pathData = pd
+			default:
+				e.logger.WithFields(logrus.Fields{
+					"node_id":    node.ID,
+					"path_index": i,
+					"path_type":  fmt.Sprintf("%T", p),
+				}).Warn("Debug: Unable to convert path data to map")
+				continue
+			}
+
+			if pathData != nil {
+				templatePath := make(map[string]interface{})
+
+				if path, ok := pathData["path"].(string); ok {
+					templatePath["Path"] = path
+				} else {
+					templatePath["Path"] = "/"
+				}
+
+				if pathType, ok := pathData["pathType"].(string); ok {
+					templatePath["PathType"] = pathType
+				} else {
+					templatePath["PathType"] = "Prefix"
+				}
+
+				if serviceName, ok := pathData["serviceName"].(string); ok {
+					templatePath["ServiceName"] = serviceName
+				}
+
+				if servicePort, ok := pathData["servicePort"]; ok {
+					templatePath["ServicePort"] = servicePort
+				}
+
+				templatePaths = append(templatePaths, templatePath)
+			}
+		}
+		if len(templatePaths) > 0 {
+			values["Paths"] = templatePaths
+		}
+	}
+
+	// Backward compatibility: support old single path fields if paths array not provided
+	if _, hasPaths := values["Paths"]; !hasPaths {
+		if path, ok := ingressData["path"].(string); ok {
+			values["Path"] = path
+		}
+		if pathType, ok := ingressData["pathType"].(string); ok {
+			values["PathType"] = pathType
+		}
+		if serviceName, ok := ingressData["serviceName"].(string); ok {
+			values["ServiceName"] = serviceName
+		}
+		if servicePort, ok := ingressData["servicePort"]; ok {
+			values["ServicePort"] = servicePort
+		}
+	}
+
+	if ingressClassName, ok := ingressData["ingressClassName"].(string); ok {
+		values["IngressClassName"] = ingressClassName
+	}
+
+	// TLS settings
+	if tlsEnabled, ok := ingressData["tlsEnabled"].(bool); ok {
+		values["TLSEnabled"] = tlsEnabled
+	}
+	if tlsSecretName, ok := ingressData["tlsSecretName"].(string); ok {
+		values["TLSSecretName"] = tlsSecretName
+	}
+	if tlsHosts, ok := ingressData["tlsHosts"].([]interface{}); ok {
+		values["TLSHosts"] = tlsHosts
+	}
+
+	// Labels and annotations
+	if labels, ok := ingressData["labels"].(map[string]interface{}); ok {
+		values["Labels"] = labels
+	}
+	if annotations, ok := ingressData["annotations"].(map[string]interface{}); ok {
+		values["Annotations"] = annotations
+	}
+
+	// Add metadata
+	values["Namespace"] = "default"
+	if namespace, ok := ingressData["namespace"].(string); ok {
+		values["Namespace"] = namespace
+	}
+
+	return values
 }
 
 // prepareServiceTemplateValues prepares values for service template rendering
@@ -897,6 +1215,78 @@ func (e *WorkflowExecutor) updateNodeStatus(workflowID primitive.ObjectID, nodeI
 	return nil
 }
 
+// updateIngressNodeStatus updates a workflow node's _status field with ingress status
+func (e *WorkflowExecutor) updateIngressNodeStatus(workflowID primitive.ObjectID, nodeID string, status *applier.IngressStatus) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Get the current workflow
+	var workflow models.Workflow
+	filter := bson.M{"_id": workflowID}
+	err := database.WorkflowColl.FindOne(ctx, filter).Decode(&workflow)
+	if err != nil {
+		return fmt.Errorf("failed to get workflow: %w", err)
+	}
+
+	// Find and update the node with status
+	for i, node := range workflow.Nodes {
+		if node.ID == nodeID {
+			if workflow.Nodes[i].Data == nil {
+				workflow.Nodes[i].Data = make(map[string]interface{})
+			}
+			workflow.Nodes[i].Data["_status"] = map[string]interface{}{
+				"state":                status.State,
+				"loadBalancerIP":       status.LoadBalancerIP,
+				"loadBalancerHostname": status.LoadBalancerHostname,
+				"rulesCount":           status.RulesCount,
+				"message":              status.Message,
+			}
+			break
+		}
+	}
+
+	// Update the workflow with new nodes
+	update := bson.M{
+		"$set": bson.M{
+			"nodes":      workflow.Nodes,
+			"updated_at": time.Now(),
+		},
+	}
+
+	_, err = database.WorkflowColl.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("failed to update workflow: %w", err)
+	}
+
+	e.logger.WithFields(logrus.Fields{
+		"workflow_id":      workflowID.Hex(),
+		"node_id":          nodeID,
+		"state":            status.State,
+		"load_balancer_ip": status.LoadBalancerIP,
+	}).Info("Updated ingress node status in workflow")
+
+	// Publish status update event to SSE subscribers
+	broadcaster := GetSSEBroadcaster()
+	broadcaster.Publish(StreamEvent{
+		Type:      "workflow",
+		StreamKey: fmt.Sprintf("workflow:%s", workflowID.Hex()),
+		EventType: "node_update",
+		Data: map[string]interface{}{
+			"node_id": nodeID,
+			"type":    "ingress",
+			"status": map[string]interface{}{
+				"state":                status.State,
+				"loadBalancerIP":       status.LoadBalancerIP,
+				"loadBalancerHostname": status.LoadBalancerHostname,
+				"rulesCount":           status.RulesCount,
+				"message":              status.Message,
+			},
+		},
+	})
+
+	return nil
+}
+
 // SyncWorkflowStatuses updates the status of all workflow nodes based on current K8s state
 func (e *WorkflowExecutor) SyncWorkflowStatuses(ctx context.Context, userID primitive.ObjectID, cluster *models.Cluster) error {
 	// Get all published workflows for this user and cluster (ClusterID in workflow is the cluster Name)
@@ -973,6 +1363,19 @@ func (e *WorkflowExecutor) SyncWorkflowStatuses(ctx context.Context, userID prim
 					"message":    status.Message,
 				}
 				updated = true
+			} else if nodeType == "core/ingress" {
+				status, err := manifestApplier.GetIngressStatus(ctx, name, namespace)
+				if err != nil {
+					continue // Resource might not exist
+				}
+				workflow.Nodes[i].Data["_status"] = map[string]interface{}{
+					"state":                status.State,
+					"loadBalancerIP":       status.LoadBalancerIP,
+					"loadBalancerHostname": status.LoadBalancerHostname,
+					"rulesCount":           status.RulesCount,
+					"message":              status.Message,
+				}
+				updated = true
 			}
 		}
 
@@ -1044,8 +1447,17 @@ func (e *WorkflowExecutor) CleanupWorkflowResources(ctx context.Context, workflo
 
 	var cleanupErrors []string
 
-	// Delete resources in reverse order (services first, then deployments)
-	// This ensures services are removed before their backend deployments
+	// Delete resources in reverse order (ingress first, then services, then deployments)
+	// This ensures ingress is removed before services, and services before deployments
+	for _, node := range workflow.Nodes {
+		if node.Type == "ingress" {
+			if err := e.deleteIngressNode(ctx, manifestApplier, &node); err != nil {
+				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete ingress")
+				cleanupErrors = append(cleanupErrors, err.Error())
+			}
+		}
+	}
+
 	for _, node := range workflow.Nodes {
 		if node.Type == "service" {
 			if err := e.deleteServiceNode(ctx, manifestApplier, &node); err != nil {
@@ -1126,6 +1538,33 @@ func (e *WorkflowExecutor) deleteServiceNode(ctx context.Context, manifestApplie
 	return manifestApplier.DeleteService(ctx, name, namespace)
 }
 
+// deleteIngressNode deletes a Kubernetes Ingress created by an ingress node
+func (e *WorkflowExecutor) deleteIngressNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode) error {
+	if node.Data == nil {
+		return nil
+	}
+
+	// Get ingress name from node data
+	name, ok := node.Data["name"].(string)
+	if !ok || name == "" {
+		name = node.ID // Fallback to node ID
+	}
+
+	// Get namespace from node data
+	namespace := "default"
+	if ns, ok := node.Data["namespace"].(string); ok && ns != "" {
+		namespace = ns
+	}
+
+	e.logger.WithFields(logrus.Fields{
+		"ingress":   name,
+		"namespace": namespace,
+		"node_id":   node.ID,
+	}).Info("Deleting ingress from workflow cleanup")
+
+	return manifestApplier.DeleteIngress(ctx, name, namespace)
+}
+
 // CleanupDeletedNodes deletes Kubernetes resources for specific nodes that were removed from a workflow
 func (e *WorkflowExecutor) CleanupDeletedNodes(ctx context.Context, workflow *models.Workflow, deletedNodes []models.WorkflowNode, userID primitive.ObjectID) error {
 	if len(deletedNodes) == 0 {
@@ -1157,7 +1596,16 @@ func (e *WorkflowExecutor) CleanupDeletedNodes(ctx context.Context, workflow *mo
 
 	var cleanupErrors []string
 
-	// Delete services first (reverse order), then deployments
+	// Delete in reverse order: ingress first, then services, then deployments
+	for _, node := range deletedNodes {
+		if node.Type == "ingress" {
+			if err := e.deleteIngressNode(ctx, manifestApplier, &node); err != nil {
+				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete ingress")
+				cleanupErrors = append(cleanupErrors, err.Error())
+			}
+		}
+	}
+
 	for _, node := range deletedNodes {
 		if node.Type == "service" {
 			if err := e.deleteServiceNode(ctx, manifestApplier, &node); err != nil {

@@ -47,7 +47,8 @@ type WorkflowEdge struct {
 	Type   string `json:"type" bson:"type"`     // edge type
 }
 
-// WorkflowVersion represents a version of the workflow
+// WorkflowVersion represents a version of the workflow (legacy embedded format)
+// Deprecated: Use WorkflowVersionDoc for new versions stored in separate collection
 type WorkflowVersion struct {
 	Version     int                `json:"version" bson:"version"`
 	Nodes       []WorkflowNode     `json:"nodes" bson:"nodes"`
@@ -55,6 +56,50 @@ type WorkflowVersion struct {
 	Description string             `json:"description" bson:"description"`
 	CreatedAt   time.Time          `json:"created_at" bson:"created_at"`
 	CreatedBy   primitive.ObjectID `json:"created_by" bson:"created_by"`
+}
+
+// WorkflowVersionDoc represents a version stored in the workflow_versions collection
+type WorkflowVersionDoc struct {
+	ID           primitive.ObjectID  `json:"id" bson:"_id,omitempty"`
+	WorkflowID   primitive.ObjectID  `json:"workflow_id" bson:"workflow_id"`
+	Version      int                 `json:"version" bson:"version"`
+	Nodes        []WorkflowNode      `json:"nodes" bson:"nodes"`
+	Edges        []WorkflowEdge      `json:"edges" bson:"edges"`
+	Name         string              `json:"name,omitempty" bson:"name,omitempty"`
+	Tag          string              `json:"tag,omitempty" bson:"tag,omitempty"`
+	Description  string              `json:"description" bson:"description"`
+	CreatedAt    time.Time           `json:"created_at" bson:"created_at"`
+	CreatedBy    primitive.ObjectID  `json:"created_by" bson:"created_by"`
+	RestoredFrom *int                `json:"restored_from,omitempty" bson:"restored_from,omitempty"`
+	IsAutomatic  bool                `json:"is_automatic" bson:"is_automatic"`
+	RunID        *primitive.ObjectID `json:"run_id,omitempty" bson:"run_id,omitempty"`
+	RunStatus    string              `json:"run_status,omitempty" bson:"run_status,omitempty"` // running, completed, failed
+}
+
+// VersionDiff represents the difference between two workflow versions
+type VersionDiff struct {
+	FromVersion   int        `json:"from_version"`
+	ToVersion     int        `json:"to_version"`
+	AddedNodes    []NodeDiff `json:"added_nodes"`
+	RemovedNodes  []NodeDiff `json:"removed_nodes"`
+	ModifiedNodes []NodeDiff `json:"modified_nodes"`
+	AddedEdges    []EdgeDiff `json:"added_edges"`
+	RemovedEdges  []EdgeDiff `json:"removed_edges"`
+}
+
+// NodeDiff represents a node change in a version diff
+type NodeDiff struct {
+	NodeID   string                 `json:"node_id"`
+	Type     string                 `json:"type"`
+	OldData  map[string]interface{} `json:"old_data,omitempty"`
+	NewData  map[string]interface{} `json:"new_data,omitempty"`
+}
+
+// EdgeDiff represents an edge change in a version diff
+type EdgeDiff struct {
+	EdgeID string `json:"edge_id"`
+	Source string `json:"source"`
+	Target string `json:"target"`
 }
 
 // Workflow represents a complete workflow

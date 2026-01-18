@@ -107,40 +107,18 @@ func UpdateWorkflow(id primitive.ObjectID, updates bson.M) (*models.Workflow, er
 }
 
 // SaveWorkflowVersion saves the current state as a new version
-func SaveWorkflowVersion(id primitive.ObjectID, nodes []models.WorkflowNode, edges []models.WorkflowEdge, description string, userID primitive.ObjectID) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Get current workflow to determine next version number
-	workflow, err := GetWorkflowByID(id)
-	if err != nil {
-		return err
-	}
-
-	newVersion := models.WorkflowVersion{
-		Version:     workflow.CurrentVersion + 1,
+// This now uses the new separate collection for versions
+func SaveWorkflowVersion(id primitive.ObjectID, nodes []models.WorkflowNode, edges []models.WorkflowEdge, description string, userID primitive.ObjectID) (*models.WorkflowVersionDoc, error) {
+	input := CreateVersionInput{
+		WorkflowID:  id,
 		Nodes:       nodes,
 		Edges:       edges,
 		Description: description,
-		CreatedAt:   time.Now(),
-		CreatedBy:   userID,
+		UserID:      userID,
+		IsAutomatic: true, // Called from RunWorkflow, so it's automatic
 	}
 
-	filter := bson.M{"_id": id}
-	update := bson.M{
-		"$set": bson.M{
-			"nodes":           nodes,
-			"edges":           edges,
-			"current_version": newVersion.Version,
-			"updated_at":      time.Now(),
-		},
-		"$push": bson.M{
-			"versions": newVersion,
-		},
-	}
-
-	_, err = database.WorkflowColl.UpdateOne(ctx, filter, update)
-	return err
+	return CreateVersion(input)
 }
 
 // ListWorkflows lists all workflows for a user
