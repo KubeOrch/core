@@ -1156,7 +1156,7 @@ func (e *WorkflowExecutor) executeSecretNode(ctx context.Context, manifestApplie
 	}
 
 	// If no runtime secrets provided, check if secret already exists
-	if secretValues == nil || len(secretValues) == 0 {
+	if len(secretValues) == 0 {
 		secretExists, err := manifestApplier.CheckSecretExists(ctx, secretName, namespace)
 		if err != nil {
 			e.logger.WithError(err).Warn("Failed to check if secret exists")
