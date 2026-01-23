@@ -30,6 +30,7 @@ type ResourceWatcher struct {
 	running       bool
 	logger        *logrus.Entry
 	lastStatus    map[string]interface{}
+	resourceID    *primitive.ObjectID // Optional: for resource-level streaming (resource detail page)
 }
 
 // ResourceWatcherConfig contains configuration for creating a resource watcher
@@ -40,6 +41,7 @@ type ResourceWatcherConfig struct {
 	Namespace    string
 	ResourceType string // "deployment", "service", "statefulset", "daemonset", "job", "cronjob", "ingress", etc.
 	RestConfig   *rest.Config
+	ResourceID   *primitive.ObjectID // Optional: if set, also broadcasts to resource:<id> stream
 }
 
 // GVR mappings for common resource types
@@ -86,6 +88,7 @@ func NewResourceWatcher(config ResourceWatcherConfig) (*ResourceWatcher, error) 
 		dynamicClient: dynamicClient,
 		stopChan:      make(chan struct{}),
 		running:       false,
+		resourceID:    config.ResourceID,
 		logger: logrus.WithFields(logrus.Fields{
 			"component":     "resource-watcher",
 			"workflow_id":   config.WorkflowID.Hex(),
@@ -638,6 +641,7 @@ func (rw *ResourceWatcher) updateWorkflowStatus(status map[string]interface{}) e
 func (rw *ResourceWatcher) broadcastStatusUpdate(status map[string]interface{}) {
 	broadcaster := GetSSEBroadcaster()
 
+	// Broadcast to workflow stream (for workflow page)
 	broadcaster.Publish(StreamEvent{
 		Type:      "workflow",
 		StreamKey: fmt.Sprintf("workflow:%s", rw.workflowID.Hex()),
@@ -650,5 +654,21 @@ func (rw *ResourceWatcher) broadcastStatusUpdate(status map[string]interface{}) 
 		},
 	})
 
-	rw.logger.Debug("Broadcasted status update to SSE subscribers")
+	// Also broadcast to resource stream if resourceID is set (for resource detail page)
+	if rw.resourceID != nil {
+		broadcaster.Publish(StreamEvent{
+			Type:      "resource",
+			StreamKey: fmt.Sprintf("resource:%s", rw.resourceID.Hex()),
+			EventType: "status_update",
+			Timestamp: time.Now(),
+			Data: map[string]interface{}{
+				"resource_id": rw.resourceID.Hex(),
+				"type":        rw.resourceType,
+				"status":      status,
+			},
+		})
+		rw.logger.Debug("Broadcasted status update to resource stream")
+	}
+
+	rw.logger.Debug("Broadcasted status update to workflow stream")
 }

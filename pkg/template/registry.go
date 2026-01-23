@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 )
 
@@ -73,24 +74,30 @@ func NewRegistry(templatesDir string) *Registry {
 
 // LoadTemplates loads all template metadata from the templates directory
 func (r *Registry) LoadTemplates() error {
+	logrus.Infof("Loading templates from directory: %s", r.templatesDir)
+
 	// Walk through templates directory
 	err := filepath.Walk(r.templatesDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			logrus.Errorf("Error walking path %s: %v", path, err)
 			return err
 		}
 
 		// Look for metadata.yaml files
 		if !info.IsDir() && info.Name() == "metadata.yaml" {
+			logrus.Debugf("Found metadata file: %s", path)
 			metadata, err := r.loadMetadataFile(path)
 			if err != nil {
 				return fmt.Errorf("failed to load metadata from %s: %w", path, err)
 			}
 			r.templates[metadata.ID] = metadata
+			logrus.Infof("Loaded template: %s (%s)", metadata.DisplayName, metadata.ID)
 		}
 
 		return nil
 	})
 
+	logrus.Infof("Loaded %d templates total", len(r.templates))
 	return err
 }
 
