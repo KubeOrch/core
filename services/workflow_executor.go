@@ -1091,7 +1091,7 @@ func (e *WorkflowExecutor) executeConfigMapNode(ctx context.Context, manifestApp
 			time.Now().Format("15:04:05"), resource.Namespace, resource.Name, resource.Operation))
 
 		// Update workflow node data with status
-		if err := e.updateConfigMapNodeStatus(run.WorkflowID, node.ID, "created", "ConfigMap created successfully"); err != nil {
+		if err := e.updateResourceNodeStatus(run.WorkflowID, node.ID, "configmap", "created", "ConfigMap created successfully", nil, nil); err != nil {
 			e.logger.WithError(err).Warn("Failed to update configmap node status in workflow")
 		}
 	}
@@ -1173,7 +1173,9 @@ func (e *WorkflowExecutor) executeSecretNode(ctx context.Context, manifestApplie
 				"message":   "Secret exists",
 			}
 
-			if err := e.updateSecretNodeStatus(run.WorkflowID, node.ID, "created", "Secret exists in Kubernetes", true); err != nil {
+			if err := e.updateResourceNodeStatus(run.WorkflowID, node.ID, "secret", "created", "Secret exists in Kubernetes",
+				map[string]interface{}{"_secretCreated": true},
+				map[string]interface{}{"secretCreated": true}); err != nil {
 				e.logger.WithError(err).Warn("Failed to update secret node status in workflow")
 			}
 		} else {
@@ -1186,7 +1188,9 @@ func (e *WorkflowExecutor) executeSecretNode(ctx context.Context, manifestApplie
 				"message":   "Secret not found - provide values in UI",
 			}
 
-			if err := e.updateSecretNodeStatus(run.WorkflowID, node.ID, "pending", "Secret not created - no values provided", false); err != nil {
+			if err := e.updateResourceNodeStatus(run.WorkflowID, node.ID, "secret", "pending", "Secret not created - no values provided",
+				map[string]interface{}{"_secretCreated": false},
+				map[string]interface{}{"secretCreated": false}); err != nil {
 				e.logger.WithError(err).Warn("Failed to update secret node status in workflow")
 			}
 		}
@@ -1252,7 +1256,9 @@ func (e *WorkflowExecutor) executeSecretNode(ctx context.Context, manifestApplie
 	e.broadcastSecretNodeUpdate(run.WorkflowID, node.ID, "created", fmt.Sprintf("Secret %s successfully", operation))
 
 	// Update workflow node data with status
-	if err := e.updateSecretNodeStatus(run.WorkflowID, node.ID, "created", fmt.Sprintf("Secret %s successfully", operation), true); err != nil {
+	if err := e.updateResourceNodeStatus(run.WorkflowID, node.ID, "secret", "created", fmt.Sprintf("Secret %s successfully", operation),
+		map[string]interface{}{"_secretCreated": true},
+		map[string]interface{}{"secretCreated": true}); err != nil {
 		e.logger.WithError(err).Warn("Failed to update secret node status in workflow")
 	}
 
@@ -1367,8 +1373,17 @@ func (e *WorkflowExecutor) prepareConfigMapTemplateValues(node *models.WorkflowN
 	return values
 }
 
-// updateConfigMapNodeStatus updates a workflow node's _status field with configmap status
-func (e *WorkflowExecutor) updateConfigMapNodeStatus(workflowID primitive.ObjectID, nodeID string, state string, message string) error {
+// updateResourceNodeStatus updates a workflow node's _status field and broadcasts via SSE.
+// This is a generic function that handles status updates for resource nodes (configmap, secret, etc.)
+// Parameters:
+//   - workflowID: the workflow containing the node
+//   - nodeID: the node to update
+//   - nodeType: type of node (e.g., "configmap", "secret")
+//   - state: status state (e.g., "created", "pending", "error")
+//   - message: human-readable status message
+//   - extraNodeData: additional fields to set on the node's data (e.g., "_secretCreated": true)
+//   - extraSSEData: additional fields to include in the SSE status payload
+func (e *WorkflowExecutor) updateResourceNodeStatus(workflowID primitive.ObjectID, nodeID string, nodeType string, state string, message string, extraNodeData map[string]interface{}, extraSSEData map[string]interface{}) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -1390,6 +1405,10 @@ func (e *WorkflowExecutor) updateConfigMapNodeStatus(workflowID primitive.Object
 				"state":   state,
 				"message": message,
 			}
+			// Apply any extra node data fields
+			for k, v := range extraNodeData {
+				workflow.Nodes[i].Data[k] = v
+			}
 			break
 		}
 	}
@@ -1407,64 +1426,14 @@ func (e *WorkflowExecutor) updateConfigMapNodeStatus(workflowID primitive.Object
 		return fmt.Errorf("failed to update workflow: %w", err)
 	}
 
-	// Publish status update event to SSE subscribers
-	broadcaster := GetSSEBroadcaster()
-	broadcaster.Publish(StreamEvent{
-		Type:      "workflow",
-		StreamKey: fmt.Sprintf("workflow:%s", workflowID.Hex()),
-		EventType: "node_update",
-		Data: map[string]interface{}{
-			"node_id": nodeID,
-			"type":    "configmap",
-			"status": map[string]interface{}{
-				"state":   state,
-				"message": message,
-			},
-		},
-	})
-
-	return nil
-}
-
-// updateSecretNodeStatus updates a workflow node's _status field with secret status
-func (e *WorkflowExecutor) updateSecretNodeStatus(workflowID primitive.ObjectID, nodeID string, state string, message string, secretCreated bool) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Get the current workflow
-	var workflow models.Workflow
-	filter := bson.M{"_id": workflowID}
-	err := database.WorkflowColl.FindOne(ctx, filter).Decode(&workflow)
-	if err != nil {
-		return fmt.Errorf("failed to get workflow: %w", err)
+	// Build SSE status payload
+	sseStatus := map[string]interface{}{
+		"state":   state,
+		"message": message,
 	}
-
-	// Find and update the node with status
-	for i, node := range workflow.Nodes {
-		if node.ID == nodeID {
-			if workflow.Nodes[i].Data == nil {
-				workflow.Nodes[i].Data = make(map[string]interface{})
-			}
-			workflow.Nodes[i].Data["_status"] = map[string]interface{}{
-				"state":   state,
-				"message": message,
-			}
-			workflow.Nodes[i].Data["_secretCreated"] = secretCreated
-			break
-		}
-	}
-
-	// Update the workflow with new nodes
-	update := bson.M{
-		"$set": bson.M{
-			"nodes":      workflow.Nodes,
-			"updated_at": time.Now(),
-		},
-	}
-
-	_, err = database.WorkflowColl.UpdateOne(ctx, filter, update)
-	if err != nil {
-		return fmt.Errorf("failed to update workflow: %w", err)
+	// Apply any extra SSE data fields
+	for k, v := range extraSSEData {
+		sseStatus[k] = v
 	}
 
 	// Publish status update event to SSE subscribers
@@ -1475,12 +1444,8 @@ func (e *WorkflowExecutor) updateSecretNodeStatus(workflowID primitive.ObjectID,
 		EventType: "node_update",
 		Data: map[string]interface{}{
 			"node_id": nodeID,
-			"type":    "secret",
-			"status": map[string]interface{}{
-				"state":         state,
-				"message":       message,
-				"secretCreated": secretCreated,
-			},
+			"type":    nodeType,
+			"status":  sseStatus,
 		},
 	})
 
