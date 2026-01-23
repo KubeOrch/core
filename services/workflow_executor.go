@@ -37,12 +37,17 @@ func NewWorkflowExecutor() *WorkflowExecutor {
 	}
 }
 
-// ExecuteWorkflow executes a workflow
-func (e *WorkflowExecutor) ExecuteWorkflow(ctx context.Context, workflowID primitive.ObjectID, userID primitive.ObjectID) (*models.WorkflowRun, error) {
+// ExecuteWorkflow executes a workflow with optional runtime data (e.g., secret values)
+func (e *WorkflowExecutor) ExecuteWorkflow(ctx context.Context, workflowID primitive.ObjectID, userID primitive.ObjectID, runtimeData map[string]interface{}) (*models.WorkflowRun, error) {
 	// Get workflow
 	workflow, err := GetWorkflowByID(workflowID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get workflow: %w", err)
+	}
+
+	// Ensure runtimeData is not nil
+	if runtimeData == nil {
+		runtimeData = make(map[string]interface{})
 	}
 
 	// Create workflow run record
@@ -148,7 +153,7 @@ func (e *WorkflowExecutor) ExecuteWorkflow(ctx context.Context, workflowID primi
 			// Store configmap data for connected deployment nodes
 			executedNodeData[node.ID] = node.Data
 		case "secret":
-			if err := e.executeSecretNode(ctx, manifestApplier, node, workflowRun); err != nil {
+			if err := e.executeSecretNode(ctx, manifestApplier, node, workflowRun, runtimeData); err != nil {
 				e.updateWorkflowRunStatus(workflowRun, models.WorkflowRunStatusFailed, err.Error())
 				e.updateWorkflowStats(workflowID, false)
 				return workflowRun, fmt.Errorf("failed to execute node %s: %w", node.ID, err)
@@ -1108,9 +1113,8 @@ func (e *WorkflowExecutor) executeConfigMapNode(ctx context.Context, manifestApp
 }
 
 // executeSecretNode executes a secret node
-// Note: For pass-through secrets, the secret should already exist in K8s
-// This method verifies the secret exists and updates the workflow status
-func (e *WorkflowExecutor) executeSecretNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun) error {
+// Secret values are passed at runtime (not stored in DB) and applied directly to K8s
+func (e *WorkflowExecutor) executeSecretNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun, runtimeData map[string]interface{}) error {
 	e.logger.WithFields(logrus.Fields{
 		"node_id":   node.ID,
 		"node_type": node.Type,
@@ -1136,53 +1140,129 @@ func (e *WorkflowExecutor) executeSecretNode(ctx context.Context, manifestApplie
 		namespace = ns
 	}
 
-	// For pass-through secrets, we check if the secret exists
-	// If it doesn't exist, we'll create a placeholder (keys without values)
-	// In production, users would create the secret via the UI which calls K8s directly
-	secretExists, err := manifestApplier.CheckSecretExists(ctx, secretName, namespace)
+	// Get secret type
+	secretType := "Opaque"
+	if st, ok := secretData["secretType"].(string); ok && st != "" {
+		secretType = st
+	}
+
+	// Get runtime secret values from trigger data
+	// Structure: runtimeData["secrets"][nodeID] = { key: value }
+	var secretValues map[string]interface{}
+	if secrets, ok := runtimeData["secrets"].(map[string]interface{}); ok {
+		if nodeSecrets, ok := secrets[node.ID].(map[string]interface{}); ok {
+			secretValues = nodeSecrets
+		}
+	}
+
+	// If no runtime secrets provided, check if secret already exists
+	if secretValues == nil || len(secretValues) == 0 {
+		secretExists, err := manifestApplier.CheckSecretExists(ctx, secretName, namespace)
+		if err != nil {
+			e.logger.WithError(err).Warn("Failed to check if secret exists")
+		}
+
+		if secretExists {
+			run.Logs = append(run.Logs, fmt.Sprintf("[%s] Secret %s/%s already exists (no new values provided)",
+				time.Now().Format("15:04:05"), namespace, secretName))
+
+			run.NodeStates[node.ID] = map[string]interface{}{
+				"status":    "completed",
+				"timestamp": time.Now().Unix(),
+				"message":   "Secret exists",
+			}
+
+			if err := e.updateSecretNodeStatus(run.WorkflowID, node.ID, "created", "Secret exists in Kubernetes", true); err != nil {
+				e.logger.WithError(err).Warn("Failed to update secret node status in workflow")
+			}
+		} else {
+			run.Logs = append(run.Logs, fmt.Sprintf("[%s] Warning: Secret %s/%s not found and no values provided",
+				time.Now().Format("15:04:05"), namespace, secretName))
+
+			run.NodeStates[node.ID] = map[string]interface{}{
+				"status":    "warning",
+				"timestamp": time.Now().Unix(),
+				"message":   "Secret not found - provide values in UI",
+			}
+
+			if err := e.updateSecretNodeStatus(run.WorkflowID, node.ID, "pending", "Secret not created - no values provided", false); err != nil {
+				e.logger.WithError(err).Warn("Failed to update secret node status in workflow")
+			}
+		}
+
+		run.Output[node.ID] = map[string]interface{}{
+			"name":      secretName,
+			"namespace": namespace,
+			"exists":    secretExists,
+		}
+
+		if err := e.saveWorkflowRun(run); err != nil {
+			e.logger.WithError(err).Error("Failed to save updated workflow run")
+		}
+
+		return nil
+	}
+
+	// Prepare template values with runtime secret data
+	templateValues := e.prepareSecretTemplateValues(node, secretData, secretValues, secretType)
+
+	// Get template ID
+	templateID := "core/secret"
+	if tid, ok := secretData["templateId"].(string); ok && tid != "" {
+		templateID = tid
+	}
+
+	// Render the secret template
+	renderedYAML, err := e.templateEngine.RenderTemplate(templateID, templateValues)
 	if err != nil {
-		e.logger.WithError(err).Warn("Failed to check if secret exists")
+		e.broadcastNodeError(run.WorkflowID, node.ID, "secret", fmt.Sprintf("Failed to render secret template: %v", err))
+		return fmt.Errorf("failed to render secret template: %w", err)
 	}
 
-	if secretExists {
-		run.Logs = append(run.Logs, fmt.Sprintf("[%s] Secret %s/%s already exists",
-			time.Now().Format("15:04:05"), namespace, secretName))
+	run.Logs = append(run.Logs, fmt.Sprintf("[%s] Creating secret %s/%s",
+		time.Now().Format("15:04:05"), namespace, secretName))
 
-		// Update node state
-		run.NodeStates[node.ID] = map[string]interface{}{
-			"status":    "completed",
-			"timestamp": time.Now().Unix(),
-			"message":   "Secret exists",
-		}
+	e.logger.WithFields(logrus.Fields{
+		"name":      secretName,
+		"namespace": namespace,
+	}).Info("Updating resource", "kind", "Secret")
 
-		// Update workflow node data with status
-		if err := e.updateSecretNodeStatus(run.WorkflowID, node.ID, "created", "Secret exists in Kubernetes", true); err != nil {
-			e.logger.WithError(err).Warn("Failed to update secret node status in workflow")
-		}
-	} else {
-		// Secret doesn't exist - log a warning but don't fail
-		// In pass-through mode, users create secrets via UI before running workflow
-		run.Logs = append(run.Logs, fmt.Sprintf("[%s] Warning: Secret %s/%s not found - please create it before deploying",
-			time.Now().Format("15:04:05"), namespace, secretName))
-
-		// Update node state with warning
-		run.NodeStates[node.ID] = map[string]interface{}{
-			"status":    "warning",
-			"timestamp": time.Now().Unix(),
-			"message":   "Secret not found - create via UI",
-		}
-
-		// Update workflow node data with status
-		if err := e.updateSecretNodeStatus(run.WorkflowID, node.ID, "pending", "Secret not created yet", false); err != nil {
-			e.logger.WithError(err).Warn("Failed to update secret node status in workflow")
-		}
+	// Apply the secret to Kubernetes
+	result, err := manifestApplier.ApplyYAML(ctx, renderedYAML)
+	if err != nil {
+		e.broadcastNodeError(run.WorkflowID, node.ID, "secret", fmt.Sprintf("Failed to apply secret: %v", err))
+		return fmt.Errorf("failed to apply secret: %w", err)
 	}
+
+	// Get operation from first applied resource
+	operation := "created"
+	if len(result.AppliedResources) > 0 {
+		operation = result.AppliedResources[0].Operation
+	}
+
+	// Update node state
+	run.NodeStates[node.ID] = map[string]interface{}{
+		"status":    "completed",
+		"timestamp": time.Now().Unix(),
+		"message":   fmt.Sprintf("Secret %s", operation),
+	}
+
+	// Broadcast status update via SSE
+	e.broadcastSecretNodeUpdate(run.WorkflowID, node.ID, "created", fmt.Sprintf("Secret %s successfully", operation))
+
+	// Update workflow node data with status
+	if err := e.updateSecretNodeStatus(run.WorkflowID, node.ID, "created", fmt.Sprintf("Secret %s successfully", operation), true); err != nil {
+		e.logger.WithError(err).Warn("Failed to update secret node status in workflow")
+	}
+
+	run.Logs = append(run.Logs, fmt.Sprintf("[%s] Secret %s/%s %s successfully",
+		time.Now().Format("15:04:05"), namespace, secretName, operation))
 
 	// Add to output
 	run.Output[node.ID] = map[string]interface{}{
 		"name":      secretName,
 		"namespace": namespace,
-		"exists":    secretExists,
+		"operation": operation,
 	}
 
 	// Save updated workflow run
@@ -1191,6 +1271,58 @@ func (e *WorkflowExecutor) executeSecretNode(ctx context.Context, manifestApplie
 	}
 
 	return nil
+}
+
+// prepareSecretTemplateValues prepares values for secret template rendering
+func (e *WorkflowExecutor) prepareSecretTemplateValues(node *models.WorkflowNode, secretData map[string]interface{}, secretValues map[string]interface{}, secretType string) map[string]interface{} {
+	values := make(map[string]interface{})
+
+	if name, ok := secretData["name"].(string); ok {
+		values["Name"] = name
+	} else {
+		values["Name"] = node.ID
+	}
+
+	// Set secret type
+	values["SecretType"] = secretType
+
+	// Handle secret key-value pairs from runtime data
+	// Filter out keys that start with _new_ (empty placeholder keys)
+	filteredValues := make(map[string]interface{})
+	for key, value := range secretValues {
+		// Skip placeholder keys that weren't renamed
+		if len(key) > 5 && key[:5] == "_new_" {
+			continue
+		}
+		filteredValues[key] = value
+	}
+	values["Data"] = filteredValues
+
+	// Add namespace
+	values["Namespace"] = "default"
+	if namespace, ok := secretData["namespace"].(string); ok && namespace != "" {
+		values["Namespace"] = namespace
+	}
+
+	return values
+}
+
+// broadcastSecretNodeUpdate broadcasts a secret node status update via SSE
+func (e *WorkflowExecutor) broadcastSecretNodeUpdate(workflowID primitive.ObjectID, nodeID string, state string, message string) {
+	broadcaster := GetSSEBroadcaster()
+	broadcaster.Publish(StreamEvent{
+		Type:      "workflow",
+		StreamKey: fmt.Sprintf("workflow:%s", workflowID.Hex()),
+		EventType: "node_update",
+		Data: map[string]interface{}{
+			"node_id": nodeID,
+			"type":    "secret",
+			"status": map[string]interface{}{
+				"state":   state,
+				"message": message,
+			},
+		},
+	})
 }
 
 // prepareConfigMapTemplateValues prepares values for configmap template rendering

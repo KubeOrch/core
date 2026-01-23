@@ -422,6 +422,11 @@ func UpdateWorkflowStatusHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+// RunWorkflowRequest contains runtime data for workflow execution
+type RunWorkflowRequest struct {
+	TriggerData map[string]interface{} `json:"trigger_data"`
+}
+
 // RunWorkflowHandler creates a version snapshot and runs the workflow
 func RunWorkflowHandler(c *gin.Context) {
 	userID, ok := getUserIDFromContext(c)
@@ -433,6 +438,13 @@ func RunWorkflowHandler(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid workflow ID"})
 		return
+	}
+
+	// Parse request body for runtime data (e.g., secrets)
+	var req RunWorkflowRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		// If no body provided, that's fine - just use empty trigger data
+		req.TriggerData = make(map[string]interface{})
 	}
 
 	// Check ownership
@@ -461,9 +473,9 @@ func RunWorkflowHandler(c *gin.Context) {
 		// Continue with run even if version snapshot fails
 	}
 
-	// Execute workflow using the new executor
+	// Execute workflow using the new executor with runtime data
 	executor := services.NewWorkflowExecutor()
-	workflowRun, err := executor.ExecuteWorkflow(c.Request.Context(), workflowID, userID)
+	workflowRun, err := executor.ExecuteWorkflow(c.Request.Context(), workflowID, userID, req.TriggerData)
 
 	// Update version with run info (regardless of success/failure)
 	if version != nil && workflowRun != nil {
