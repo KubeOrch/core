@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/KubeOrch/core/database"
@@ -1287,14 +1288,22 @@ func (e *WorkflowExecutor) prepareSecretTemplateValues(node *models.WorkflowNode
 	values["SecretType"] = secretType
 
 	// Handle secret key-value pairs from runtime data
-	// Filter out keys that start with _new_ (empty placeholder keys)
+	// Filter out keys that start with _new_ (empty placeholder keys that weren't renamed)
 	filteredValues := make(map[string]interface{})
+	skippedPlaceholders := 0
 	for key, value := range secretValues {
-		// Skip placeholder keys that weren't renamed
+		// Skip placeholder keys that weren't renamed by the user
 		if len(key) > 5 && key[:5] == "_new_" {
+			skippedPlaceholders++
 			continue
 		}
 		filteredValues[key] = value
+	}
+	if skippedPlaceholders > 0 {
+		e.logger.WithFields(logrus.Fields{
+			"secret_name":          values["Name"],
+			"skipped_placeholders": skippedPlaceholders,
+		}).Warn("Skipped placeholder secret keys that were not renamed by user")
 	}
 	values["Data"] = filteredValues
 
@@ -1478,8 +1487,41 @@ func (e *WorkflowExecutor) updateSecretNodeStatus(workflowID primitive.ObjectID,
 	return nil
 }
 
-// broadcastNodeError sends an error status update to SSE subscribers when a node fails
+// sanitizeErrorForBroadcast removes potentially sensitive information from error messages
+// before sending them to the frontend via SSE. This prevents leaking internal paths,
+// credentials, tokens, or other sensitive details to clients.
+func sanitizeErrorForBroadcast(errorMessage string) string {
+	// List of patterns that might contain sensitive info
+	sensitivePatterns := []string{
+		"bearer ", "token=", "password=", "secret=", "key=",
+		"authorization:", "credential", "/home/", "/Users/",
+		"/etc/", "/var/", "mongodb://", "postgres://", "mysql://",
+	}
+
+	sanitized := errorMessage
+	lowerMsg := strings.ToLower(errorMessage)
+
+	for _, pattern := range sensitivePatterns {
+		if strings.Contains(lowerMsg, pattern) {
+			// Return a generic message if sensitive content detected
+			return "An error occurred while processing this node. Check server logs for details."
+		}
+	}
+
+	// Truncate very long error messages that might contain stack traces
+	if len(sanitized) > 500 {
+		sanitized = sanitized[:500] + "... (truncated)"
+	}
+
+	return sanitized
+}
+
+// broadcastNodeError sends an error status update to SSE subscribers when a node fails.
+// Error messages are sanitized to prevent leaking sensitive information to the frontend.
 func (e *WorkflowExecutor) broadcastNodeError(workflowID primitive.ObjectID, nodeID string, nodeType string, errorMessage string) {
+	// Sanitize error message before broadcasting to prevent sensitive info leakage
+	sanitizedMessage := sanitizeErrorForBroadcast(errorMessage)
+
 	broadcaster := GetSSEBroadcaster()
 	broadcaster.Publish(StreamEvent{
 		Type:      "workflow",
@@ -1490,10 +1532,12 @@ func (e *WorkflowExecutor) broadcastNodeError(workflowID primitive.ObjectID, nod
 			"type":    nodeType,
 			"status": map[string]interface{}{
 				"state":   "error",
-				"message": errorMessage,
+				"message": sanitizedMessage,
 			},
 		},
 	})
+
+	// Log full error for debugging (not sanitized)
 	e.logger.WithFields(logrus.Fields{
 		"workflow_id": workflowID.Hex(),
 		"node_id":     nodeID,

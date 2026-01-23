@@ -96,18 +96,30 @@ func (e *Engine) RenderToManifests(templateID string, values map[string]interfac
 	return manifests, nil
 }
 
-// getHelperFunctions returns template helper functions
+// getHelperFunctions returns template helper functions for use in K8s manifests.
+// Available functions:
+//   - default: returns the default value if the provided value is nil, empty, or zero
+//   - quote: wraps a value in double quotes
+//   - base64encode: encodes a value to base64 (required for K8s Secret data fields)
+//
+// NOTE: base64encode is used for K8s Secret data encoding as required by the K8s API.
+// Base64 is NOT encryption - it's just encoding. Sensitive data is protected by K8s
+// RBAC and etcd encryption at rest, not by base64 encoding.
 func (e *Engine) getHelperFunctions() template.FuncMap {
 	return template.FuncMap{
+		// default returns the default value if value is nil, empty string, or zero
 		"default": func(def interface{}, value interface{}) interface{} {
 			if value == nil || value == "" || value == 0 {
 				return def
 			}
 			return value
 		},
+		// quote wraps a value in double quotes for YAML strings
 		"quote": func(s interface{}) string {
 			return fmt.Sprintf("%q", s)
 		},
+		// base64encode encodes a value to base64, required for K8s Secret data fields.
+		// This is encoding, NOT encryption - K8s requires Secret data to be base64 encoded.
 		"base64encode": func(s interface{}) string {
 			str := fmt.Sprintf("%v", s)
 			return base64.StdEncoding.EncodeToString([]byte(str))

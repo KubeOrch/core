@@ -427,8 +427,16 @@ func (h *ClusterHandler) UpdateCluster(c *gin.Context) {
 	}
 
 	// Update insecure mode if provided
+	// WARNING: Enabling insecure mode skips TLS certificate verification
+	// This should only be used in development/testing environments
 	if req.Insecure != nil {
 		cluster.Credentials.Insecure = *req.Insecure
+		if *req.Insecure {
+			h.logger.WithFields(logrus.Fields{
+				"cluster": name,
+				"user_id": userID.Hex(),
+			}).Warn("Insecure mode enabled - TLS certificate verification will be skipped. This is not recommended for production environments.")
+		}
 	}
 
 	// Update the cluster (including single-node mode changes if any)
