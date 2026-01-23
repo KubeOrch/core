@@ -2,6 +2,7 @@ package template
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -106,6 +107,10 @@ func (e *Engine) getHelperFunctions() template.FuncMap {
 		},
 		"quote": func(s interface{}) string {
 			return fmt.Sprintf("%q", s)
+		},
+		"base64encode": func(s interface{}) string {
+			str := fmt.Sprintf("%v", s)
+			return base64.StdEncoding.EncodeToString([]byte(str))
 		},
 	}
 }
