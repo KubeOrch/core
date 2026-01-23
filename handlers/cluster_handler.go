@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -428,15 +429,26 @@ func (h *ClusterHandler) UpdateCluster(c *gin.Context) {
 
 	// Update insecure mode if provided
 	// WARNING: Enabling insecure mode skips TLS certificate verification
-	// This should only be used in development/testing environments
-	if req.Insecure != nil {
-		cluster.Credentials.Insecure = *req.Insecure
-		if *req.Insecure {
+	// This is blocked in production environments (GIN_MODE=release) for security
+	if req.Insecure != nil && *req.Insecure {
+		ginMode := os.Getenv("GIN_MODE")
+		if ginMode == "release" {
 			h.logger.WithFields(logrus.Fields{
 				"cluster": name,
 				"user_id": userID.Hex(),
-			}).Warn("Insecure mode enabled - TLS certificate verification will be skipped. This is not recommended for production environments.")
+			}).Warn("Attempted to enable insecure mode in production environment - request denied")
+			c.JSON(http.StatusForbidden, gin.H{
+				"error": "Insecure mode cannot be enabled in production environments. TLS certificate verification is required for security.",
+			})
+			return
 		}
+		cluster.Credentials.Insecure = true
+		h.logger.WithFields(logrus.Fields{
+			"cluster": name,
+			"user_id": userID.Hex(),
+		}).Warn("Insecure mode enabled - TLS certificate verification will be skipped. This is only allowed in development/testing environments.")
+	} else if req.Insecure != nil {
+		cluster.Credentials.Insecure = *req.Insecure
 	}
 
 	// Update the cluster (including single-node mode changes if any)

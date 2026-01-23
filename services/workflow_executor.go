@@ -949,44 +949,8 @@ func (e *WorkflowExecutor) prepareTemplateValues(node *models.WorkflowNode, depl
 
 	// Handle volume mounts from ConfigMap/Secret connections
 	if volumeMounts, ok := deploymentData["volumeMounts"]; ok {
-		var mountsSlice []interface{}
-		switch v := volumeMounts.(type) {
-		case primitive.A:
-			mountsSlice = []interface{}(v)
-		case []interface{}:
-			mountsSlice = v
-		}
-
-		if len(mountsSlice) > 0 {
-			var templateMounts []map[string]interface{}
-			for _, m := range mountsSlice {
-				var mountData map[string]interface{}
-				switch md := m.(type) {
-				case primitive.M:
-					mountData = map[string]interface{}(md)
-				case map[string]interface{}:
-					mountData = md
-				default:
-					continue
-				}
-
-				if mountData != nil {
-					templateMount := make(map[string]interface{})
-					if mountType, ok := mountData["type"].(string); ok {
-						templateMount["Type"] = mountType
-					}
-					if name, ok := mountData["name"].(string); ok {
-						templateMount["Name"] = name
-					}
-					if mountPath, ok := mountData["mountPath"].(string); ok {
-						templateMount["MountPath"] = mountPath
-					}
-					templateMounts = append(templateMounts, templateMount)
-				}
-			}
-			if len(templateMounts) > 0 {
-				values["VolumeMounts"] = templateMounts
-			}
+		if templateMounts := e.parseVolumeMounts(volumeMounts); len(templateMounts) > 0 {
+			values["VolumeMounts"] = templateMounts
 		}
 	}
 
@@ -998,6 +962,58 @@ func (e *WorkflowExecutor) prepareTemplateValues(node *models.WorkflowNode, depl
 	}
 
 	return values
+}
+
+// parseVolumeMounts parses volume mount data from MongoDB, handling both primitive.A/M
+// and native Go types. Returns a slice of template-ready mount configurations.
+func (e *WorkflowExecutor) parseVolumeMounts(volumeMounts interface{}) []map[string]interface{} {
+	// Convert to slice, handling MongoDB primitive types
+	var mountsSlice []interface{}
+	switch v := volumeMounts.(type) {
+	case primitive.A:
+		mountsSlice = []interface{}(v)
+	case []interface{}:
+		mountsSlice = v
+	default:
+		return nil
+	}
+
+	if len(mountsSlice) == 0 {
+		return nil
+	}
+
+	var templateMounts []map[string]interface{}
+	for _, m := range mountsSlice {
+		// Convert mount data, handling MongoDB primitive types
+		var mountData map[string]interface{}
+		switch md := m.(type) {
+		case primitive.M:
+			mountData = map[string]interface{}(md)
+		case map[string]interface{}:
+			mountData = md
+		default:
+			continue
+		}
+
+		if mountData == nil {
+			continue
+		}
+
+		// Extract mount fields into template format
+		templateMount := make(map[string]interface{})
+		if mountType, ok := mountData["type"].(string); ok {
+			templateMount["Type"] = mountType
+		}
+		if name, ok := mountData["name"].(string); ok {
+			templateMount["Name"] = name
+		}
+		if mountPath, ok := mountData["mountPath"].(string); ok {
+			templateMount["MountPath"] = mountPath
+		}
+		templateMounts = append(templateMounts, templateMount)
+	}
+
+	return templateMounts
 }
 
 // convertResources converts resource specifications to template format

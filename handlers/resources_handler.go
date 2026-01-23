@@ -971,6 +971,62 @@ func buildResourceSummary(r *models.Resource) map[string]interface{} {
 	return summary
 }
 
+// sendSSEComplete sends a complete event to gracefully close the SSE stream
+func (h *ResourcesHandler) sendSSEComplete(c *gin.Context, message string) {
+	c.SSEvent("complete", message)
+	c.Writer.Flush()
+}
+
+// sendSSEInitialState sends the initial resource state to the SSE client
+func (h *ResourcesHandler) sendSSEInitialState(c *gin.Context, resource *models.Resource) error {
+	initialData := map[string]interface{}{
+		"id":        resource.ID.Hex(),
+		"name":      resource.Name,
+		"namespace": resource.Namespace,
+		"type":      resource.Type,
+		"status":    resource.Status,
+		"spec":      resource.Spec,
+	}
+	initialJSON, err := json.Marshal(initialData)
+	if err != nil {
+		return err
+	}
+	c.SSEvent("metadata", string(initialJSON))
+	c.Writer.Flush()
+	return nil
+}
+
+// relaySSEEvents relays events from the broadcaster channel to the SSE client
+func (h *ResourcesHandler) relaySSEEvents(c *gin.Context, resourceID string, eventChan <-chan services.StreamEvent) {
+	for {
+		select {
+		case <-c.Request.Context().Done():
+			h.logger.WithField("resource_id", resourceID).Info("Client disconnected from resource status stream")
+			return
+
+		case event, ok := <-eventChan:
+			if !ok {
+				h.sendSSEComplete(c, "Stream closed")
+				return
+			}
+
+			eventJSON, err := json.Marshal(event.Data)
+			if err != nil {
+				h.logger.WithError(err).Error("Failed to marshal event data")
+				continue
+			}
+			c.SSEvent(event.EventType, string(eventJSON))
+			c.Writer.Flush()
+
+			// Check for write errors
+			if c.Errors.Last() != nil {
+				h.logger.WithError(c.Errors.Last()).Warn("Error writing SSE event")
+				return
+			}
+		}
+	}
+}
+
 // StreamResourceStatus subscribes to resource status updates via unified SSE broadcaster
 // This handler only subscribes to the broadcaster - watchers are started elsewhere when resources
 // are created/updated via workflows
@@ -1011,52 +1067,14 @@ func (h *ResourcesHandler) StreamResourceStatus(c *gin.Context) {
 	h.logger.WithField("resource_id", resourceID).Info("Client subscribed to resource status stream")
 
 	// Send initial resource state
-	initialData := map[string]interface{}{
-		"id":        resource.ID.Hex(),
-		"name":      resource.Name,
-		"namespace": resource.Namespace,
-		"type":      resource.Type,
-		"status":    resource.Status,
-		"spec":      resource.Spec,
-	}
-	initialJSON, err := json.Marshal(initialData)
-	if err != nil {
+	if err := h.sendSSEInitialState(c, resource); err != nil {
 		h.logger.WithError(err).Error("Failed to marshal resource metadata")
 		c.SSEvent("error", "Failed to create stream metadata")
-		c.Writer.Flush()
+		h.sendSSEComplete(c, "Stream terminated due to error")
 		return
 	}
-	c.SSEvent("metadata", string(initialJSON))
-	c.Writer.Flush()
 
 	// Relay events from broadcaster
-	for {
-		select {
-		case <-c.Request.Context().Done():
-			h.logger.WithField("resource_id", resourceID).Info("Client disconnected from resource status stream")
-			return
-
-		case event, ok := <-eventChan:
-			if !ok {
-				c.SSEvent("complete", "Stream closed")
-				c.Writer.Flush()
-				return
-			}
-
-			eventJSON, err := json.Marshal(event.Data)
-			if err != nil {
-				h.logger.WithError(err).Error("Failed to marshal event data")
-				continue
-			}
-			c.SSEvent(event.EventType, string(eventJSON))
-			c.Writer.Flush()
-
-			// Check for write errors
-			if c.Errors.Last() != nil {
-				h.logger.WithError(c.Errors.Last()).Warn("Error writing SSE event")
-				return
-			}
-		}
-	}
+	h.relaySSEEvents(c, resourceID, eventChan)
 }
 
