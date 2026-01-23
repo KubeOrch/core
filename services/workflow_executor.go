@@ -139,6 +139,22 @@ func (e *WorkflowExecutor) ExecuteWorkflow(ctx context.Context, workflowID primi
 			}
 			// Store ingress data for any downstream nodes
 			executedNodeData[node.ID] = node.Data
+		case "configmap":
+			if err := e.executeConfigMapNode(ctx, manifestApplier, node, workflowRun); err != nil {
+				e.updateWorkflowRunStatus(workflowRun, models.WorkflowRunStatusFailed, err.Error())
+				e.updateWorkflowStats(workflowID, false)
+				return workflowRun, fmt.Errorf("failed to execute node %s: %w", node.ID, err)
+			}
+			// Store configmap data for connected deployment nodes
+			executedNodeData[node.ID] = node.Data
+		case "secret":
+			if err := e.executeSecretNode(ctx, manifestApplier, node, workflowRun); err != nil {
+				e.updateWorkflowRunStatus(workflowRun, models.WorkflowRunStatusFailed, err.Error())
+				e.updateWorkflowStats(workflowID, false)
+				return workflowRun, fmt.Errorf("failed to execute node %s: %w", node.ID, err)
+			}
+			// Store secret data for connected deployment nodes
+			executedNodeData[node.ID] = node.Data
 		}
 	}
 	completedAt := time.Now()
@@ -289,6 +305,8 @@ func (e *WorkflowExecutor) executeDeploymentNode(ctx context.Context, manifestAp
 			"status": "failed",
 			"error":  err.Error(),
 		}
+		// Broadcast error to SSE subscribers so frontend shows the error
+		e.broadcastNodeError(run.WorkflowID, node.ID, "deployment", err.Error())
 		return fmt.Errorf("failed to apply manifest: %w", err)
 	}
 
@@ -439,6 +457,8 @@ func (e *WorkflowExecutor) executeServiceNodeWithConnections(ctx context.Context
 			"status": "failed",
 			"error":  err.Error(),
 		}
+		// Broadcast error to SSE subscribers so frontend shows the error
+		e.broadcastNodeError(run.WorkflowID, node.ID, "service", err.Error())
 		return fmt.Errorf("failed to apply manifest: %w", err)
 	}
 
@@ -608,6 +628,8 @@ func (e *WorkflowExecutor) executeIngressNodeWithConnections(ctx context.Context
 			"error":  err.Error(),
 		}
 		e.logger.WithError(err).WithField("rendered_yaml", renderedYAML).Error("Failed to apply ingress manifest")
+		// Broadcast error to SSE subscribers so frontend shows the error
+		e.broadcastNodeError(run.WorkflowID, node.ID, "ingress", err.Error())
 		return fmt.Errorf("failed to apply manifest: %w", err)
 	}
 
@@ -919,6 +941,49 @@ func (e *WorkflowExecutor) prepareTemplateValues(node *models.WorkflowNode, depl
 		values["Resources"] = e.convertResources(resources)
 	}
 
+	// Handle volume mounts from ConfigMap/Secret connections
+	if volumeMounts, ok := deploymentData["volumeMounts"]; ok {
+		var mountsSlice []interface{}
+		switch v := volumeMounts.(type) {
+		case primitive.A:
+			mountsSlice = []interface{}(v)
+		case []interface{}:
+			mountsSlice = v
+		}
+
+		if len(mountsSlice) > 0 {
+			var templateMounts []map[string]interface{}
+			for _, m := range mountsSlice {
+				var mountData map[string]interface{}
+				switch md := m.(type) {
+				case primitive.M:
+					mountData = map[string]interface{}(md)
+				case map[string]interface{}:
+					mountData = md
+				default:
+					continue
+				}
+
+				if mountData != nil {
+					templateMount := make(map[string]interface{})
+					if mountType, ok := mountData["type"].(string); ok {
+						templateMount["Type"] = mountType
+					}
+					if name, ok := mountData["name"].(string); ok {
+						templateMount["Name"] = name
+					}
+					if mountPath, ok := mountData["mountPath"].(string); ok {
+						templateMount["MountPath"] = mountPath
+					}
+					templateMounts = append(templateMounts, templateMount)
+				}
+			}
+			if len(templateMounts) > 0 {
+				values["VolumeMounts"] = templateMounts
+			}
+		}
+	}
+
 	// Add metadata
 	values["Version"] = "v1"
 	values["Namespace"] = "default"
@@ -960,6 +1025,349 @@ func (e *WorkflowExecutor) convertResources(resources map[string]interface{}) ma
 	}
 
 	return converted
+}
+
+// executeConfigMapNode executes a configmap node
+func (e *WorkflowExecutor) executeConfigMapNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun) error {
+	e.logger.WithFields(logrus.Fields{
+		"node_id":   node.ID,
+		"node_type": node.Type,
+	}).Info("Executing configmap node")
+
+	// Add log entry
+	run.Logs = append(run.Logs, fmt.Sprintf("[%s] Executing configmap node: %s",
+		time.Now().Format("15:04:05"), node.ID))
+
+	// Extract configmap data from node
+	configMapData := node.Data
+	if configMapData == nil {
+		return fmt.Errorf("invalid configmap data in node")
+	}
+
+	// Prepare template values
+	templateValues := e.prepareConfigMapTemplateValues(node, configMapData)
+
+	// Get template ID (default to core/configmap)
+	templateID := "core/configmap"
+	if tid, ok := configMapData["templateId"].(string); ok {
+		templateID = tid
+	}
+
+	// Render template to YAML
+	renderedYAML, err := e.templateEngine.RenderTemplate(templateID, templateValues)
+	if err != nil {
+		return fmt.Errorf("failed to render template: %w", err)
+	}
+
+	// Apply the rendered YAML directly to Kubernetes
+	result, err := manifestApplier.ApplyYAML(ctx, renderedYAML)
+	if err != nil {
+		run.NodeStates[node.ID] = map[string]interface{}{
+			"status": "failed",
+			"error":  err.Error(),
+		}
+		// Broadcast error to SSE subscribers so frontend shows the error
+		e.broadcastNodeError(run.WorkflowID, node.ID, "configmap", err.Error())
+		return fmt.Errorf("failed to apply manifest: %w", err)
+	}
+
+	// Update node state
+	run.NodeStates[node.ID] = map[string]interface{}{
+		"status":    "completed",
+		"result":    result,
+		"timestamp": time.Now().Unix(),
+	}
+
+	// Log the operation performed
+	if len(result.AppliedResources) > 0 {
+		resource := result.AppliedResources[0]
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] ConfigMap %s/%s: %s",
+			time.Now().Format("15:04:05"), resource.Namespace, resource.Name, resource.Operation))
+
+		// Update workflow node data with status
+		if err := e.updateConfigMapNodeStatus(run.WorkflowID, node.ID, "created", "ConfigMap created successfully"); err != nil {
+			e.logger.WithError(err).Warn("Failed to update configmap node status in workflow")
+		}
+	}
+
+	// Add to output
+	run.Output[node.ID] = result
+
+	// Add log entries for each applied resource
+	for _, resource := range result.AppliedResources {
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] %s %s/%s: %s",
+			time.Now().Format("15:04:05"), resource.Kind, resource.Namespace, resource.Name, resource.Operation))
+	}
+
+	// Save updated workflow run
+	if err := e.saveWorkflowRun(run); err != nil {
+		e.logger.WithError(err).Error("Failed to save updated workflow run")
+	}
+
+	return nil
+}
+
+// executeSecretNode executes a secret node
+// Note: For pass-through secrets, the secret should already exist in K8s
+// This method verifies the secret exists and updates the workflow status
+func (e *WorkflowExecutor) executeSecretNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun) error {
+	e.logger.WithFields(logrus.Fields{
+		"node_id":   node.ID,
+		"node_type": node.Type,
+	}).Info("Executing secret node")
+
+	// Add log entry
+	run.Logs = append(run.Logs, fmt.Sprintf("[%s] Executing secret node: %s",
+		time.Now().Format("15:04:05"), node.ID))
+
+	// Extract secret data from node
+	secretData := node.Data
+	if secretData == nil {
+		return fmt.Errorf("invalid secret data in node")
+	}
+
+	// Get secret name and namespace
+	secretName, _ := secretData["name"].(string)
+	if secretName == "" {
+		secretName = node.ID
+	}
+	namespace := "default"
+	if ns, ok := secretData["namespace"].(string); ok && ns != "" {
+		namespace = ns
+	}
+
+	// For pass-through secrets, we check if the secret exists
+	// If it doesn't exist, we'll create a placeholder (keys without values)
+	// In production, users would create the secret via the UI which calls K8s directly
+	secretExists, err := manifestApplier.CheckSecretExists(ctx, secretName, namespace)
+	if err != nil {
+		e.logger.WithError(err).Warn("Failed to check if secret exists")
+	}
+
+	if secretExists {
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] Secret %s/%s already exists",
+			time.Now().Format("15:04:05"), namespace, secretName))
+
+		// Update node state
+		run.NodeStates[node.ID] = map[string]interface{}{
+			"status":    "completed",
+			"timestamp": time.Now().Unix(),
+			"message":   "Secret exists",
+		}
+
+		// Update workflow node data with status
+		if err := e.updateSecretNodeStatus(run.WorkflowID, node.ID, "created", "Secret exists in Kubernetes", true); err != nil {
+			e.logger.WithError(err).Warn("Failed to update secret node status in workflow")
+		}
+	} else {
+		// Secret doesn't exist - log a warning but don't fail
+		// In pass-through mode, users create secrets via UI before running workflow
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] Warning: Secret %s/%s not found - please create it before deploying",
+			time.Now().Format("15:04:05"), namespace, secretName))
+
+		// Update node state with warning
+		run.NodeStates[node.ID] = map[string]interface{}{
+			"status":    "warning",
+			"timestamp": time.Now().Unix(),
+			"message":   "Secret not found - create via UI",
+		}
+
+		// Update workflow node data with status
+		if err := e.updateSecretNodeStatus(run.WorkflowID, node.ID, "pending", "Secret not created yet", false); err != nil {
+			e.logger.WithError(err).Warn("Failed to update secret node status in workflow")
+		}
+	}
+
+	// Add to output
+	run.Output[node.ID] = map[string]interface{}{
+		"name":      secretName,
+		"namespace": namespace,
+		"exists":    secretExists,
+	}
+
+	// Save updated workflow run
+	if err := e.saveWorkflowRun(run); err != nil {
+		e.logger.WithError(err).Error("Failed to save updated workflow run")
+	}
+
+	return nil
+}
+
+// prepareConfigMapTemplateValues prepares values for configmap template rendering
+func (e *WorkflowExecutor) prepareConfigMapTemplateValues(node *models.WorkflowNode, configMapData map[string]interface{}) map[string]interface{} {
+	values := make(map[string]interface{})
+
+	if name, ok := configMapData["name"].(string); ok {
+		values["Name"] = name
+	} else {
+		values["Name"] = node.ID
+	}
+
+	// Handle data key-value pairs
+	if data, ok := configMapData["data"]; ok {
+		var dataMap map[string]interface{}
+		switch d := data.(type) {
+		case primitive.M:
+			dataMap = map[string]interface{}(d)
+		case map[string]interface{}:
+			dataMap = d
+		}
+		if dataMap != nil {
+			values["Data"] = dataMap
+		}
+	}
+
+	// Add metadata
+	values["Namespace"] = "default"
+	if namespace, ok := configMapData["namespace"].(string); ok {
+		values["Namespace"] = namespace
+	}
+
+	return values
+}
+
+// updateConfigMapNodeStatus updates a workflow node's _status field with configmap status
+func (e *WorkflowExecutor) updateConfigMapNodeStatus(workflowID primitive.ObjectID, nodeID string, state string, message string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Get the current workflow
+	var workflow models.Workflow
+	filter := bson.M{"_id": workflowID}
+	err := database.WorkflowColl.FindOne(ctx, filter).Decode(&workflow)
+	if err != nil {
+		return fmt.Errorf("failed to get workflow: %w", err)
+	}
+
+	// Find and update the node with status
+	for i, node := range workflow.Nodes {
+		if node.ID == nodeID {
+			if workflow.Nodes[i].Data == nil {
+				workflow.Nodes[i].Data = make(map[string]interface{})
+			}
+			workflow.Nodes[i].Data["_status"] = map[string]interface{}{
+				"state":   state,
+				"message": message,
+			}
+			break
+		}
+	}
+
+	// Update the workflow with new nodes
+	update := bson.M{
+		"$set": bson.M{
+			"nodes":      workflow.Nodes,
+			"updated_at": time.Now(),
+		},
+	}
+
+	_, err = database.WorkflowColl.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("failed to update workflow: %w", err)
+	}
+
+	// Publish status update event to SSE subscribers
+	broadcaster := GetSSEBroadcaster()
+	broadcaster.Publish(StreamEvent{
+		Type:      "workflow",
+		StreamKey: fmt.Sprintf("workflow:%s", workflowID.Hex()),
+		EventType: "node_update",
+		Data: map[string]interface{}{
+			"node_id": nodeID,
+			"type":    "configmap",
+			"status": map[string]interface{}{
+				"state":   state,
+				"message": message,
+			},
+		},
+	})
+
+	return nil
+}
+
+// updateSecretNodeStatus updates a workflow node's _status field with secret status
+func (e *WorkflowExecutor) updateSecretNodeStatus(workflowID primitive.ObjectID, nodeID string, state string, message string, secretCreated bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Get the current workflow
+	var workflow models.Workflow
+	filter := bson.M{"_id": workflowID}
+	err := database.WorkflowColl.FindOne(ctx, filter).Decode(&workflow)
+	if err != nil {
+		return fmt.Errorf("failed to get workflow: %w", err)
+	}
+
+	// Find and update the node with status
+	for i, node := range workflow.Nodes {
+		if node.ID == nodeID {
+			if workflow.Nodes[i].Data == nil {
+				workflow.Nodes[i].Data = make(map[string]interface{})
+			}
+			workflow.Nodes[i].Data["_status"] = map[string]interface{}{
+				"state":   state,
+				"message": message,
+			}
+			workflow.Nodes[i].Data["_secretCreated"] = secretCreated
+			break
+		}
+	}
+
+	// Update the workflow with new nodes
+	update := bson.M{
+		"$set": bson.M{
+			"nodes":      workflow.Nodes,
+			"updated_at": time.Now(),
+		},
+	}
+
+	_, err = database.WorkflowColl.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("failed to update workflow: %w", err)
+	}
+
+	// Publish status update event to SSE subscribers
+	broadcaster := GetSSEBroadcaster()
+	broadcaster.Publish(StreamEvent{
+		Type:      "workflow",
+		StreamKey: fmt.Sprintf("workflow:%s", workflowID.Hex()),
+		EventType: "node_update",
+		Data: map[string]interface{}{
+			"node_id": nodeID,
+			"type":    "secret",
+			"status": map[string]interface{}{
+				"state":         state,
+				"message":       message,
+				"secretCreated": secretCreated,
+			},
+		},
+	})
+
+	return nil
+}
+
+// broadcastNodeError sends an error status update to SSE subscribers when a node fails
+func (e *WorkflowExecutor) broadcastNodeError(workflowID primitive.ObjectID, nodeID string, nodeType string, errorMessage string) {
+	broadcaster := GetSSEBroadcaster()
+	broadcaster.Publish(StreamEvent{
+		Type:      "workflow",
+		StreamKey: fmt.Sprintf("workflow:%s", workflowID.Hex()),
+		EventType: "node_update",
+		Data: map[string]interface{}{
+			"node_id": nodeID,
+			"type":    nodeType,
+			"status": map[string]interface{}{
+				"state":   "error",
+				"message": errorMessage,
+			},
+		},
+	})
+	e.logger.WithFields(logrus.Fields{
+		"workflow_id": workflowID.Hex(),
+		"node_id":     nodeID,
+		"node_type":   nodeType,
+		"error":       errorMessage,
+	}).Info("Broadcasted node error to SSE subscribers")
 }
 
 // getClusterForWorkflow retrieves cluster for workflow
@@ -1476,12 +1884,50 @@ func (e *WorkflowExecutor) CleanupWorkflowResources(ctx context.Context, workflo
 		}
 	}
 
+	// Delete ConfigMaps last (after deployments that use them)
+	// Note: We don't delete Secrets as they are managed externally (pass-through)
+	for _, node := range workflow.Nodes {
+		if node.Type == "configmap" {
+			if err := e.deleteConfigMapNode(ctx, manifestApplier, &node); err != nil {
+				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete configmap")
+				cleanupErrors = append(cleanupErrors, err.Error())
+			}
+		}
+	}
+
 	if len(cleanupErrors) > 0 {
 		return fmt.Errorf("cleanup completed with errors: %v", cleanupErrors)
 	}
 
 	e.logger.WithField("workflow_id", workflow.ID.Hex()).Info("Workflow K8s resources cleanup completed")
 	return nil
+}
+
+// deleteConfigMapNode deletes a Kubernetes ConfigMap created by a configmap node
+func (e *WorkflowExecutor) deleteConfigMapNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode) error {
+	if node.Data == nil {
+		return nil
+	}
+
+	// Get configmap name from node data
+	name, ok := node.Data["name"].(string)
+	if !ok || name == "" {
+		name = node.ID // Fallback to node ID
+	}
+
+	// Get namespace from node data
+	namespace := "default"
+	if ns, ok := node.Data["namespace"].(string); ok && ns != "" {
+		namespace = ns
+	}
+
+	e.logger.WithFields(logrus.Fields{
+		"configmap": name,
+		"namespace": namespace,
+		"node_id":   node.ID,
+	}).Info("Deleting configmap from workflow cleanup")
+
+	return manifestApplier.DeleteConfigMap(ctx, name, namespace)
 }
 
 // deleteDeploymentNode deletes a Kubernetes Deployment created by a deployment node
@@ -1619,6 +2065,17 @@ func (e *WorkflowExecutor) CleanupDeletedNodes(ctx context.Context, workflow *mo
 		if node.Type == "deployment" {
 			if err := e.deleteDeploymentNode(ctx, manifestApplier, &node); err != nil {
 				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete deployment")
+				cleanupErrors = append(cleanupErrors, err.Error())
+			}
+		}
+	}
+
+	// Delete configmaps last (after deployments)
+	// Note: We don't delete Secrets as they are managed externally (pass-through)
+	for _, node := range deletedNodes {
+		if node.Type == "configmap" {
+			if err := e.deleteConfigMapNode(ctx, manifestApplier, &node); err != nil {
+				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete configmap")
 				cleanupErrors = append(cleanupErrors, err.Error())
 			}
 		}

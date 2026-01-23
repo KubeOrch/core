@@ -278,16 +278,19 @@ func (h *ResourcesHandler) GetDeploymentPods(c *gin.Context) {
 		return
 	}
 
-	// Find pods that belong to this deployment
+	// Find pods that belong to this deployment/statefulset
+	// In Kubernetes, Deployment -> ReplicaSet -> Pod, so pods don't directly reference the deployment.
+	// Instead, we match by the "app" label which is typically set to the deployment name.
+	// We also match pods whose name starts with the deployment name (deployment-X-hash-hash pattern).
 	filter := bson.M{
 		"clusterName": deployment.ClusterName,
 		"namespace":   deployment.Namespace,
 		"type":        "Pod",
-		"ownerReferences": bson.M{
-			"$elemMatch": bson.M{
-				"name": deployment.Name,
-				"kind": string(deployment.Type),
-			},
+		"$or": []bson.M{
+			// Match by "app" label (most reliable)
+			{"labels.app": deployment.Name},
+			// Match by name prefix (fallback for pods without app label)
+			{"name": bson.M{"$regex": "^" + deployment.Name + "-"}},
 		},
 	}
 
@@ -967,3 +970,93 @@ func buildResourceSummary(r *models.Resource) map[string]interface{} {
 
 	return summary
 }
+
+// StreamResourceStatus subscribes to resource status updates via unified SSE broadcaster
+// This handler only subscribes to the broadcaster - watchers are started elsewhere when resources
+// are created/updated via workflows
+func (h *ResourcesHandler) StreamResourceStatus(c *gin.Context) {
+	resourceID := c.Param("id")
+
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	objID, err := primitive.ObjectIDFromHex(resourceID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid resource ID"})
+		return
+	}
+
+	// Validate user owns resource
+	resource, err := h.resourceService.GetResourceByID(c.Request.Context(), objID, userID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Resource not found"})
+		return
+	}
+
+	// Set SSE headers
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	// Subscribe to unified broadcaster
+	broadcaster := services.GetSSEBroadcaster()
+	streamKey := fmt.Sprintf("resource:%s", resourceID)
+	eventChan := broadcaster.Subscribe(streamKey, 10)
+	defer broadcaster.Unsubscribe(streamKey, eventChan)
+
+	h.logger.WithField("resource_id", resourceID).Info("Client subscribed to resource status stream")
+
+	// Send initial resource state
+	initialData := map[string]interface{}{
+		"id":        resource.ID.Hex(),
+		"name":      resource.Name,
+		"namespace": resource.Namespace,
+		"type":      resource.Type,
+		"status":    resource.Status,
+		"spec":      resource.Spec,
+	}
+	initialJSON, err := json.Marshal(initialData)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to marshal resource metadata")
+		c.SSEvent("error", "Failed to create stream metadata")
+		c.Writer.Flush()
+		return
+	}
+	c.SSEvent("metadata", string(initialJSON))
+	c.Writer.Flush()
+
+	// Relay events from broadcaster
+	for {
+		select {
+		case <-c.Request.Context().Done():
+			h.logger.WithField("resource_id", resourceID).Info("Client disconnected from resource status stream")
+			return
+
+		case event, ok := <-eventChan:
+			if !ok {
+				c.SSEvent("complete", "Stream closed")
+				c.Writer.Flush()
+				return
+			}
+
+			eventJSON, err := json.Marshal(event.Data)
+			if err != nil {
+				h.logger.WithError(err).Error("Failed to marshal event data")
+				continue
+			}
+			c.SSEvent(event.EventType, string(eventJSON))
+			c.Writer.Flush()
+
+			// Check for write errors
+			if c.Errors.Last() != nil {
+				h.logger.WithError(c.Errors.Last()).Warn("Error writing SSE event")
+				return
+			}
+		}
+	}
+}
+

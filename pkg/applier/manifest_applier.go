@@ -527,3 +527,40 @@ func (a *ManifestApplier) DeleteIngress(ctx context.Context, name, namespace str
 
 	return nil
 }
+
+// DeleteConfigMap deletes a Kubernetes ConfigMap by name and namespace
+func (a *ManifestApplier) DeleteConfigMap(ctx context.Context, name, namespace string) error {
+	if namespace == "" {
+		namespace = a.namespace
+	}
+
+	a.logger.WithFields(logrus.Fields{
+		"kind":      "ConfigMap",
+		"name":      name,
+		"namespace": namespace,
+	}).Info("Deleting configmap")
+
+	err := a.clientset.CoreV1().ConfigMaps(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete configmap %s/%s: %w", namespace, name, err)
+	}
+
+	return nil
+}
+
+// CheckSecretExists checks if a Kubernetes Secret exists
+func (a *ManifestApplier) CheckSecretExists(ctx context.Context, name, namespace string) (bool, error) {
+	if namespace == "" {
+		namespace = a.namespace
+	}
+
+	_, err := a.clientset.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to check secret %s/%s: %w", namespace, name, err)
+	}
+
+	return true, nil
+}

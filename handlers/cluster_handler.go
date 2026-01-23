@@ -365,6 +365,7 @@ type UpdateClusterRequest struct {
 	AuthType    models.ClusterAuthType    `json:"authType"`
 	Credentials *models.ClusterCredentials `json:"credentials,omitempty"` // Optional - only if updating token
 	SingleNode  *bool                     `json:"singleNode,omitempty"`
+	Insecure    *bool                     `json:"insecure,omitempty"`
 	Labels      map[string]string         `json:"labels,omitempty"`
 }
 
@@ -423,6 +424,11 @@ func (h *ClusterHandler) UpdateCluster(c *gin.Context) {
 	// Update single node mode if provided
 	if req.SingleNode != nil {
 		cluster.SingleNode = *req.SingleNode
+	}
+
+	// Update insecure mode if provided
+	if req.Insecure != nil {
+		cluster.Credentials.Insecure = *req.Insecure
 	}
 
 	// Update the cluster (including single-node mode changes if any)

@@ -83,9 +83,30 @@ spec:
           initialDelaySeconds: {{ .ReadinessProbe.InitialDelaySeconds | default 5 }}
           periodSeconds: {{ .ReadinessProbe.PeriodSeconds | default 5 }}
         {{- end }}
+        {{- if .VolumeMounts }}
+        volumeMounts:
+        {{- range .VolumeMounts }}
+        - name: {{ .Name }}-volume
+          mountPath: {{ .MountPath }}
+          readOnly: true
+        {{- end }}
+        {{- end }}
       {{- if .ImagePullSecrets }}
       imagePullSecrets:
       {{- range .ImagePullSecrets }}
       - name: {{ . }}
+      {{- end }}
+      {{- end }}
+      {{- if .VolumeMounts }}
+      volumes:
+      {{- range .VolumeMounts }}
+      - name: {{ .Name }}-volume
+        {{- if eq .Type "configMap" }}
+        configMap:
+          name: {{ .Name }}
+        {{- else if eq .Type "secret" }}
+        secret:
+          secretName: {{ .Name }}
+        {{- end }}
       {{- end }}
       {{- end }}
