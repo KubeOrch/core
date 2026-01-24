@@ -161,6 +161,20 @@ func (e *WorkflowExecutor) ExecuteWorkflow(ctx context.Context, workflowID primi
 			}
 			// Store secret data for connected deployment nodes
 			executedNodeData[node.ID] = node.Data
+		case "persistentvolumeclaim":
+			if err := e.executePersistentVolumeClaimNode(ctx, manifestApplier, node, workflowRun); err != nil {
+				e.updateWorkflowRunStatus(workflowRun, models.WorkflowRunStatusFailed, err.Error())
+				e.updateWorkflowStats(workflowID, false)
+				return workflowRun, fmt.Errorf("failed to execute node %s: %w", node.ID, err)
+			}
+			// Store PVC data for connected deployment/statefulset nodes
+			executedNodeData[node.ID] = node.Data
+		case "statefulset":
+			if err := e.executeStatefulSetNodeWithConnections(ctx, manifestApplier, node, workflowRun, connectionGraph, executedNodeData); err != nil {
+				e.updateWorkflowRunStatus(workflowRun, models.WorkflowRunStatusFailed, err.Error())
+				e.updateWorkflowStats(workflowID, false)
+				return workflowRun, fmt.Errorf("failed to execute node %s: %w", node.ID, err)
+			}
 		}
 	}
 	completedAt := time.Now()
@@ -1389,6 +1403,594 @@ func (e *WorkflowExecutor) prepareConfigMapTemplateValues(node *models.WorkflowN
 	return values
 }
 
+// executePersistentVolumeClaimNode executes a PVC node
+func (e *WorkflowExecutor) executePersistentVolumeClaimNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun) error {
+	e.logger.WithFields(logrus.Fields{
+		"node_id":   node.ID,
+		"node_type": node.Type,
+	}).Info("Executing persistentvolumeclaim node")
+
+	// Add log entry
+	run.Logs = append(run.Logs, fmt.Sprintf("[%s] Executing PVC node: %s",
+		time.Now().Format("15:04:05"), node.ID))
+
+	// Extract PVC data from node
+	pvcData := node.Data
+	if pvcData == nil {
+		return fmt.Errorf("invalid PVC data in node")
+	}
+
+	// Get PVC name and namespace
+	pvcName, _ := pvcData["name"].(string)
+	namespace, _ := pvcData["namespace"].(string)
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	// Check if PVC already exists and is bound - skip re-applying if so
+	// PVC spec is immutable after creation (except resources.requests)
+	existingStatus, err := manifestApplier.GetPVCStatus(ctx, pvcName, namespace)
+	if err == nil && existingStatus.State == "Bound" {
+		e.logger.WithFields(logrus.Fields{
+			"pvc_name":  pvcName,
+			"namespace": namespace,
+			"state":     existingStatus.State,
+		}).Info("PVC already exists and is bound, skipping re-apply")
+
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] PVC %s/%s already bound, skipping",
+			time.Now().Format("15:04:05"), namespace, pvcName))
+
+		// Update node state
+		run.NodeStates[node.ID] = map[string]interface{}{
+			"status":    "completed",
+			"message":   "PVC already bound",
+			"timestamp": time.Now().Unix(),
+		}
+
+		// Update workflow node with current status
+		if err := e.updatePVCNodeStatus(run.WorkflowID, node.ID, existingStatus); err != nil {
+			e.logger.WithError(err).Warn("Failed to update PVC node status in workflow")
+		} else {
+			run.Logs = append(run.Logs, fmt.Sprintf("[%s] PVC status: %s, Capacity: %s",
+				time.Now().Format("15:04:05"), existingStatus.State, existingStatus.Capacity))
+		}
+
+		// Save updated workflow run
+		if err := e.saveWorkflowRun(run); err != nil {
+			e.logger.WithError(err).Error("Failed to save updated workflow run")
+		}
+		return nil
+	}
+
+	// Prepare template values
+	templateValues := e.preparePVCTemplateValues(node, pvcData)
+
+	// Get template ID (default to core/persistentvolumeclaim)
+	templateID := "core/persistentvolumeclaim"
+	if tid, ok := pvcData["templateId"].(string); ok {
+		templateID = tid
+	}
+
+	// Render template to YAML
+	renderedYAML, err := e.templateEngine.RenderTemplate(templateID, templateValues)
+	if err != nil {
+		return fmt.Errorf("failed to render template: %w", err)
+	}
+
+	// Apply the rendered YAML directly to Kubernetes
+	result, err := manifestApplier.ApplyYAML(ctx, renderedYAML)
+	if err != nil {
+		run.NodeStates[node.ID] = map[string]interface{}{
+			"status": "failed",
+			"error":  err.Error(),
+		}
+		// Broadcast error to SSE subscribers so frontend shows the error
+		e.broadcastNodeError(run.WorkflowID, node.ID, "persistentvolumeclaim", err.Error())
+		return fmt.Errorf("failed to apply manifest: %w", err)
+	}
+
+	// Update node state
+	run.NodeStates[node.ID] = map[string]interface{}{
+		"status":    "completed",
+		"result":    result,
+		"timestamp": time.Now().Unix(),
+	}
+
+	// Log the operation performed
+	if len(result.AppliedResources) > 0 {
+		resource := result.AppliedResources[0]
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] PVC %s/%s: %s",
+			time.Now().Format("15:04:05"), resource.Namespace, resource.Name, resource.Operation))
+
+		// Fetch and save PVC status to workflow node
+		pvcStatus, err := manifestApplier.GetPVCStatus(ctx, resource.Name, resource.Namespace)
+		if err != nil {
+			e.logger.WithError(err).Warn("Failed to get PVC status")
+		} else {
+			// Update workflow node data with status
+			if err := e.updatePVCNodeStatus(run.WorkflowID, node.ID, pvcStatus); err != nil {
+				e.logger.WithError(err).Warn("Failed to update PVC node status in workflow")
+			} else {
+				run.Logs = append(run.Logs, fmt.Sprintf("[%s] PVC status: %s, Capacity: %s",
+					time.Now().Format("15:04:05"), pvcStatus.State, pvcStatus.Capacity))
+			}
+		}
+	}
+
+	// Add to output
+	run.Output[node.ID] = result
+
+	// Add log entries for each applied resource
+	for _, resource := range result.AppliedResources {
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] %s %s/%s: %s",
+			time.Now().Format("15:04:05"), resource.Kind, resource.Namespace, resource.Name, resource.Operation))
+	}
+
+	// Save updated workflow run
+	if err := e.saveWorkflowRun(run); err != nil {
+		e.logger.WithError(err).Error("Failed to save updated workflow run")
+	}
+
+	return nil
+}
+
+// toBsonSlice converts BSON array types (primitive.A) to standard []interface{}
+// This handles both primitive.A from MongoDB and regular []interface{} from JSON
+func toBsonSlice(raw interface{}) []interface{} {
+	if raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case primitive.A:
+		return []interface{}(v)
+	case []interface{}:
+		return v
+	default:
+		return nil
+	}
+}
+
+// preparePVCTemplateValues prepares values for PVC template rendering
+func (e *WorkflowExecutor) preparePVCTemplateValues(node *models.WorkflowNode, pvcData map[string]interface{}) map[string]interface{} {
+	values := make(map[string]interface{})
+
+	if name, ok := pvcData["name"].(string); ok && name != "" {
+		values["Name"] = name
+	} else {
+		values["Name"] = node.ID
+	}
+
+	// Storage class (optional)
+	if storageClassName, ok := pvcData["storageClassName"].(string); ok && storageClassName != "" {
+		values["StorageClassName"] = storageClassName
+	}
+
+	// Storage size (required)
+	if storage, ok := pvcData["storage"].(string); ok {
+		values["Storage"] = storage
+	}
+
+	// Access modes - use helper to handle both primitive.A and []interface{} types
+	accessModesSlice := toBsonSlice(pvcData["accessModes"])
+	if len(accessModesSlice) > 0 {
+		var modes []string
+		for _, m := range accessModesSlice {
+			if mode, ok := m.(string); ok {
+				modes = append(modes, mode)
+			}
+		}
+		values["AccessModes"] = modes
+	} else {
+		// Default to ReadWriteOnce if not specified
+		values["AccessModes"] = []string{"ReadWriteOnce"}
+	}
+
+	// Volume mode (optional)
+	if volumeMode, ok := pvcData["volumeMode"].(string); ok && volumeMode != "" {
+		values["VolumeMode"] = volumeMode
+	}
+
+	// Labels (optional)
+	if labels, ok := pvcData["labels"].(map[string]interface{}); ok {
+		values["Labels"] = labels
+	}
+
+	// Add metadata
+	values["Namespace"] = "default"
+	if namespace, ok := pvcData["namespace"].(string); ok && namespace != "" {
+		values["Namespace"] = namespace
+	}
+
+	return values
+}
+
+// updatePVCNodeStatus updates a workflow node's _status field with PVC status
+func (e *WorkflowExecutor) updatePVCNodeStatus(workflowID primitive.ObjectID, nodeID string, status *applier.PVCStatus) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Get the current workflow
+	var workflow models.Workflow
+	filter := bson.M{"_id": workflowID}
+	err := database.WorkflowColl.FindOne(ctx, filter).Decode(&workflow)
+	if err != nil {
+		return fmt.Errorf("failed to get workflow: %w", err)
+	}
+
+	// Find and update the node with status
+	for i, node := range workflow.Nodes {
+		if node.ID == nodeID {
+			if workflow.Nodes[i].Data == nil {
+				workflow.Nodes[i].Data = make(map[string]interface{})
+			}
+			workflow.Nodes[i].Data["_status"] = map[string]interface{}{
+				"state":      status.State,
+				"capacity":   status.Capacity,
+				"volumeName": status.VolumeName,
+				"message":    status.Message,
+			}
+			break
+		}
+	}
+
+	// Update the workflow with new nodes
+	update := bson.M{
+		"$set": bson.M{
+			"nodes":      workflow.Nodes,
+			"updated_at": time.Now(),
+		},
+	}
+
+	_, err = database.WorkflowColl.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("failed to update workflow: %w", err)
+	}
+
+	e.logger.WithFields(logrus.Fields{
+		"workflow_id": workflowID.Hex(),
+		"node_id":     nodeID,
+		"state":       status.State,
+		"capacity":    status.Capacity,
+		"volume_name": status.VolumeName,
+	}).Info("Updated PVC node status in workflow")
+
+	// Publish status update event to SSE subscribers
+	broadcaster := GetSSEBroadcaster()
+	broadcaster.Publish(StreamEvent{
+		Type:      "workflow",
+		StreamKey: fmt.Sprintf("workflow:%s", workflowID.Hex()),
+		EventType: "node_update",
+		Data: map[string]interface{}{
+			"node_id": nodeID,
+			"type":    "persistentvolumeclaim",
+			"status": map[string]interface{}{
+				"state":      status.State,
+				"capacity":   status.Capacity,
+				"volumeName": status.VolumeName,
+				"message":    status.Message,
+			},
+		},
+	})
+
+	return nil
+}
+
+// executeStatefulSetNodeWithConnections executes a StatefulSet node with data from connected nodes
+func (e *WorkflowExecutor) executeStatefulSetNodeWithConnections(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun, connectionGraph map[string][]string, executedNodeData map[string]map[string]interface{}) error {
+	e.logger.WithFields(logrus.Fields{
+		"node_id":   node.ID,
+		"node_type": node.Type,
+	}).Info("Executing statefulset node")
+
+	// Add log entry
+	run.Logs = append(run.Logs, fmt.Sprintf("[%s] Executing statefulset node: %s",
+		time.Now().Format("15:04:05"), node.ID))
+
+	// Extract statefulset data from node
+	statefulSetData := node.Data
+	if statefulSetData == nil {
+		return fmt.Errorf("invalid statefulset data in node")
+	}
+
+	// Prepare template values
+	templateValues := e.prepareStatefulSetTemplateValues(node, statefulSetData)
+
+	// Get template ID (default to core/statefulset)
+	templateID := "core/statefulset"
+	if tid, ok := statefulSetData["templateId"].(string); ok {
+		templateID = tid
+	}
+
+	// Render template to YAML
+	renderedYAML, err := e.templateEngine.RenderTemplate(templateID, templateValues)
+	if err != nil {
+		return fmt.Errorf("failed to render template: %w", err)
+	}
+
+	// Apply the rendered YAML directly to Kubernetes
+	result, err := manifestApplier.ApplyYAML(ctx, renderedYAML)
+	if err != nil {
+		run.NodeStates[node.ID] = map[string]interface{}{
+			"status": "failed",
+			"error":  err.Error(),
+		}
+		// Broadcast error to SSE subscribers so frontend shows the error
+		e.broadcastNodeError(run.WorkflowID, node.ID, "statefulset", err.Error())
+		return fmt.Errorf("failed to apply manifest: %w", err)
+	}
+
+	// Update node state
+	run.NodeStates[node.ID] = map[string]interface{}{
+		"status":    "completed",
+		"result":    result,
+		"timestamp": time.Now().Unix(),
+	}
+
+	// Log the operation performed
+	if len(result.AppliedResources) > 0 {
+		resource := result.AppliedResources[0]
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] StatefulSet %s/%s: %s",
+			time.Now().Format("15:04:05"), resource.Namespace, resource.Name, resource.Operation))
+
+		// Fetch and save statefulset status to workflow node
+		statefulSetName := resource.Name
+		namespace := resource.Namespace
+		if namespace == "" {
+			namespace = "default"
+		}
+
+		statefulSetStatus, err := manifestApplier.GetStatefulSetStatus(ctx, statefulSetName, namespace)
+		if err != nil {
+			e.logger.WithError(err).Warn("Failed to get statefulset status")
+		} else {
+			// Update workflow node data with status
+			if err := e.updateStatefulSetNodeStatus(run.WorkflowID, node.ID, statefulSetStatus); err != nil {
+				e.logger.WithError(err).Warn("Failed to update statefulset node status in workflow")
+			} else {
+				run.Logs = append(run.Logs, fmt.Sprintf("[%s] StatefulSet status: %s, Replicas: %d/%d",
+					time.Now().Format("15:04:05"), statefulSetStatus.State, statefulSetStatus.ReadyReplicas, statefulSetStatus.Replicas))
+			}
+		}
+
+		// Start watching the statefulset for real-time status updates (pod readiness)
+		watcherManager := GetResourceWatcherManager()
+		restConfig := manifestApplier.GetRestConfig()
+
+		err = watcherManager.StartWatcher(run.WorkflowID, node.ID, statefulSetName, namespace, "statefulset", restConfig)
+		if err != nil {
+			e.logger.WithError(err).Warn("Failed to start statefulset watcher (falling back to periodic polling)")
+		} else {
+			e.logger.WithFields(logrus.Fields{
+				"statefulset_name": statefulSetName,
+				"namespace":        namespace,
+				"node_id":          node.ID,
+			}).Info("Started watching statefulset for pod readiness")
+			run.Logs = append(run.Logs, fmt.Sprintf("[%s] Watching statefulset for pod readiness",
+				time.Now().Format("15:04:05")))
+		}
+	}
+
+	// Add to output
+	run.Output[node.ID] = result
+
+	// Add log entries for each applied resource
+	for _, resource := range result.AppliedResources {
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] %s %s/%s: %s",
+			time.Now().Format("15:04:05"), resource.Kind, resource.Namespace, resource.Name, resource.Operation))
+	}
+
+	// Save updated workflow run
+	if err := e.saveWorkflowRun(run); err != nil {
+		e.logger.WithError(err).Error("Failed to save updated workflow run")
+	}
+
+	return nil
+}
+
+// prepareStatefulSetTemplateValues prepares values for StatefulSet template rendering
+func (e *WorkflowExecutor) prepareStatefulSetTemplateValues(node *models.WorkflowNode, statefulSetData map[string]interface{}) map[string]interface{} {
+	values := make(map[string]interface{})
+
+	if name, ok := statefulSetData["name"].(string); ok && name != "" {
+		values["Name"] = name
+	} else {
+		// Fallback to node ID if name not provided or empty
+		values["Name"] = node.ID
+	}
+
+	// ServiceName (required for StatefulSet)
+	if serviceName, ok := statefulSetData["serviceName"].(string); ok {
+		values["ServiceName"] = serviceName
+	}
+
+	// Copy statefulset parameters
+	image := ""
+	if img, ok := statefulSetData["image"].(string); ok {
+		image = img
+		values["Image"] = image
+	}
+	if replicas, ok := statefulSetData["replicas"]; ok {
+		values["Replicas"] = replicas
+	}
+	if port, ok := statefulSetData["port"]; ok {
+		values["Port"] = port
+	}
+
+	// Handle env vars with smart defaults for common databases
+	env := make(map[string]interface{})
+	if existingEnv, ok := statefulSetData["env"].(map[string]interface{}); ok {
+		env = existingEnv
+	}
+
+	// Auto-add POSTGRES_HOST_AUTH_METHOD=trust for postgres images if no auth configured
+	if strings.Contains(strings.ToLower(image), "postgres") {
+		_, hasPassword := env["POSTGRES_PASSWORD"]
+		_, hasAuthMethod := env["POSTGRES_HOST_AUTH_METHOD"]
+		if !hasPassword && !hasAuthMethod {
+			env["POSTGRES_HOST_AUTH_METHOD"] = "trust"
+			e.logger.Info("Auto-added POSTGRES_HOST_AUTH_METHOD=trust for postgres image (no password configured)")
+		}
+	}
+
+	// Auto-add MYSQL_ALLOW_EMPTY_PASSWORD for mysql/mariadb images if no auth configured
+	if strings.Contains(strings.ToLower(image), "mysql") || strings.Contains(strings.ToLower(image), "mariadb") {
+		_, hasRootPassword := env["MYSQL_ROOT_PASSWORD"]
+		_, hasAllowEmpty := env["MYSQL_ALLOW_EMPTY_PASSWORD"]
+		_, hasRandomRoot := env["MYSQL_RANDOM_ROOT_PASSWORD"]
+		if !hasRootPassword && !hasAllowEmpty && !hasRandomRoot {
+			env["MYSQL_ALLOW_EMPTY_PASSWORD"] = "yes"
+			e.logger.Info("Auto-added MYSQL_ALLOW_EMPTY_PASSWORD=yes for mysql image (no password configured)")
+		}
+	}
+
+	if len(env) > 0 {
+		values["Env"] = env
+	}
+	if labels, ok := statefulSetData["labels"].(map[string]interface{}); ok {
+		values["Labels"] = labels
+	}
+	if resources, ok := statefulSetData["resources"].(map[string]interface{}); ok {
+		values["Resources"] = e.convertResources(resources)
+	}
+
+	// Handle volume mounts from ConfigMap/Secret/PVC connections
+	if volumeMounts, ok := statefulSetData["volumeMounts"]; ok {
+		if templateMounts := e.parseVolumeMounts(volumeMounts); len(templateMounts) > 0 {
+			values["VolumeMounts"] = templateMounts
+		}
+	}
+
+	// Handle volumeClaimTemplates - use helper to handle both primitive.A and []interface{} types
+	vctSlice := toBsonSlice(statefulSetData["volumeClaimTemplates"])
+	if len(vctSlice) > 0 {
+		var templates []map[string]interface{}
+		for _, vct := range vctSlice {
+			var vctData map[string]interface{}
+			switch v := vct.(type) {
+			case primitive.M:
+				vctData = map[string]interface{}(v)
+			case map[string]interface{}:
+				vctData = v
+			default:
+				continue
+			}
+
+			template := make(map[string]interface{})
+			if name, ok := vctData["name"].(string); ok {
+				template["Name"] = name
+			}
+			if storage, ok := vctData["storage"].(string); ok {
+				template["Storage"] = storage
+			}
+			if storageClassName, ok := vctData["storageClassName"].(string); ok && storageClassName != "" {
+				template["StorageClassName"] = storageClassName
+			}
+
+			// Access modes - use helper to handle both primitive.A and []interface{} types
+			accessModesSlice := toBsonSlice(vctData["accessModes"])
+			if len(accessModesSlice) > 0 {
+				var modes []string
+				for _, mode := range accessModesSlice {
+					if modeStr, ok := mode.(string); ok {
+						modes = append(modes, modeStr)
+					}
+				}
+				template["AccessModes"] = modes
+			} else {
+				template["AccessModes"] = []string{"ReadWriteOnce"}
+			}
+
+			templates = append(templates, template)
+		}
+		if len(templates) > 0 {
+			values["VolumeClaimTemplates"] = templates
+		}
+	}
+
+	// Add metadata
+	values["Version"] = "v1"
+	values["Namespace"] = "default"
+	if namespace, ok := statefulSetData["namespace"].(string); ok {
+		values["Namespace"] = namespace
+	}
+
+	return values
+}
+
+// updateStatefulSetNodeStatus updates a workflow node's _status field with StatefulSet status
+func (e *WorkflowExecutor) updateStatefulSetNodeStatus(workflowID primitive.ObjectID, nodeID string, status *applier.StatefulSetStatus) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Get the current workflow
+	var workflow models.Workflow
+	filter := bson.M{"_id": workflowID}
+	err := database.WorkflowColl.FindOne(ctx, filter).Decode(&workflow)
+	if err != nil {
+		return fmt.Errorf("failed to get workflow: %w", err)
+	}
+
+	// Find and update the node with status
+	for i, node := range workflow.Nodes {
+		if node.ID == nodeID {
+			if workflow.Nodes[i].Data == nil {
+				workflow.Nodes[i].Data = make(map[string]interface{})
+			}
+			workflow.Nodes[i].Data["_status"] = map[string]interface{}{
+				"state":           status.State,
+				"replicas":        status.Replicas,
+				"readyReplicas":   status.ReadyReplicas,
+				"currentReplicas": status.CurrentReplicas,
+				"message":         status.Message,
+			}
+			break
+		}
+	}
+
+	// Update the workflow with new nodes
+	update := bson.M{
+		"$set": bson.M{
+			"nodes":      workflow.Nodes,
+			"updated_at": time.Now(),
+		},
+	}
+
+	_, err = database.WorkflowColl.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("failed to update workflow: %w", err)
+	}
+
+	e.logger.WithFields(logrus.Fields{
+		"workflow_id":      workflowID.Hex(),
+		"node_id":          nodeID,
+		"state":            status.State,
+		"replicas":         status.Replicas,
+		"ready_replicas":   status.ReadyReplicas,
+		"current_replicas": status.CurrentReplicas,
+	}).Info("Updated StatefulSet node status in workflow")
+
+	// Publish status update event to SSE subscribers
+	broadcaster := GetSSEBroadcaster()
+	broadcaster.Publish(StreamEvent{
+		Type:      "workflow",
+		StreamKey: fmt.Sprintf("workflow:%s", workflowID.Hex()),
+		EventType: "node_update",
+		Data: map[string]interface{}{
+			"node_id": nodeID,
+			"type":    "statefulset",
+			"status": map[string]interface{}{
+				"state":           status.State,
+				"replicas":        status.Replicas,
+				"readyReplicas":   status.ReadyReplicas,
+				"currentReplicas": status.CurrentReplicas,
+				"message":         status.Message,
+			},
+		},
+	})
+
+	return nil
+}
+
 // updateResourceNodeStatus updates a workflow node's _status field and broadcasts via SSE.
 // This is a generic function that handles status updates for resource nodes (configmap, secret, etc.)
 // Parameters:
@@ -1941,6 +2543,19 @@ func (e *WorkflowExecutor) SyncWorkflowStatuses(ctx context.Context, userID prim
 					"message":              status.Message,
 				}
 				updated = true
+			} else if nodeType == "core/statefulset" {
+				status, err := manifestApplier.GetStatefulSetStatus(ctx, name, namespace)
+				if err != nil {
+					continue // Resource might not exist
+				}
+				workflow.Nodes[i].Data["_status"] = map[string]interface{}{
+					"state":           status.State,
+					"replicas":        status.Replicas,
+					"readyReplicas":   status.ReadyReplicas,
+					"currentReplicas": status.CurrentReplicas,
+					"message":         status.Message,
+				}
+				updated = true
 			}
 		}
 
@@ -2012,41 +2627,48 @@ func (e *WorkflowExecutor) CleanupWorkflowResources(ctx context.Context, workflo
 
 	var cleanupErrors []string
 
-	// Delete resources in reverse order (ingress first, then services, then deployments)
-	// This ensures ingress is removed before services, and services before deployments
-	for _, node := range workflow.Nodes {
-		if node.Type == "ingress" {
-			if err := e.deleteIngressNode(ctx, manifestApplier, &node); err != nil {
-				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete ingress")
-				cleanupErrors = append(cleanupErrors, err.Error())
-			}
-		}
+	// Group nodes by type for efficient iteration (single pass)
+	nodesByType := make(map[string][]*models.WorkflowNode)
+	for i := range workflow.Nodes {
+		node := &workflow.Nodes[i]
+		nodesByType[node.Type] = append(nodesByType[node.Type], node)
 	}
 
-	for _, node := range workflow.Nodes {
-		if node.Type == "service" {
-			if err := e.deleteServiceNode(ctx, manifestApplier, &node); err != nil {
-				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete service")
-				cleanupErrors = append(cleanupErrors, err.Error())
-			}
-		}
-	}
-
-	for _, node := range workflow.Nodes {
-		if node.Type == "deployment" {
-			if err := e.deleteDeploymentNode(ctx, manifestApplier, &node); err != nil {
-				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete deployment")
-				cleanupErrors = append(cleanupErrors, err.Error())
-			}
-		}
-	}
-
-	// Delete ConfigMaps last (after deployments that use them)
+	// Delete resources in dependency order:
+	// 1. Ingress (depends on services)
+	// 2. Services (depends on deployments/statefulsets)
+	// 3. StatefulSets and Deployments (depends on configmaps/secrets/pvcs)
+	// 4. ConfigMaps (used by deployments/statefulsets)
+	// 5. PVCs last (used by deployments/statefulsets)
 	// Note: We don't delete Secrets as they are managed externally (pass-through)
-	for _, node := range workflow.Nodes {
-		if node.Type == "configmap" {
-			if err := e.deleteConfigMapNode(ctx, manifestApplier, &node); err != nil {
-				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete configmap")
+	deletionOrder := []string{"ingress", "service", "statefulset", "deployment", "configmap", "persistentvolumeclaim"}
+
+	for _, nodeType := range deletionOrder {
+		nodes, ok := nodesByType[nodeType]
+		if !ok {
+			continue
+		}
+		for _, node := range nodes {
+			var err error
+			switch nodeType {
+			case "ingress":
+				err = e.deleteIngressNode(ctx, manifestApplier, node)
+			case "service":
+				err = e.deleteServiceNode(ctx, manifestApplier, node)
+			case "statefulset":
+				err = e.deleteStatefulSetNode(ctx, manifestApplier, node)
+			case "deployment":
+				err = e.deleteDeploymentNode(ctx, manifestApplier, node)
+			case "configmap":
+				err = e.deleteConfigMapNode(ctx, manifestApplier, node)
+			case "persistentvolumeclaim":
+				err = e.deletePVCNode(ctx, manifestApplier, node)
+			}
+			if err != nil {
+				e.logger.WithError(err).WithFields(logrus.Fields{
+					"node_id":   node.ID,
+					"node_type": nodeType,
+				}).Warn("Failed to delete resource")
 				cleanupErrors = append(cleanupErrors, err.Error())
 			}
 		}
@@ -2168,6 +2790,60 @@ func (e *WorkflowExecutor) deleteIngressNode(ctx context.Context, manifestApplie
 	return manifestApplier.DeleteIngress(ctx, name, namespace)
 }
 
+// deletePVCNode deletes a Kubernetes PersistentVolumeClaim created by a PVC node
+func (e *WorkflowExecutor) deletePVCNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode) error {
+	if node.Data == nil {
+		return nil
+	}
+
+	// Get PVC name from node data
+	name, ok := node.Data["name"].(string)
+	if !ok || name == "" {
+		name = node.ID // Fallback to node ID
+	}
+
+	// Get namespace from node data
+	namespace := "default"
+	if ns, ok := node.Data["namespace"].(string); ok && ns != "" {
+		namespace = ns
+	}
+
+	e.logger.WithFields(logrus.Fields{
+		"pvc":       name,
+		"namespace": namespace,
+		"node_id":   node.ID,
+	}).Info("Deleting PVC from workflow cleanup")
+
+	return manifestApplier.DeletePVC(ctx, name, namespace)
+}
+
+// deleteStatefulSetNode deletes a Kubernetes StatefulSet created by a statefulset node
+func (e *WorkflowExecutor) deleteStatefulSetNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode) error {
+	if node.Data == nil {
+		return nil
+	}
+
+	// Get StatefulSet name from node data
+	name, ok := node.Data["name"].(string)
+	if !ok || name == "" {
+		name = node.ID // Fallback to node ID
+	}
+
+	// Get namespace from node data
+	namespace := "default"
+	if ns, ok := node.Data["namespace"].(string); ok && ns != "" {
+		namespace = ns
+	}
+
+	e.logger.WithFields(logrus.Fields{
+		"statefulset": name,
+		"namespace":   namespace,
+		"node_id":     node.ID,
+	}).Info("Deleting StatefulSet from workflow cleanup")
+
+	return manifestApplier.DeleteStatefulSet(ctx, name, namespace)
+}
+
 // CleanupDeletedNodes deletes Kubernetes resources for specific nodes that were removed from a workflow
 func (e *WorkflowExecutor) CleanupDeletedNodes(ctx context.Context, workflow *models.Workflow, deletedNodes []models.WorkflowNode, userID primitive.ObjectID) error {
 	if len(deletedNodes) == 0 {
@@ -2199,40 +2875,43 @@ func (e *WorkflowExecutor) CleanupDeletedNodes(ctx context.Context, workflow *mo
 
 	var cleanupErrors []string
 
-	// Delete in reverse order: ingress first, then services, then deployments
-	for _, node := range deletedNodes {
-		if node.Type == "ingress" {
-			if err := e.deleteIngressNode(ctx, manifestApplier, &node); err != nil {
-				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete ingress")
-				cleanupErrors = append(cleanupErrors, err.Error())
-			}
-		}
+	// Group deleted nodes by type for efficient iteration (single pass)
+	nodesByType := make(map[string][]*models.WorkflowNode)
+	for i := range deletedNodes {
+		node := &deletedNodes[i]
+		nodesByType[node.Type] = append(nodesByType[node.Type], node)
 	}
 
-	for _, node := range deletedNodes {
-		if node.Type == "service" {
-			if err := e.deleteServiceNode(ctx, manifestApplier, &node); err != nil {
-				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete service")
-				cleanupErrors = append(cleanupErrors, err.Error())
-			}
-		}
-	}
-
-	for _, node := range deletedNodes {
-		if node.Type == "deployment" {
-			if err := e.deleteDeploymentNode(ctx, manifestApplier, &node); err != nil {
-				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete deployment")
-				cleanupErrors = append(cleanupErrors, err.Error())
-			}
-		}
-	}
-
-	// Delete configmaps last (after deployments)
+	// Delete resources in dependency order (same as CleanupWorkflowResources)
 	// Note: We don't delete Secrets as they are managed externally (pass-through)
-	for _, node := range deletedNodes {
-		if node.Type == "configmap" {
-			if err := e.deleteConfigMapNode(ctx, manifestApplier, &node); err != nil {
-				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete configmap")
+	deletionOrder := []string{"ingress", "service", "statefulset", "deployment", "configmap", "persistentvolumeclaim"}
+
+	for _, nodeType := range deletionOrder {
+		nodes, ok := nodesByType[nodeType]
+		if !ok {
+			continue
+		}
+		for _, node := range nodes {
+			var err error
+			switch nodeType {
+			case "ingress":
+				err = e.deleteIngressNode(ctx, manifestApplier, node)
+			case "service":
+				err = e.deleteServiceNode(ctx, manifestApplier, node)
+			case "statefulset":
+				err = e.deleteStatefulSetNode(ctx, manifestApplier, node)
+			case "deployment":
+				err = e.deleteDeploymentNode(ctx, manifestApplier, node)
+			case "configmap":
+				err = e.deleteConfigMapNode(ctx, manifestApplier, node)
+			case "persistentvolumeclaim":
+				err = e.deletePVCNode(ctx, manifestApplier, node)
+			}
+			if err != nil {
+				e.logger.WithError(err).WithFields(logrus.Fields{
+					"node_id":   node.ID,
+					"node_type": nodeType,
+				}).Warn("Failed to delete resource")
 				cleanupErrors = append(cleanupErrors, err.Error())
 			}
 		}

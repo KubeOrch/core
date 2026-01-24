@@ -728,9 +728,16 @@ func startWatchersForWorkflow(workflow *models.Workflow, userID primitive.Object
 
 		// Only watch supported resource types
 		resourceType := node.Type
-		if resourceType != "deployment" && resourceType != "service" &&
-		   resourceType != "statefulset" && resourceType != "daemonset" &&
-		   resourceType != "job" && resourceType != "pod" {
+		watchedResourceTypes := map[string]struct{}{
+			"deployment":            {},
+			"service":               {},
+			"statefulset":           {},
+			"daemonset":             {},
+			"job":                   {},
+			"pod":                   {},
+			"persistentvolumeclaim": {},
+		}
+		if _, ok := watchedResourceTypes[resourceType]; !ok {
 			continue
 		}
 

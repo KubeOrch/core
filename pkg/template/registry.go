@@ -34,13 +34,6 @@ type ParameterOption struct {
 	Label string `yaml:"label" json:"label"`
 }
 
-// TemplateExample represents an example configuration
-type TemplateExample struct {
-	Name        string                 `yaml:"name" json:"name"`
-	Description string                 `yaml:"description" json:"description"`
-	Config      map[string]interface{} `yaml:"config" json:"config"`
-}
-
 // TemplateMetadata contains information about a template
 type TemplateMetadata struct {
 	ID             string              `yaml:"id" json:"id"`
@@ -53,9 +46,8 @@ type TemplateMetadata struct {
 	Tags           []string            `yaml:"tags" json:"tags"`
 	UsageFrequency string              `yaml:"usageFrequency" json:"usageFrequency"` // very-high, high, medium, low
 	Difficulty     string              `yaml:"difficulty" json:"difficulty"`         // easy, medium, hard
-	Dependencies   []string            `yaml:"dependencies" json:"dependencies"`      // IDs of templates this depends on
+	Dependencies   []string            `yaml:"dependencies" json:"dependencies"`     // IDs of templates this depends on
 	Parameters     []TemplateParameter `yaml:"parameters" json:"parameters"`
-	Examples       []TemplateExample   `yaml:"examples" json:"examples"`
 }
 
 // Registry manages template metadata
