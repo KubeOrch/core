@@ -567,7 +567,7 @@ func (a *ManifestApplier) CheckSecretExists(ctx context.Context, name, namespace
 
 // PVCStatus represents the status of a Kubernetes PersistentVolumeClaim
 type PVCStatus struct {
-	State      string `json:"state"` // Bound, Pending, Lost, error
+	State      string `json:"state"` // Internal state: Bound, Pending, or error (mapped from Lost phase)
 	Capacity   string `json:"capacity,omitempty"`
 	VolumeName string `json:"volumeName,omitempty"`
 	Message    string `json:"message,omitempty"`

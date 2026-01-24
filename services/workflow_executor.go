@@ -1534,11 +1534,27 @@ func (e *WorkflowExecutor) executePersistentVolumeClaimNode(ctx context.Context,
 	return nil
 }
 
+// toBsonSlice converts BSON array types (primitive.A) to standard []interface{}
+// This handles both primitive.A from MongoDB and regular []interface{} from JSON
+func toBsonSlice(raw interface{}) []interface{} {
+	if raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case primitive.A:
+		return []interface{}(v)
+	case []interface{}:
+		return v
+	default:
+		return nil
+	}
+}
+
 // preparePVCTemplateValues prepares values for PVC template rendering
 func (e *WorkflowExecutor) preparePVCTemplateValues(node *models.WorkflowNode, pvcData map[string]interface{}) map[string]interface{} {
 	values := make(map[string]interface{})
 
-	if name, ok := pvcData["name"].(string); ok {
+	if name, ok := pvcData["name"].(string); ok && name != "" {
 		values["Name"] = name
 	} else {
 		values["Name"] = node.ID
@@ -1554,16 +1570,8 @@ func (e *WorkflowExecutor) preparePVCTemplateValues(node *models.WorkflowNode, p
 		values["Storage"] = storage
 	}
 
-	// Access modes - handle both primitive.A and []interface{} types
-	var accessModesSlice []interface{}
-	if rawModes, exists := pvcData["accessModes"]; exists {
-		switch v := rawModes.(type) {
-		case primitive.A:
-			accessModesSlice = []interface{}(v)
-		case []interface{}:
-			accessModesSlice = v
-		}
-	}
+	// Access modes - use helper to handle both primitive.A and []interface{} types
+	accessModesSlice := toBsonSlice(pvcData["accessModes"])
 	if len(accessModesSlice) > 0 {
 		var modes []string
 		for _, m := range accessModesSlice {
@@ -1783,10 +1791,10 @@ func (e *WorkflowExecutor) executeStatefulSetNodeWithConnections(ctx context.Con
 func (e *WorkflowExecutor) prepareStatefulSetTemplateValues(node *models.WorkflowNode, statefulSetData map[string]interface{}) map[string]interface{} {
 	values := make(map[string]interface{})
 
-	if name, ok := statefulSetData["name"].(string); ok {
+	if name, ok := statefulSetData["name"].(string); ok && name != "" {
 		values["Name"] = name
 	} else {
-		// Fallback to node ID if name not provided
+		// Fallback to node ID if name not provided or empty
 		values["Name"] = node.ID
 	}
 
@@ -1852,16 +1860,8 @@ func (e *WorkflowExecutor) prepareStatefulSetTemplateValues(node *models.Workflo
 		}
 	}
 
-	// Handle volumeClaimTemplates - handle both primitive.A and []interface{} types
-	var vctSlice []interface{}
-	if rawVCT, exists := statefulSetData["volumeClaimTemplates"]; exists {
-		switch v := rawVCT.(type) {
-		case primitive.A:
-			vctSlice = []interface{}(v)
-		case []interface{}:
-			vctSlice = v
-		}
-	}
+	// Handle volumeClaimTemplates - use helper to handle both primitive.A and []interface{} types
+	vctSlice := toBsonSlice(statefulSetData["volumeClaimTemplates"])
 	if len(vctSlice) > 0 {
 		var templates []map[string]interface{}
 		for _, vct := range vctSlice {
@@ -1886,16 +1886,8 @@ func (e *WorkflowExecutor) prepareStatefulSetTemplateValues(node *models.Workflo
 				template["StorageClassName"] = storageClassName
 			}
 
-			// Access modes - handle both primitive.A and []interface{} types
-			var accessModesSlice []interface{}
-			if rawModes, exists := vctData["accessModes"]; exists {
-				switch m := rawModes.(type) {
-				case primitive.A:
-					accessModesSlice = []interface{}(m)
-				case []interface{}:
-					accessModesSlice = m
-				}
-			}
+			// Access modes - use helper to handle both primitive.A and []interface{} types
+			accessModesSlice := toBsonSlice(vctData["accessModes"])
 			if len(accessModesSlice) > 0 {
 				var modes []string
 				for _, mode := range accessModesSlice {
@@ -2635,60 +2627,48 @@ func (e *WorkflowExecutor) CleanupWorkflowResources(ctx context.Context, workflo
 
 	var cleanupErrors []string
 
-	// Delete resources in reverse order (ingress first, then services, then deployments)
-	// This ensures ingress is removed before services, and services before deployments
-	for _, node := range workflow.Nodes {
-		if node.Type == "ingress" {
-			if err := e.deleteIngressNode(ctx, manifestApplier, &node); err != nil {
-				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete ingress")
-				cleanupErrors = append(cleanupErrors, err.Error())
-			}
-		}
+	// Group nodes by type for efficient iteration (single pass)
+	nodesByType := make(map[string][]*models.WorkflowNode)
+	for i := range workflow.Nodes {
+		node := &workflow.Nodes[i]
+		nodesByType[node.Type] = append(nodesByType[node.Type], node)
 	}
 
-	for _, node := range workflow.Nodes {
-		if node.Type == "service" {
-			if err := e.deleteServiceNode(ctx, manifestApplier, &node); err != nil {
-				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete service")
-				cleanupErrors = append(cleanupErrors, err.Error())
-			}
-		}
-	}
-
-	for _, node := range workflow.Nodes {
-		if node.Type == "statefulset" {
-			if err := e.deleteStatefulSetNode(ctx, manifestApplier, &node); err != nil {
-				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete statefulset")
-				cleanupErrors = append(cleanupErrors, err.Error())
-			}
-		}
-	}
-
-	for _, node := range workflow.Nodes {
-		if node.Type == "deployment" {
-			if err := e.deleteDeploymentNode(ctx, manifestApplier, &node); err != nil {
-				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete deployment")
-				cleanupErrors = append(cleanupErrors, err.Error())
-			}
-		}
-	}
-
-	// Delete ConfigMaps (after deployments/statefulsets that use them)
+	// Delete resources in dependency order:
+	// 1. Ingress (depends on services)
+	// 2. Services (depends on deployments/statefulsets)
+	// 3. StatefulSets and Deployments (depends on configmaps/secrets/pvcs)
+	// 4. ConfigMaps (used by deployments/statefulsets)
+	// 5. PVCs last (used by deployments/statefulsets)
 	// Note: We don't delete Secrets as they are managed externally (pass-through)
-	for _, node := range workflow.Nodes {
-		if node.Type == "configmap" {
-			if err := e.deleteConfigMapNode(ctx, manifestApplier, &node); err != nil {
-				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete configmap")
-				cleanupErrors = append(cleanupErrors, err.Error())
-			}
-		}
-	}
+	deletionOrder := []string{"ingress", "service", "statefulset", "deployment", "configmap", "persistentvolumeclaim"}
 
-	// Delete PVCs last (after deployments/statefulsets that use them)
-	for _, node := range workflow.Nodes {
-		if node.Type == "persistentvolumeclaim" {
-			if err := e.deletePVCNode(ctx, manifestApplier, &node); err != nil {
-				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete PVC")
+	for _, nodeType := range deletionOrder {
+		nodes, ok := nodesByType[nodeType]
+		if !ok {
+			continue
+		}
+		for _, node := range nodes {
+			var err error
+			switch nodeType {
+			case "ingress":
+				err = e.deleteIngressNode(ctx, manifestApplier, node)
+			case "service":
+				err = e.deleteServiceNode(ctx, manifestApplier, node)
+			case "statefulset":
+				err = e.deleteStatefulSetNode(ctx, manifestApplier, node)
+			case "deployment":
+				err = e.deleteDeploymentNode(ctx, manifestApplier, node)
+			case "configmap":
+				err = e.deleteConfigMapNode(ctx, manifestApplier, node)
+			case "persistentvolumeclaim":
+				err = e.deletePVCNode(ctx, manifestApplier, node)
+			}
+			if err != nil {
+				e.logger.WithError(err).WithFields(logrus.Fields{
+					"node_id":   node.ID,
+					"node_type": nodeType,
+				}).Warn("Failed to delete resource")
 				cleanupErrors = append(cleanupErrors, err.Error())
 			}
 		}
@@ -2895,59 +2875,43 @@ func (e *WorkflowExecutor) CleanupDeletedNodes(ctx context.Context, workflow *mo
 
 	var cleanupErrors []string
 
-	// Delete in reverse order: ingress first, then services, then deployments
-	for _, node := range deletedNodes {
-		if node.Type == "ingress" {
-			if err := e.deleteIngressNode(ctx, manifestApplier, &node); err != nil {
-				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete ingress")
-				cleanupErrors = append(cleanupErrors, err.Error())
-			}
-		}
+	// Group deleted nodes by type for efficient iteration (single pass)
+	nodesByType := make(map[string][]*models.WorkflowNode)
+	for i := range deletedNodes {
+		node := &deletedNodes[i]
+		nodesByType[node.Type] = append(nodesByType[node.Type], node)
 	}
 
-	for _, node := range deletedNodes {
-		if node.Type == "service" {
-			if err := e.deleteServiceNode(ctx, manifestApplier, &node); err != nil {
-				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete service")
-				cleanupErrors = append(cleanupErrors, err.Error())
-			}
-		}
-	}
-
-	for _, node := range deletedNodes {
-		if node.Type == "statefulset" {
-			if err := e.deleteStatefulSetNode(ctx, manifestApplier, &node); err != nil {
-				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete statefulset")
-				cleanupErrors = append(cleanupErrors, err.Error())
-			}
-		}
-	}
-
-	for _, node := range deletedNodes {
-		if node.Type == "deployment" {
-			if err := e.deleteDeploymentNode(ctx, manifestApplier, &node); err != nil {
-				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete deployment")
-				cleanupErrors = append(cleanupErrors, err.Error())
-			}
-		}
-	}
-
-	// Delete configmaps (after deployments/statefulsets)
+	// Delete resources in dependency order (same as CleanupWorkflowResources)
 	// Note: We don't delete Secrets as they are managed externally (pass-through)
-	for _, node := range deletedNodes {
-		if node.Type == "configmap" {
-			if err := e.deleteConfigMapNode(ctx, manifestApplier, &node); err != nil {
-				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete configmap")
-				cleanupErrors = append(cleanupErrors, err.Error())
-			}
-		}
-	}
+	deletionOrder := []string{"ingress", "service", "statefulset", "deployment", "configmap", "persistentvolumeclaim"}
 
-	// Delete PVCs last (after deployments/statefulsets)
-	for _, node := range deletedNodes {
-		if node.Type == "persistentvolumeclaim" {
-			if err := e.deletePVCNode(ctx, manifestApplier, &node); err != nil {
-				e.logger.WithError(err).WithField("node_id", node.ID).Warn("Failed to delete PVC")
+	for _, nodeType := range deletionOrder {
+		nodes, ok := nodesByType[nodeType]
+		if !ok {
+			continue
+		}
+		for _, node := range nodes {
+			var err error
+			switch nodeType {
+			case "ingress":
+				err = e.deleteIngressNode(ctx, manifestApplier, node)
+			case "service":
+				err = e.deleteServiceNode(ctx, manifestApplier, node)
+			case "statefulset":
+				err = e.deleteStatefulSetNode(ctx, manifestApplier, node)
+			case "deployment":
+				err = e.deleteDeploymentNode(ctx, manifestApplier, node)
+			case "configmap":
+				err = e.deleteConfigMapNode(ctx, manifestApplier, node)
+			case "persistentvolumeclaim":
+				err = e.deletePVCNode(ctx, manifestApplier, node)
+			}
+			if err != nil {
+				e.logger.WithError(err).WithFields(logrus.Fields{
+					"node_id":   node.ID,
+					"node_type": nodeType,
+				}).Warn("Failed to delete resource")
 				cleanupErrors = append(cleanupErrors, err.Error())
 			}
 		}

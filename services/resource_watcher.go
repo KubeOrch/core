@@ -538,12 +538,10 @@ func (rw *ResourceWatcher) extractPVCStatus(resource *unstructured.Unstructured)
 	case "Bound":
 		state = "Bound"
 		message = "Volume bound successfully"
-	case "Pending":
-		state = "Pending"
-		message = "Waiting for volume to be provisioned"
 	case "Lost":
 		state = "Lost"
 		message = "Volume has been lost"
+	// "Pending" is handled by default values
 	}
 
 	return map[string]interface{}{
