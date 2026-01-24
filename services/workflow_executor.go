@@ -122,7 +122,7 @@ func (e *WorkflowExecutor) ExecuteWorkflow(ctx context.Context, workflowID primi
 
 		switch node.Type {
 		case "deployment":
-			if err := e.executeDeploymentNode(ctx, manifestApplier, node, workflowRun); err != nil {
+			if err := e.executeDeploymentNode(ctx, manifestApplier, node, workflowRun, runtimeData); err != nil {
 				e.updateWorkflowRunStatus(workflowRun, models.WorkflowRunStatusFailed, err.Error())
 				e.updateWorkflowStats(workflowID, false)
 				return workflowRun, fmt.Errorf("failed to execute node %s: %w", node.ID, err)
@@ -170,7 +170,7 @@ func (e *WorkflowExecutor) ExecuteWorkflow(ctx context.Context, workflowID primi
 			// Store PVC data for connected deployment/statefulset nodes
 			executedNodeData[node.ID] = node.Data
 		case "statefulset":
-			if err := e.executeStatefulSetNodeWithConnections(ctx, manifestApplier, node, workflowRun, connectionGraph, executedNodeData); err != nil {
+			if err := e.executeStatefulSetNodeWithConnections(ctx, manifestApplier, node, workflowRun, connectionGraph, executedNodeData, runtimeData); err != nil {
 				e.updateWorkflowRunStatus(workflowRun, models.WorkflowRunStatusFailed, err.Error())
 				e.updateWorkflowStats(workflowID, false)
 				return workflowRun, fmt.Errorf("failed to execute node %s: %w", node.ID, err)
@@ -276,7 +276,7 @@ func (e *WorkflowExecutor) getConnectedSourceData(nodeID string, connectionGraph
 }
 
 // executeDeploymentNode executes a deployment node
-func (e *WorkflowExecutor) executeDeploymentNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun) error {
+func (e *WorkflowExecutor) executeDeploymentNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun, runtimeData map[string]interface{}) error {
 	e.logger.WithFields(logrus.Fields{
 		"node_id":   node.ID,
 		"node_type": node.Type,
@@ -292,6 +292,22 @@ func (e *WorkflowExecutor) executeDeploymentNode(ctx context.Context, manifestAp
 	deploymentData := node.Data
 	if deploymentData == nil {
 		return fmt.Errorf("invalid deployment data in node")
+	}
+
+	// Merge runtime env values into deployment data
+	// Structure: runtimeData["envVars"][nodeID] = { key: value }
+	if envVars, ok := runtimeData["envVars"].(map[string]interface{}); ok {
+		if nodeEnvVars, ok := envVars[node.ID].(map[string]interface{}); ok {
+			// Merge with existing env vars (runtime values take precedence)
+			existingEnv := make(map[string]interface{})
+			if existing, ok := deploymentData["env"].(map[string]interface{}); ok {
+				existingEnv = existing
+			}
+			for k, v := range nodeEnvVars {
+				existingEnv[k] = v
+			}
+			deploymentData["env"] = existingEnv
+		}
 	}
 
 	// Prepare template values
@@ -1676,7 +1692,7 @@ func (e *WorkflowExecutor) updatePVCNodeStatus(workflowID primitive.ObjectID, no
 }
 
 // executeStatefulSetNodeWithConnections executes a StatefulSet node with data from connected nodes
-func (e *WorkflowExecutor) executeStatefulSetNodeWithConnections(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun, connectionGraph map[string][]string, executedNodeData map[string]map[string]interface{}) error {
+func (e *WorkflowExecutor) executeStatefulSetNodeWithConnections(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun, connectionGraph map[string][]string, executedNodeData map[string]map[string]interface{}, runtimeData map[string]interface{}) error {
 	e.logger.WithFields(logrus.Fields{
 		"node_id":   node.ID,
 		"node_type": node.Type,
@@ -1690,6 +1706,22 @@ func (e *WorkflowExecutor) executeStatefulSetNodeWithConnections(ctx context.Con
 	statefulSetData := node.Data
 	if statefulSetData == nil {
 		return fmt.Errorf("invalid statefulset data in node")
+	}
+
+	// Merge runtime env values into statefulset data
+	// Structure: runtimeData["envVars"][nodeID] = { key: value }
+	if envVars, ok := runtimeData["envVars"].(map[string]interface{}); ok {
+		if nodeEnvVars, ok := envVars[node.ID].(map[string]interface{}); ok {
+			// Merge with existing env vars (runtime values take precedence)
+			existingEnv := make(map[string]interface{})
+			if existing, ok := statefulSetData["env"].(map[string]interface{}); ok {
+				existingEnv = existing
+			}
+			for k, v := range nodeEnvVars {
+				existingEnv[k] = v
+			}
+			statefulSetData["env"] = existingEnv
+		}
 	}
 
 	// Prepare template values
