@@ -1,9 +1,9 @@
 id: core/deployment
 name: deployment
-displayName: Kubernetes Deployment
+displayName: Deployment
 category: core
 description: Deploy and manage containerized applications with automatic rollouts and rollbacks
-icon: 📦
+icon: Package
 version: "1.0.0"
 tags:
   - workload
@@ -87,46 +87,3 @@ parameters:
     description: Health check to determine if pod is ready
     type: object
     required: false
-examples:
-  - name: Basic Web App
-    description: Simple web application deployment
-    config:
-      name: "web-app"
-      namespace: "default"
-      image: "nginx:latest"
-      replicas: 3
-      port: 80
-  - name: API Server with Resources
-    description: API server with resource limits
-    config:
-      name: "api-server"
-      namespace: "production"
-      image: "my-api:v1.0.0"
-      replicas: 2
-      port: 8080
-      env:
-        DATABASE_URL: "postgres://db:5432/mydb"
-        LOG_LEVEL: "info"
-      resources:
-        requests:
-          cpu: "100m"
-          memory: "128Mi"
-        limits:
-          cpu: "500m"
-          memory: "512Mi"
-  - name: App with Health Checks
-    description: Deployment with liveness and readiness probes
-    config:
-      name: "healthy-app"
-      namespace: "default"
-      image: "my-app:latest"
-      replicas: 2
-      port: 8080
-      livenessProbe:
-        path: "/health"
-        initialDelaySeconds: 30
-        periodSeconds: 10
-      readinessProbe:
-        path: "/ready"
-        initialDelaySeconds: 5
-        periodSeconds: 5

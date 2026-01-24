@@ -55,7 +55,8 @@ var resourceGVRMap = map[string]schema.GroupVersionResource{
 	"ingress":     {Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"},
 	"configmap":   {Group: "", Version: "v1", Resource: "configmaps"},
 	"secret":      {Group: "", Version: "v1", Resource: "secrets"},
-	"pvc":         {Group: "", Version: "v1", Resource: "persistentvolumeclaims"},
+	"pvc":                   {Group: "", Version: "v1", Resource: "persistentvolumeclaims"},
+	"persistentvolumeclaim": {Group: "", Version: "v1", Resource: "persistentvolumeclaims"},
 	"pod":         {Group: "", Version: "v1", Resource: "pods"},
 	"replicaset":  {Group: "apps", Version: "v1", Resource: "replicasets"},
 	"hpa":         {Group: "autoscaling", Version: "v2", Resource: "horizontalpodautoscalers"},
@@ -291,6 +292,8 @@ func (rw *ResourceWatcher) extractStatus(resource *unstructured.Unstructured) ma
 		return rw.extractJobStatus(resource)
 	case "pod":
 		return rw.extractPodStatus(resource)
+	case "pvc", "persistentvolumeclaim":
+		return rw.extractPVCStatus(resource)
 	default:
 		// Generic status extraction for unknown types
 		return rw.extractGenericStatus(resource)
@@ -522,6 +525,35 @@ func (rw *ResourceWatcher) extractPodStatus(resource *unstructured.Unstructured)
 	}
 }
 
+// extractPVCStatus extracts PersistentVolumeClaim-specific status
+func (rw *ResourceWatcher) extractPVCStatus(resource *unstructured.Unstructured) map[string]interface{} {
+	phase, _, _ := unstructured.NestedString(resource.Object, "status", "phase")
+	capacity, _, _ := unstructured.NestedString(resource.Object, "status", "capacity", "storage")
+	volumeName, _, _ := unstructured.NestedString(resource.Object, "spec", "volumeName")
+
+	state := "Pending"
+	message := "Waiting for volume to be provisioned"
+
+	switch phase {
+	case "Bound":
+		state = "Bound"
+		message = "Volume bound successfully"
+	case "Pending":
+		state = "Pending"
+		message = "Waiting for volume to be provisioned"
+	case "Lost":
+		state = "Lost"
+		message = "Volume has been lost"
+	}
+
+	return map[string]interface{}{
+		"state":      state,
+		"capacity":   capacity,
+		"volumeName": volumeName,
+		"message":    message,
+	}
+}
+
 // extractGenericStatus extracts generic status for unknown resource types
 func (rw *ResourceWatcher) extractGenericStatus(resource *unstructured.Unstructured) map[string]interface{} {
 	status, found, _ := unstructured.NestedMap(resource.Object, "status")
@@ -575,6 +607,10 @@ func (rw *ResourceWatcher) isResourceReady(status map[string]interface{}) bool {
 	if !ok {
 		return false
 	}
+	// PVC uses "Bound" state instead of "healthy"
+	if rw.resourceType == "pvc" || rw.resourceType == "persistentvolumeclaim" {
+		return state == "Bound"
+	}
 	return state == "healthy"
 }
 
@@ -603,6 +639,9 @@ func (rw *ResourceWatcher) hasStatusChanged(old, new map[string]interface{}) boo
 			old["failed"] != new["failed"]
 	case "pod":
 		return old["phase"] != new["phase"]
+	case "pvc", "persistentvolumeclaim":
+		return old["state"] != new["state"] ||
+			old["capacity"] != new["capacity"]
 	default:
 		return old["state"] != new["state"]
 	}

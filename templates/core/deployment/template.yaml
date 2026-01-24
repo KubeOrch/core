@@ -88,7 +88,9 @@ spec:
         {{- range .VolumeMounts }}
         - name: {{ .Name }}-volume
           mountPath: {{ .MountPath }}
+          {{- if or (eq .Type "configMap") (eq .Type "secret") }}
           readOnly: true
+          {{- end }}
         {{- end }}
         {{- end }}
       {{- if .ImagePullSecrets }}
@@ -107,6 +109,9 @@ spec:
         {{- else if eq .Type "secret" }}
         secret:
           secretName: {{ .Name }}
+        {{- else if eq .Type "persistentVolumeClaim" }}
+        persistentVolumeClaim:
+          claimName: {{ .Name }}
         {{- end }}
       {{- end }}
       {{- end }}

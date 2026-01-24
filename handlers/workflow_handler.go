@@ -730,7 +730,8 @@ func startWatchersForWorkflow(workflow *models.Workflow, userID primitive.Object
 		resourceType := node.Type
 		if resourceType != "deployment" && resourceType != "service" &&
 		   resourceType != "statefulset" && resourceType != "daemonset" &&
-		   resourceType != "job" && resourceType != "pod" {
+		   resourceType != "job" && resourceType != "pod" &&
+		   resourceType != "persistentvolumeclaim" {
 			continue
 		}
 

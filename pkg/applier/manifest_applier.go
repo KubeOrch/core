@@ -564,3 +564,139 @@ func (a *ManifestApplier) CheckSecretExists(ctx context.Context, name, namespace
 
 	return true, nil
 }
+
+// PVCStatus represents the status of a Kubernetes PersistentVolumeClaim
+type PVCStatus struct {
+	State      string `json:"state"` // Bound, Pending, Lost, error
+	Capacity   string `json:"capacity,omitempty"`
+	VolumeName string `json:"volumeName,omitempty"`
+	Message    string `json:"message,omitempty"`
+}
+
+// GetPVCStatus gets the status of a Kubernetes PersistentVolumeClaim
+func (a *ManifestApplier) GetPVCStatus(ctx context.Context, name, namespace string) (*PVCStatus, error) {
+	if namespace == "" {
+		namespace = a.namespace
+	}
+
+	pvc, err := a.clientset.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get PVC: %w", err)
+	}
+
+	status := &PVCStatus{
+		State: string(pvc.Status.Phase),
+	}
+
+	// Get bound volume name
+	if pvc.Spec.VolumeName != "" {
+		status.VolumeName = pvc.Spec.VolumeName
+	}
+
+	// Get actual capacity
+	if storage, ok := pvc.Status.Capacity["storage"]; ok {
+		status.Capacity = storage.String()
+	}
+
+	// Set message based on state
+	switch pvc.Status.Phase {
+	case "Bound":
+		status.Message = fmt.Sprintf("PVC bound to volume %s", status.VolumeName)
+	case "Pending":
+		status.Message = "Waiting for volume to be provisioned"
+	case "Lost":
+		status.State = "error"
+		status.Message = "Bound volume has been lost"
+	}
+
+	return status, nil
+}
+
+// DeletePVC deletes a Kubernetes PersistentVolumeClaim by name and namespace
+func (a *ManifestApplier) DeletePVC(ctx context.Context, name, namespace string) error {
+	if namespace == "" {
+		namespace = a.namespace
+	}
+
+	a.logger.WithFields(logrus.Fields{
+		"kind":      "PersistentVolumeClaim",
+		"name":      name,
+		"namespace": namespace,
+	}).Info("Deleting PVC")
+
+	err := a.clientset.CoreV1().PersistentVolumeClaims(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete PVC %s/%s: %w", namespace, name, err)
+	}
+
+	return nil
+}
+
+// StatefulSetStatus represents the status of a Kubernetes StatefulSet
+type StatefulSetStatus struct {
+	State           string `json:"state"` // healthy, partial, error
+	Replicas        int32  `json:"replicas"`
+	ReadyReplicas   int32  `json:"readyReplicas"`
+	CurrentReplicas int32  `json:"currentReplicas"`
+	Message         string `json:"message,omitempty"`
+}
+
+// GetStatefulSetStatus gets the status of a Kubernetes StatefulSet
+func (a *ManifestApplier) GetStatefulSetStatus(ctx context.Context, name, namespace string) (*StatefulSetStatus, error) {
+	if namespace == "" {
+		namespace = a.namespace
+	}
+
+	statefulset, err := a.clientset.AppsV1().StatefulSets(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get StatefulSet: %w", err)
+	}
+
+	status := &StatefulSetStatus{
+		Replicas:        statefulset.Status.Replicas,
+		ReadyReplicas:   statefulset.Status.ReadyReplicas,
+		CurrentReplicas: statefulset.Status.CurrentReplicas,
+	}
+
+	// Determine state based on replica counts
+	desiredReplicas := int32(1)
+	if statefulset.Spec.Replicas != nil {
+		desiredReplicas = *statefulset.Spec.Replicas
+	}
+
+	if status.ReadyReplicas == desiredReplicas && desiredReplicas > 0 {
+		status.State = "healthy"
+		status.Message = fmt.Sprintf("All %d replicas are ready", desiredReplicas)
+	} else if status.ReadyReplicas > 0 {
+		status.State = "partial"
+		status.Message = fmt.Sprintf("%d of %d replicas ready", status.ReadyReplicas, desiredReplicas)
+	} else if desiredReplicas == 0 {
+		status.State = "healthy"
+		status.Message = "StatefulSet scaled to 0"
+	} else {
+		status.State = "error"
+		status.Message = "No replicas are ready"
+	}
+
+	return status, nil
+}
+
+// DeleteStatefulSet deletes a Kubernetes StatefulSet by name and namespace
+func (a *ManifestApplier) DeleteStatefulSet(ctx context.Context, name, namespace string) error {
+	if namespace == "" {
+		namespace = a.namespace
+	}
+
+	a.logger.WithFields(logrus.Fields{
+		"kind":      "StatefulSet",
+		"name":      name,
+		"namespace": namespace,
+	}).Info("Deleting StatefulSet")
+
+	err := a.clientset.AppsV1().StatefulSets(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete StatefulSet %s/%s: %w", namespace, name, err)
+	}
+
+	return nil
+}
