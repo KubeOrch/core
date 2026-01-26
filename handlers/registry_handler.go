@@ -163,9 +163,8 @@ func (h *RegistryHandler) UpdateRegistry(c *gin.Context) {
 
 	ctx := c.Request.Context()
 
-	// Get existing registry first
-	registry, err := h.service.GetRegistry(ctx, id)
-	if err != nil {
+	// Check registry exists first
+	if _, err := h.service.GetRegistry(ctx, id); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Registry not found"})
 		return
 	}
@@ -194,7 +193,12 @@ func (h *RegistryHandler) UpdateRegistry(c *gin.Context) {
 	}
 
 	// Fetch updated registry
-	registry, _ = h.service.GetRegistry(ctx, id)
+	registry, err := h.service.GetRegistry(ctx, id)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to fetch updated registry")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve updated registry"})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"message":  "Registry updated successfully",

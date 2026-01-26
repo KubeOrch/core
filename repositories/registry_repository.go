@@ -136,7 +136,7 @@ func (r *RegistryRepository) GetByType(ctx context.Context, registryType models.
 	if err != nil {
 		return nil, fmt.Errorf("failed to find registries by type: %w", err)
 	}
-	defer cursor.Close(ctx)
+	defer func() { _ = cursor.Close(ctx) }()
 
 	var registries []*models.Registry
 	if err := cursor.All(ctx, &registries); err != nil {
@@ -186,7 +186,7 @@ func (r *RegistryRepository) List(ctx context.Context) ([]*models.Registry, erro
 	if err != nil {
 		return nil, fmt.Errorf("failed to list registries: %w", err)
 	}
-	defer cursor.Close(ctx)
+	defer func() { _ = cursor.Close(ctx) }()
 
 	var registries []*models.Registry
 	if err := cursor.All(ctx, &registries); err != nil {

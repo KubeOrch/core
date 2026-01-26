@@ -18,7 +18,9 @@ func setupTestKey(t *testing.T) func() {
 	encodedKey := base64.StdEncoding.EncodeToString(testKey)
 
 	// Set the environment variable
-	os.Setenv("ENCRYPTION_KEY", encodedKey)
+	if err := os.Setenv("ENCRYPTION_KEY", encodedKey); err != nil {
+		t.Fatalf("Failed to set ENCRYPTION_KEY: %v", err)
+	}
 
 	// Reset the initialized flag and key to force re-initialization
 	initialized = false
@@ -26,7 +28,7 @@ func setupTestKey(t *testing.T) func() {
 
 	// Return cleanup function
 	return func() {
-		os.Unsetenv("ENCRYPTION_KEY")
+		_ = os.Unsetenv("ENCRYPTION_KEY")
 		initialized = false
 		encryptionKey = nil
 	}
@@ -175,7 +177,7 @@ func TestEmptySlice(t *testing.T) {
 
 func TestIsConfigured(t *testing.T) {
 	// Test when not configured
-	os.Unsetenv("ENCRYPTION_KEY")
+	_ = os.Unsetenv("ENCRYPTION_KEY")
 	initialized = false
 	encryptionKey = nil
 
@@ -190,7 +192,7 @@ func TestIsConfigured(t *testing.T) {
 
 func TestEncryptWithoutKey(t *testing.T) {
 	// Clear the key
-	os.Unsetenv("ENCRYPTION_KEY")
+	_ = os.Unsetenv("ENCRYPTION_KEY")
 	initialized = false
 	encryptionKey = nil
 
@@ -201,7 +203,7 @@ func TestEncryptWithoutKey(t *testing.T) {
 
 func TestDecryptWithoutKey(t *testing.T) {
 	// Clear the key
-	os.Unsetenv("ENCRYPTION_KEY")
+	_ = os.Unsetenv("ENCRYPTION_KEY")
 	initialized = false
 	encryptionKey = nil
 
@@ -213,17 +215,20 @@ func TestDecryptWithoutKey(t *testing.T) {
 
 func TestInitializeWithShortKey(t *testing.T) {
 	// Set a short key (less than 32 bytes)
-	os.Setenv("ENCRYPTION_KEY", "shortkey")
+	// The key will be derived using SHA256 to produce a consistent 32-byte key
+	if err := os.Setenv("ENCRYPTION_KEY", "shortkey"); err != nil {
+		t.Fatalf("Failed to set ENCRYPTION_KEY: %v", err)
+	}
 	initialized = false
 	encryptionKey = nil
 
 	defer func() {
-		os.Unsetenv("ENCRYPTION_KEY")
+		_ = os.Unsetenv("ENCRYPTION_KEY")
 		initialized = false
 		encryptionKey = nil
 	}()
 
-	// Should still work - key gets padded
+	// Should still work - key gets derived via SHA256
 	plaintext := "test message"
 	encrypted, err := Encrypt(plaintext)
 	require.NoError(t, err)

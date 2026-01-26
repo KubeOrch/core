@@ -105,15 +105,15 @@ func (r *Registry) GetRegistryDomain() string {
 // DetectRegistryType detects the registry type from an image reference
 func DetectRegistryType(image string) RegistryType {
 	// If no domain or no dot in first segment, it's Docker Hub
-	if !containsSlash(image) {
+	if !strings.Contains(image, "/") {
 		return RegistryTypeDockerHub
 	}
 
-	parts := splitFirst(image, "/")
+	parts := strings.SplitN(image, "/", 2)
 	domain := parts[0]
 
 	// Check if it looks like a domain (contains a dot)
-	if !containsDot(domain) {
+	if !strings.Contains(domain, ".") {
 		return RegistryTypeDockerHub
 	}
 
@@ -123,62 +123,15 @@ func DetectRegistryType(image string) RegistryType {
 		return RegistryTypeDockerHub
 	case domain == "ghcr.io":
 		return RegistryTypeGHCR
-	case containsSuffix(domain, ".azurecr.io"):
+	case strings.HasSuffix(domain, ".azurecr.io"):
 		return RegistryTypeACR
-	case containsSubstring(domain, ".dkr.ecr.") && containsSubstring(domain, ".amazonaws.com"):
+	case strings.Contains(domain, ".dkr.ecr.") && strings.Contains(domain, ".amazonaws.com"):
 		return RegistryTypeECR
-	case containsSubstring(domain, "public.ecr.aws"):
+	case strings.Contains(domain, "public.ecr.aws"):
 		return RegistryTypeECR
-	case containsSuffix(domain, ".gcr.io") || containsSuffix(domain, "-docker.pkg.dev"):
+	case strings.HasSuffix(domain, ".gcr.io") || strings.HasSuffix(domain, "-docker.pkg.dev"):
 		return RegistryTypeGCR
 	default:
 		return RegistryTypeCustom
 	}
-}
-
-// Helper functions to avoid importing strings package
-func containsSlash(s string) bool {
-	for _, c := range s {
-		if c == '/' {
-			return true
-		}
-	}
-	return false
-}
-
-func containsDot(s string) bool {
-	for _, c := range s {
-		if c == '.' {
-			return true
-		}
-	}
-	return false
-}
-
-func splitFirst(s, sep string) []string {
-	for i := 0; i < len(s); i++ {
-		if string(s[i]) == sep {
-			return []string{s[:i], s[i+1:]}
-		}
-	}
-	return []string{s}
-}
-
-func containsSuffix(s, suffix string) bool {
-	if len(s) < len(suffix) {
-		return false
-	}
-	return s[len(s)-len(suffix):] == suffix
-}
-
-func containsSubstring(s, substr string) bool {
-	if len(substr) > len(s) {
-		return false
-	}
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

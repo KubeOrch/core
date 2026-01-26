@@ -266,14 +266,8 @@ func (s *RegistryService) testConnection(ctx context.Context, registry *models.R
 
 func (s *RegistryService) testDockerHubConnection(ctx context.Context, registry *models.Registry) error {
 	// Docker Hub uses a token-based auth flow
-	// First, get a token using username/password
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://hub.docker.com/v2/users/login", nil)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
 	// Try the v2 API with basic auth
-	req, err = http.NewRequestWithContext(ctx, "GET", "https://registry-1.docker.io/v2/", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://registry-1.docker.io/v2/", nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -286,7 +280,7 @@ func (s *RegistryService) testDockerHubConnection(ctx context.Context, registry 
 	if err != nil {
 		return fmt.Errorf("connection failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// 200 or 401 with Www-Authenticate header is expected
 	// Docker Hub returns 401 initially with a Www-Authenticate header to get a token
@@ -314,7 +308,7 @@ func (s *RegistryService) testGHCRConnection(ctx context.Context, registry *mode
 	if err != nil {
 		return fmt.Errorf("connection failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == 200 || resp.StatusCode == 401 {
 		return nil
@@ -380,7 +374,7 @@ func (s *RegistryService) testACRConnection(ctx context.Context, registry *model
 	if err != nil {
 		return fmt.Errorf("connection failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// 401 is expected without proper auth
 	if resp.StatusCode == 200 || resp.StatusCode == 401 {
@@ -410,7 +404,7 @@ func (s *RegistryService) testCustomRegistryConnection(ctx context.Context, regi
 	if err != nil {
 		return fmt.Errorf("connection failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == 200 || resp.StatusCode == 401 {
 		return nil
