@@ -211,10 +211,14 @@ func (v *ResourceValidator) validateDNSName(name string) error {
 
 // validateImage validates container image format
 func (v *ResourceValidator) validateImage(image string) error {
+	// Auto-trim whitespace
+	image = strings.TrimSpace(image)
+
 	if image == "" {
 		return fmt.Errorf("cannot be empty")
 	}
 
+	// Check for spaces in the middle of the image name
 	if strings.Contains(image, " ") {
 		return fmt.Errorf("cannot contain spaces")
 	}
