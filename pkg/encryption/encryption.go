@@ -4,6 +4,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -38,18 +39,10 @@ func InitializeEncryption() {
 		// Successfully decoded a 32-byte key
 		encryptionKey = decoded
 	} else {
-		// Use the key as-is or pad it to 32 bytes
-		keyBytes := []byte(key)
-		if len(keyBytes) < 32 {
-			padded := make([]byte, 32)
-			copy(padded, keyBytes)
-			for i := len(keyBytes); i < 32; i++ {
-				padded[i] = byte(i % 256)
-			}
-			encryptionKey = padded
-		} else {
-			encryptionKey = keyBytes[:32]
-		}
+		// Use SHA256 to derive a proper 32-byte key from the input
+		// This provides consistent key derivation regardless of input length
+		hash := sha256.Sum256([]byte(key))
+		encryptionKey = hash[:]
 	}
 	initialized = true
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/KubeOrch/core/models"
@@ -31,6 +32,33 @@ func getUserIDFromContext(c *gin.Context) (primitive.ObjectID, bool) {
 		return primitive.NilObjectID, false
 	}
 	return userID, true
+}
+
+// sanitizeWorkflowNodes cleans up node data before saving (trims whitespace from string fields)
+func sanitizeWorkflowNodes(nodes []models.WorkflowNode) []models.WorkflowNode {
+	for i := range nodes {
+		if nodes[i].Data == nil {
+			continue
+		}
+
+		// Trim image field for deployment and statefulset nodes
+		if nodes[i].Type == "deployment" || nodes[i].Type == "statefulset" {
+			if image, ok := nodes[i].Data["image"].(string); ok {
+				nodes[i].Data["image"] = strings.TrimSpace(image)
+			}
+		}
+
+		// Trim name field for all nodes
+		if name, ok := nodes[i].Data["name"].(string); ok {
+			nodes[i].Data["name"] = strings.TrimSpace(name)
+		}
+
+		// Trim namespace field for all nodes
+		if namespace, ok := nodes[i].Data["namespace"].(string); ok {
+			nodes[i].Data["namespace"] = strings.TrimSpace(namespace)
+		}
+	}
+	return nodes
 }
 
 // CreateWorkflowHandler creates a new workflow
@@ -217,6 +245,9 @@ func SaveWorkflowHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request data"})
 		return
 	}
+
+	// Sanitize node data (trim whitespace from fields like image, name, namespace)
+	request.Nodes = sanitizeWorkflowNodes(request.Nodes)
 
 	// Detect deleted nodes - only cleanup if workflow has been run before
 	var deletedNodes []models.WorkflowNode

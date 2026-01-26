@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -20,6 +21,7 @@ import (
 // WorkflowExecutor handles workflow execution
 type WorkflowExecutor struct {
 	clusterService   *KubernetesClusterService
+	registryService  *RegistryService
 	templateEngine   *template.Engine
 	validator        *validator.ResourceValidator
 	logger           *logrus.Logger
@@ -32,6 +34,7 @@ func NewWorkflowExecutor() *WorkflowExecutor {
 
 	return &WorkflowExecutor{
 		clusterService:   NewKubernetesClusterService(),
+		registryService:  GetRegistryService(),
 		templateEngine:   template.NewEngine(templatesDir),
 		validator:        validator.NewResourceValidator(),
 		logger:           logrus.New(),
@@ -122,7 +125,7 @@ func (e *WorkflowExecutor) ExecuteWorkflow(ctx context.Context, workflowID primi
 
 		switch node.Type {
 		case "deployment":
-			if err := e.executeDeploymentNode(ctx, manifestApplier, node, workflowRun); err != nil {
+			if err := e.executeDeploymentNode(ctx, manifestApplier, node, workflowRun, runtimeData); err != nil {
 				e.updateWorkflowRunStatus(workflowRun, models.WorkflowRunStatusFailed, err.Error())
 				e.updateWorkflowStats(workflowID, false)
 				return workflowRun, fmt.Errorf("failed to execute node %s: %w", node.ID, err)
@@ -170,7 +173,7 @@ func (e *WorkflowExecutor) ExecuteWorkflow(ctx context.Context, workflowID primi
 			// Store PVC data for connected deployment/statefulset nodes
 			executedNodeData[node.ID] = node.Data
 		case "statefulset":
-			if err := e.executeStatefulSetNodeWithConnections(ctx, manifestApplier, node, workflowRun, connectionGraph, executedNodeData); err != nil {
+			if err := e.executeStatefulSetNodeWithConnections(ctx, manifestApplier, node, workflowRun, connectionGraph, executedNodeData, runtimeData); err != nil {
 				e.updateWorkflowRunStatus(workflowRun, models.WorkflowRunStatusFailed, err.Error())
 				e.updateWorkflowStats(workflowID, false)
 				return workflowRun, fmt.Errorf("failed to execute node %s: %w", node.ID, err)
@@ -276,7 +279,7 @@ func (e *WorkflowExecutor) getConnectedSourceData(nodeID string, connectionGraph
 }
 
 // executeDeploymentNode executes a deployment node
-func (e *WorkflowExecutor) executeDeploymentNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun) error {
+func (e *WorkflowExecutor) executeDeploymentNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun, runtimeData map[string]interface{}) error {
 	e.logger.WithFields(logrus.Fields{
 		"node_id":   node.ID,
 		"node_type": node.Type,
@@ -292,6 +295,42 @@ func (e *WorkflowExecutor) executeDeploymentNode(ctx context.Context, manifestAp
 	deploymentData := node.Data
 	if deploymentData == nil {
 		return fmt.Errorf("invalid deployment data in node")
+	}
+
+	// Merge runtime env values into deployment data
+	// Structure: runtimeData["envVars"][nodeID] = { key: value }
+	if envVars, ok := runtimeData["envVars"].(map[string]interface{}); ok {
+		if nodeEnvVars, ok := envVars[node.ID].(map[string]interface{}); ok {
+			// Merge with existing env vars (runtime values take precedence)
+			existingEnv := make(map[string]interface{})
+			if existing, ok := deploymentData["env"].(map[string]interface{}); ok {
+				existingEnv = existing
+			}
+			for k, v := range nodeEnvVars {
+				existingEnv[k] = v
+			}
+			deploymentData["env"] = existingEnv
+		}
+	}
+
+	// Check for private registry credentials and create imagePullSecret if needed
+	if image, ok := deploymentData["image"].(string); ok && strings.TrimSpace(image) != "" {
+		image = strings.TrimSpace(image)
+		secretName, err := e.handleImagePullSecret(ctx, manifestApplier, image, deploymentData, run)
+		if err != nil {
+			e.logger.WithError(err).Warn("Failed to setup image pull secret (continuing without it)")
+			run.Logs = append(run.Logs, fmt.Sprintf("[%s] Warning: Could not setup image pull credentials: %s",
+				time.Now().Format("15:04:05"), err.Error()))
+		} else if secretName != "" {
+			// Add imagePullSecrets to deployment data
+			imagePullSecrets := []string{secretName}
+			if existing, ok := deploymentData["imagePullSecrets"].([]string); ok {
+				imagePullSecrets = append(existing, secretName)
+			}
+			deploymentData["imagePullSecrets"] = imagePullSecrets
+			run.Logs = append(run.Logs, fmt.Sprintf("[%s] Using image pull secret: %s",
+				time.Now().Format("15:04:05"), secretName))
+		}
 	}
 
 	// Prepare template values
@@ -930,6 +969,82 @@ func (e *WorkflowExecutor) prepareServiceTemplateValues(node *models.WorkflowNod
 	return values
 }
 
+// handleImagePullSecret creates an image pull secret if the image requires private registry credentials
+// Returns the secret name if created, empty string if no credentials needed
+func (e *WorkflowExecutor) handleImagePullSecret(ctx context.Context, manifestApplier *applier.ManifestApplier, image string, deploymentData map[string]interface{}, run *models.WorkflowRun) (string, error) {
+	// Detect the registry type from the image
+	registryType := models.DetectRegistryType(image)
+
+	e.logger.WithFields(logrus.Fields{
+		"image":         image,
+		"registry_type": registryType,
+	}).Debug("Checking for registry credentials")
+
+	// Look up registry credentials
+	registry, err := e.registryService.GetRegistryForImage(ctx, image)
+	if err != nil {
+		return "", fmt.Errorf("failed to lookup registry: %w", err)
+	}
+
+	if registry == nil {
+		// No credentials configured for this registry type, which is fine for public images
+		e.logger.WithField("registry_type", registryType).Debug("No registry credentials configured for this image type")
+		return "", nil
+	}
+
+	// Generate the docker config JSON
+	dockerConfigJSON, err := e.registryService.GenerateDockerConfigJSON(ctx, registry)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate docker config: %w", err)
+	}
+
+	// Get the namespace for the deployment
+	namespace := "default"
+	if ns, ok := deploymentData["namespace"].(string); ok && ns != "" {
+		namespace = ns
+	}
+
+	// Create a unique secret name based on the registry
+	secretName := fmt.Sprintf("kubeorch-registry-%s", registry.Name)
+	// Sanitize the name (lowercase, alphanumeric and hyphens only)
+	secretName = strings.ToLower(secretName)
+	secretName = strings.ReplaceAll(secretName, " ", "-")
+	secretName = strings.ReplaceAll(secretName, "_", "-")
+
+	// Create the Kubernetes secret YAML
+	secretYAML := fmt.Sprintf(`apiVersion: v1
+kind: Secret
+metadata:
+  name: %s
+  namespace: %s
+  labels:
+    managed-by: kubeorch
+    registry-type: %s
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: %s
+`, secretName, namespace, registry.RegistryType, e.base64Encode(dockerConfigJSON))
+
+	// Apply the secret
+	_, err = manifestApplier.ApplyYAML(ctx, []byte(secretYAML))
+	if err != nil {
+		return "", fmt.Errorf("failed to create image pull secret: %w", err)
+	}
+
+	e.logger.WithFields(logrus.Fields{
+		"secret_name":   secretName,
+		"namespace":     namespace,
+		"registry_name": registry.Name,
+	}).Info("Created image pull secret for private registry")
+
+	return secretName, nil
+}
+
+// base64Encode encodes bytes to base64 string
+func (e *WorkflowExecutor) base64Encode(data []byte) string {
+	return base64.StdEncoding.EncodeToString(data)
+}
+
 // prepareTemplateValues prepares values for template rendering
 func (e *WorkflowExecutor) prepareTemplateValues(node *models.WorkflowNode, deploymentData map[string]interface{}) map[string]interface{} {
 	values := make(map[string]interface{})
@@ -943,7 +1058,7 @@ func (e *WorkflowExecutor) prepareTemplateValues(node *models.WorkflowNode, depl
 
 	// Copy deployment parameters
 	if image, ok := deploymentData["image"].(string); ok {
-		values["Image"] = image
+		values["Image"] = strings.TrimSpace(image)
 	}
 	if replicas, ok := deploymentData["replicas"]; ok {
 		values["Replicas"] = replicas
@@ -966,6 +1081,11 @@ func (e *WorkflowExecutor) prepareTemplateValues(node *models.WorkflowNode, depl
 		if templateMounts := e.parseVolumeMounts(volumeMounts); len(templateMounts) > 0 {
 			values["VolumeMounts"] = templateMounts
 		}
+	}
+
+	// Handle image pull secrets
+	if imagePullSecrets, ok := deploymentData["imagePullSecrets"].([]string); ok && len(imagePullSecrets) > 0 {
+		values["ImagePullSecrets"] = imagePullSecrets
 	}
 
 	// Add metadata
@@ -1676,7 +1796,7 @@ func (e *WorkflowExecutor) updatePVCNodeStatus(workflowID primitive.ObjectID, no
 }
 
 // executeStatefulSetNodeWithConnections executes a StatefulSet node with data from connected nodes
-func (e *WorkflowExecutor) executeStatefulSetNodeWithConnections(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun, connectionGraph map[string][]string, executedNodeData map[string]map[string]interface{}) error {
+func (e *WorkflowExecutor) executeStatefulSetNodeWithConnections(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun, connectionGraph map[string][]string, executedNodeData map[string]map[string]interface{}, runtimeData map[string]interface{}) error {
 	e.logger.WithFields(logrus.Fields{
 		"node_id":   node.ID,
 		"node_type": node.Type,
@@ -1690,6 +1810,22 @@ func (e *WorkflowExecutor) executeStatefulSetNodeWithConnections(ctx context.Con
 	statefulSetData := node.Data
 	if statefulSetData == nil {
 		return fmt.Errorf("invalid statefulset data in node")
+	}
+
+	// Merge runtime env values into statefulset data
+	// Structure: runtimeData["envVars"][nodeID] = { key: value }
+	if envVars, ok := runtimeData["envVars"].(map[string]interface{}); ok {
+		if nodeEnvVars, ok := envVars[node.ID].(map[string]interface{}); ok {
+			// Merge with existing env vars (runtime values take precedence)
+			existingEnv := make(map[string]interface{})
+			if existing, ok := statefulSetData["env"].(map[string]interface{}); ok {
+				existingEnv = existing
+			}
+			for k, v := range nodeEnvVars {
+				existingEnv[k] = v
+			}
+			statefulSetData["env"] = existingEnv
+		}
 	}
 
 	// Prepare template values
@@ -1806,7 +1942,7 @@ func (e *WorkflowExecutor) prepareStatefulSetTemplateValues(node *models.Workflo
 	// Copy statefulset parameters
 	image := ""
 	if img, ok := statefulSetData["image"].(string); ok {
-		image = img
+		image = strings.TrimSpace(img)
 		values["Image"] = image
 	}
 	if replicas, ok := statefulSetData["replicas"]; ok {

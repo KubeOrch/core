@@ -41,10 +41,12 @@ type Position struct {
 
 // WorkflowEdge represents a connection between nodes
 type WorkflowEdge struct {
-	ID     string `json:"id" bson:"id"`
-	Source string `json:"source" bson:"source"` // source node ID
-	Target string `json:"target" bson:"target"` // target node ID
-	Type   string `json:"type" bson:"type"`     // edge type
+	ID           string `json:"id" bson:"id"`
+	Source       string `json:"source" bson:"source"`                                   // source node ID
+	Target       string `json:"target" bson:"target"`                                   // target node ID
+	SourceHandle string `json:"sourceHandle,omitempty" bson:"sourceHandle,omitempty"`   // source handle ID (for multi-handle nodes like Ingress paths)
+	TargetHandle string `json:"targetHandle,omitempty" bson:"targetHandle,omitempty"`   // target handle ID
+	Type         string `json:"type,omitempty" bson:"type,omitempty"`                   // edge type
 }
 
 // WorkflowVersion represents a version of the workflow (legacy embedded format)
@@ -97,9 +99,11 @@ type NodeDiff struct {
 
 // EdgeDiff represents an edge change in a version diff
 type EdgeDiff struct {
-	EdgeID string `json:"edge_id"`
-	Source string `json:"source"`
-	Target string `json:"target"`
+	EdgeID       string `json:"edge_id"`
+	Source       string `json:"source"`
+	Target       string `json:"target"`
+	SourceHandle string `json:"sourceHandle,omitempty"`
+	TargetHandle string `json:"targetHandle,omitempty"`
 }
 
 // Workflow represents a complete workflow

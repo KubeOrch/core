@@ -123,11 +123,28 @@ func SetupRouter() *gin.Engine {
 			resources.GET("/:id/pods", resourcesHandler.GetDeploymentPods)
 		}
 
+		// Registry routes (read operations for all authenticated users)
+		registryHandler := handlers.NewRegistryHandler()
+		registries := protected.Group("/registries")
+		{
+			registries.GET("", registryHandler.ListRegistries)
+			registries.GET("/lookup", registryHandler.GetRegistryForImage) // ?image=ghcr.io/org/app:v1
+			registries.GET("/:id", registryHandler.GetRegistry)
+		}
+
 		// Admin routes
 		admin := v1.Group("/api/admin")
 		admin.Use(middleware.AuthMiddleware(), middleware.AdminMiddleware())
 		{
-			// Add admin-only endpoints here
+			// Registry management (admin only)
+			adminRegistries := admin.Group("/registries")
+			{
+				adminRegistries.POST("", registryHandler.CreateRegistry)
+				adminRegistries.PUT("/:id", registryHandler.UpdateRegistry)
+				adminRegistries.DELETE("/:id", registryHandler.DeleteRegistry)
+				adminRegistries.POST("/:id/test", registryHandler.TestConnection)
+				adminRegistries.PUT("/:id/default", registryHandler.SetDefault)
+			}
 		}
 	}
 
