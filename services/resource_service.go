@@ -11,6 +11,8 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -167,6 +169,71 @@ func (s *ResourceService) syncNamespaceResources(ctx context.Context, userID pri
 			resource := s.ingressToResource(&ingress, cluster, userID)
 			if err := s.resourceRepo.CreateOrUpdate(ctx, resource); err != nil {
 				s.logger.WithError(err).Warnf("Failed to sync ingress %s/%s", namespace, ingress.Name)
+			}
+		}
+	}
+
+	// Sync Jobs
+	jobs, err := clientset.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		s.logger.WithError(err).Warnf("Failed to list jobs in namespace %s", namespace)
+	} else {
+		for _, job := range jobs.Items {
+			resource := s.jobToResource(&job, cluster, userID)
+			if err := s.resourceRepo.CreateOrUpdate(ctx, resource); err != nil {
+				s.logger.WithError(err).Warnf("Failed to sync job %s/%s", namespace, job.Name)
+			}
+		}
+	}
+
+	// Sync CronJobs
+	cronJobs, err := clientset.BatchV1().CronJobs(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		s.logger.WithError(err).Warnf("Failed to list cronjobs in namespace %s", namespace)
+	} else {
+		for _, cronJob := range cronJobs.Items {
+			resource := s.cronJobToResource(&cronJob, cluster, userID)
+			if err := s.resourceRepo.CreateOrUpdate(ctx, resource); err != nil {
+				s.logger.WithError(err).Warnf("Failed to sync cronjob %s/%s", namespace, cronJob.Name)
+			}
+		}
+	}
+
+	// Sync DaemonSets
+	daemonSets, err := clientset.AppsV1().DaemonSets(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		s.logger.WithError(err).Warnf("Failed to list daemonsets in namespace %s", namespace)
+	} else {
+		for _, daemonSet := range daemonSets.Items {
+			resource := s.daemonSetToResource(&daemonSet, cluster, userID)
+			if err := s.resourceRepo.CreateOrUpdate(ctx, resource); err != nil {
+				s.logger.WithError(err).Warnf("Failed to sync daemonset %s/%s", namespace, daemonSet.Name)
+			}
+		}
+	}
+
+	// Sync HPAs
+	hpas, err := clientset.AutoscalingV2().HorizontalPodAutoscalers(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		s.logger.WithError(err).Warnf("Failed to list hpas in namespace %s", namespace)
+	} else {
+		for _, hpa := range hpas.Items {
+			resource := s.hpaToResource(&hpa, cluster, userID)
+			if err := s.resourceRepo.CreateOrUpdate(ctx, resource); err != nil {
+				s.logger.WithError(err).Warnf("Failed to sync hpa %s/%s", namespace, hpa.Name)
+			}
+		}
+	}
+
+	// Sync NetworkPolicies
+	networkPolicies, err := clientset.NetworkingV1().NetworkPolicies(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		s.logger.WithError(err).Warnf("Failed to list networkpolicies in namespace %s", namespace)
+	} else {
+		for _, np := range networkPolicies.Items {
+			resource := s.networkPolicyToResource(&np, cluster, userID)
+			if err := s.resourceRepo.CreateOrUpdate(ctx, resource); err != nil {
+				s.logger.WithError(err).Warnf("Failed to sync networkpolicy %s/%s", namespace, np.Name)
 			}
 		}
 	}
@@ -575,6 +642,248 @@ func (s *ResourceService) namespaceToResource(namespace *corev1.Namespace, clust
 		Labels:          namespace.Labels,
 		Annotations:     namespace.Annotations,
 		CreatedAt:       namespace.CreationTimestamp.Time,
+	}
+}
+
+func (s *ResourceService) jobToResource(job *batchv1.Job, cluster *models.Cluster, userID primitive.ObjectID) *models.Resource {
+	var status models.ResourceStatus
+	completions := int32(1)
+	if job.Spec.Completions != nil {
+		completions = *job.Spec.Completions
+	}
+
+	if job.Status.Succeeded >= completions {
+		status = models.ResourceStatusCompleted
+	} else if job.Status.Failed > 0 {
+		// Check if exceeded backoff limit
+		backoffLimit := int32(6) // default
+		if job.Spec.BackoffLimit != nil {
+			backoffLimit = *job.Spec.BackoffLimit
+		}
+		if job.Status.Failed > backoffLimit {
+			status = models.ResourceStatusFailed
+		} else {
+			status = models.ResourceStatusWarning
+		}
+	} else if job.Status.Active > 0 {
+		status = models.ResourceStatusRunning
+	} else {
+		status = models.ResourceStatusPending
+	}
+
+	var startTime, completionTime *time.Time
+	if job.Status.StartTime != nil {
+		t := job.Status.StartTime.Time
+		startTime = &t
+	}
+	if job.Status.CompletionTime != nil {
+		t := job.Status.CompletionTime.Time
+		completionTime = &t
+	}
+
+	return &models.Resource{
+		UserID:          userID,
+		ClusterID:       cluster.ID,
+		ClusterName:     cluster.Name,
+		Name:            job.Name,
+		Namespace:       job.Namespace,
+		Type:            models.ResourceTypeJob,
+		UID:             string(job.UID),
+		ResourceVersion: job.ResourceVersion,
+		Status:          status,
+		Labels:          job.Labels,
+		Annotations:     job.Annotations,
+		CreatedAt:       job.CreationTimestamp.Time,
+		Spec: models.ResourceSpec{
+			Completions:    job.Spec.Completions,
+			Parallelism:    job.Spec.Parallelism,
+			BackoffLimit:   job.Spec.BackoffLimit,
+			JobSucceeded:   job.Status.Succeeded,
+			JobFailed:      job.Status.Failed,
+			JobActive:      job.Status.Active,
+			StartTime:      startTime,
+			CompletionTime: completionTime,
+		},
+	}
+}
+
+func (s *ResourceService) cronJobToResource(cronJob *batchv1.CronJob, cluster *models.Cluster, userID primitive.ObjectID) *models.Resource {
+	status := models.ResourceStatusRunning
+	if cronJob.Spec.Suspend != nil && *cronJob.Spec.Suspend {
+		status = models.ResourceStatusPending // suspended
+	}
+
+	var lastScheduleTime, lastSuccessfulTime *time.Time
+	if cronJob.Status.LastScheduleTime != nil {
+		t := cronJob.Status.LastScheduleTime.Time
+		lastScheduleTime = &t
+	}
+	if cronJob.Status.LastSuccessfulTime != nil {
+		t := cronJob.Status.LastSuccessfulTime.Time
+		lastSuccessfulTime = &t
+	}
+
+	return &models.Resource{
+		UserID:          userID,
+		ClusterID:       cluster.ID,
+		ClusterName:     cluster.Name,
+		Name:            cronJob.Name,
+		Namespace:       cronJob.Namespace,
+		Type:            models.ResourceTypeCronJob,
+		UID:             string(cronJob.UID),
+		ResourceVersion: cronJob.ResourceVersion,
+		Status:          status,
+		Labels:          cronJob.Labels,
+		Annotations:     cronJob.Annotations,
+		CreatedAt:       cronJob.CreationTimestamp.Time,
+		Spec: models.ResourceSpec{
+			Schedule:           cronJob.Spec.Schedule,
+			Suspend:            cronJob.Spec.Suspend,
+			ConcurrencyPolicy:  string(cronJob.Spec.ConcurrencyPolicy),
+			LastScheduleTime:   lastScheduleTime,
+			LastSuccessfulTime: lastSuccessfulTime,
+			ActiveJobs:         int32(len(cronJob.Status.Active)),
+		},
+	}
+}
+
+func (s *ResourceService) daemonSetToResource(daemonSet *appsv1.DaemonSet, cluster *models.Cluster, userID primitive.ObjectID) *models.Resource {
+	var status models.ResourceStatus
+	if daemonSet.Status.NumberReady == daemonSet.Status.DesiredNumberScheduled && daemonSet.Status.DesiredNumberScheduled > 0 {
+		status = models.ResourceStatusRunning
+	} else if daemonSet.Status.NumberReady > 0 {
+		status = models.ResourceStatusWarning
+	} else if daemonSet.Status.DesiredNumberScheduled == 0 {
+		status = models.ResourceStatusPending
+	} else {
+		status = models.ResourceStatusFailed
+	}
+
+	updateStrategy := "RollingUpdate"
+	if daemonSet.Spec.UpdateStrategy.Type != "" {
+		updateStrategy = string(daemonSet.Spec.UpdateStrategy.Type)
+	}
+
+	return &models.Resource{
+		UserID:          userID,
+		ClusterID:       cluster.ID,
+		ClusterName:     cluster.Name,
+		Name:            daemonSet.Name,
+		Namespace:       daemonSet.Namespace,
+		Type:            models.ResourceTypeDaemonSet,
+		UID:             string(daemonSet.UID),
+		ResourceVersion: daemonSet.ResourceVersion,
+		Status:          status,
+		Labels:          daemonSet.Labels,
+		Annotations:     daemonSet.Annotations,
+		CreatedAt:       daemonSet.CreationTimestamp.Time,
+		Spec: models.ResourceSpec{
+			DesiredNumberScheduled: daemonSet.Status.DesiredNumberScheduled,
+			CurrentNumberScheduled: daemonSet.Status.CurrentNumberScheduled,
+			NumberReady:            daemonSet.Status.NumberReady,
+			NumberAvailable:        daemonSet.Status.NumberAvailable,
+			NumberMisscheduled:     daemonSet.Status.NumberMisscheduled,
+			UpdateStrategy:         updateStrategy,
+		},
+	}
+}
+
+func (s *ResourceService) hpaToResource(hpa *autoscalingv2.HorizontalPodAutoscaler, cluster *models.Cluster, userID primitive.ObjectID) *models.Resource {
+	var status models.ResourceStatus
+	if hpa.Status.CurrentReplicas == hpa.Status.DesiredReplicas {
+		status = models.ResourceStatusRunning
+	} else {
+		status = models.ResourceStatusWarning // scaling in progress
+	}
+
+	// Extract CPU and memory targets/current values from metrics
+	var targetCPU, targetMemory, currentCPU, currentMemory *int32
+	for _, metric := range hpa.Spec.Metrics {
+		if metric.Type == autoscalingv2.ResourceMetricSourceType && metric.Resource != nil {
+			if metric.Resource.Name == corev1.ResourceCPU && metric.Resource.Target.AverageUtilization != nil {
+				targetCPU = metric.Resource.Target.AverageUtilization
+			}
+			if metric.Resource.Name == corev1.ResourceMemory && metric.Resource.Target.AverageUtilization != nil {
+				targetMemory = metric.Resource.Target.AverageUtilization
+			}
+		}
+	}
+	for _, metric := range hpa.Status.CurrentMetrics {
+		if metric.Type == autoscalingv2.ResourceMetricSourceType && metric.Resource != nil {
+			if metric.Resource.Name == corev1.ResourceCPU && metric.Resource.Current.AverageUtilization != nil {
+				currentCPU = metric.Resource.Current.AverageUtilization
+			}
+			if metric.Resource.Name == corev1.ResourceMemory && metric.Resource.Current.AverageUtilization != nil {
+				currentMemory = metric.Resource.Current.AverageUtilization
+			}
+		}
+	}
+
+	scaleTargetRef := fmt.Sprintf("%s/%s", hpa.Spec.ScaleTargetRef.Kind, hpa.Spec.ScaleTargetRef.Name)
+
+	return &models.Resource{
+		UserID:          userID,
+		ClusterID:       cluster.ID,
+		ClusterName:     cluster.Name,
+		Name:            hpa.Name,
+		Namespace:       hpa.Namespace,
+		Type:            models.ResourceTypeHPA,
+		UID:             string(hpa.UID),
+		ResourceVersion: hpa.ResourceVersion,
+		Status:          status,
+		Labels:          hpa.Labels,
+		Annotations:     hpa.Annotations,
+		CreatedAt:       hpa.CreationTimestamp.Time,
+		Spec: models.ResourceSpec{
+			MinReplicas:     hpa.Spec.MinReplicas,
+			MaxReplicas:     hpa.Spec.MaxReplicas,
+			CurrentReplicas: hpa.Status.CurrentReplicas,
+			DesiredReplicas: hpa.Status.DesiredReplicas,
+			TargetCPU:       targetCPU,
+			TargetMemory:    targetMemory,
+			CurrentCPU:      currentCPU,
+			CurrentMemory:   currentMemory,
+			ScaleTargetRef:  scaleTargetRef,
+		},
+	}
+}
+
+func (s *ResourceService) networkPolicyToResource(np *networkingv1.NetworkPolicy, cluster *models.Cluster, userID primitive.ObjectID) *models.Resource {
+	// NetworkPolicies are declarative - always "running" if they exist
+	status := models.ResourceStatusRunning
+
+	policyTypes := make([]string, len(np.Spec.PolicyTypes))
+	for i, pt := range np.Spec.PolicyTypes {
+		policyTypes[i] = string(pt)
+	}
+
+	// Extract pod selector labels
+	podSelectorLabels := make(map[string]string)
+	if np.Spec.PodSelector.MatchLabels != nil {
+		for k, v := range np.Spec.PodSelector.MatchLabels {
+			podSelectorLabels[k] = v
+		}
+	}
+
+	return &models.Resource{
+		UserID:          userID,
+		ClusterID:       cluster.ID,
+		ClusterName:     cluster.Name,
+		Name:            np.Name,
+		Namespace:       np.Namespace,
+		Type:            models.ResourceTypeNetworkPolicy,
+		UID:             string(np.UID),
+		ResourceVersion: np.ResourceVersion,
+		Status:          status,
+		Labels:          np.Labels,
+		Annotations:     np.Annotations,
+		CreatedAt:       np.CreationTimestamp.Time,
+		Spec: models.ResourceSpec{
+			PolicyTypes:       policyTypes,
+			IngressRulesCount: len(np.Spec.Ingress),
+			EgressRulesCount:  len(np.Spec.Egress),
+			PodSelectorLabels: podSelectorLabels,
+		},
 	}
 }
 

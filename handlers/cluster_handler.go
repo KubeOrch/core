@@ -550,6 +550,30 @@ func (h *ClusterHandler) ShareCluster(c *gin.Context) {
 	})
 }
 
+func (h *ClusterHandler) GetClusterMetrics(c *gin.Context) {
+	name := c.Param("name")
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cluster name is required"})
+		return
+	}
+
+	userID, err := middleware.GetUserID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	metrics, err := h.service.GetClusterMetrics(ctx, userID, name)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to get cluster metrics")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, metrics)
+}
+
 // Helper function to convert cluster model to response
 func clusterToResponse(cluster *models.Cluster) ClusterResponse {
 	return ClusterResponse{

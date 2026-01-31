@@ -16,6 +16,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"gopkg.in/yaml.v3"
 )
 
 // WorkflowExecutor handles workflow execution
@@ -178,6 +179,49 @@ func (e *WorkflowExecutor) ExecuteWorkflow(ctx context.Context, workflowID primi
 				e.updateWorkflowStats(workflowID, false)
 				return workflowRun, fmt.Errorf("failed to execute node %s: %w", node.ID, err)
 			}
+		case "plugin":
+			if err := e.executePluginNode(ctx, manifestApplier, node, workflowRun); err != nil {
+				e.updateWorkflowRunStatus(workflowRun, models.WorkflowRunStatusFailed, err.Error())
+				e.updateWorkflowStats(workflowID, false)
+				return workflowRun, fmt.Errorf("failed to execute plugin node %s: %w", node.ID, err)
+			}
+			// Store plugin data for any downstream nodes
+			executedNodeData[node.ID] = node.Data
+		case "job":
+			if err := e.executeJobNode(ctx, manifestApplier, node, workflowRun, runtimeData); err != nil {
+				e.updateWorkflowRunStatus(workflowRun, models.WorkflowRunStatusFailed, err.Error())
+				e.updateWorkflowStats(workflowID, false)
+				return workflowRun, fmt.Errorf("failed to execute job node %s: %w", node.ID, err)
+			}
+			executedNodeData[node.ID] = node.Data
+		case "cronjob":
+			if err := e.executeCronJobNode(ctx, manifestApplier, node, workflowRun, runtimeData); err != nil {
+				e.updateWorkflowRunStatus(workflowRun, models.WorkflowRunStatusFailed, err.Error())
+				e.updateWorkflowStats(workflowID, false)
+				return workflowRun, fmt.Errorf("failed to execute cronjob node %s: %w", node.ID, err)
+			}
+			executedNodeData[node.ID] = node.Data
+		case "daemonset":
+			if err := e.executeDaemonSetNode(ctx, manifestApplier, node, workflowRun, runtimeData); err != nil {
+				e.updateWorkflowRunStatus(workflowRun, models.WorkflowRunStatusFailed, err.Error())
+				e.updateWorkflowStats(workflowID, false)
+				return workflowRun, fmt.Errorf("failed to execute daemonset node %s: %w", node.ID, err)
+			}
+			executedNodeData[node.ID] = node.Data
+		case "hpa":
+			if err := e.executeHPANodeWithConnections(ctx, manifestApplier, node, workflowRun, connectedData); err != nil {
+				e.updateWorkflowRunStatus(workflowRun, models.WorkflowRunStatusFailed, err.Error())
+				e.updateWorkflowStats(workflowID, false)
+				return workflowRun, fmt.Errorf("failed to execute hpa node %s: %w", node.ID, err)
+			}
+			executedNodeData[node.ID] = node.Data
+		case "networkpolicy":
+			if err := e.executeNetworkPolicyNodeWithConnections(ctx, manifestApplier, node, workflowRun, connectedData); err != nil {
+				e.updateWorkflowRunStatus(workflowRun, models.WorkflowRunStatusFailed, err.Error())
+				e.updateWorkflowStats(workflowID, false)
+				return workflowRun, fmt.Errorf("failed to execute networkpolicy node %s: %w", node.ID, err)
+			}
+			executedNodeData[node.ID] = node.Data
 		}
 	}
 	completedAt := time.Now()
@@ -2777,7 +2821,7 @@ func (e *WorkflowExecutor) CleanupWorkflowResources(ctx context.Context, workflo
 	// 4. ConfigMaps (used by deployments/statefulsets)
 	// 5. PVCs last (used by deployments/statefulsets)
 	// Note: We don't delete Secrets as they are managed externally (pass-through)
-	deletionOrder := []string{"ingress", "service", "statefulset", "deployment", "configmap", "persistentvolumeclaim"}
+	deletionOrder := []string{"ingress", "service", "statefulset", "deployment", "configmap", "persistentvolumeclaim", "plugin"}
 
 	for _, nodeType := range deletionOrder {
 		nodes, ok := nodesByType[nodeType]
@@ -2799,6 +2843,8 @@ func (e *WorkflowExecutor) CleanupWorkflowResources(ctx context.Context, workflo
 				err = e.deleteConfigMapNode(ctx, manifestApplier, node)
 			case "persistentvolumeclaim":
 				err = e.deletePVCNode(ctx, manifestApplier, node)
+			case "plugin":
+				err = e.deletePluginNode(ctx, manifestApplier, node)
 			}
 			if err != nil {
 				e.logger.WithError(err).WithFields(logrus.Fields{
@@ -2980,6 +3026,231 @@ func (e *WorkflowExecutor) deleteStatefulSetNode(ctx context.Context, manifestAp
 	return manifestApplier.DeleteStatefulSet(ctx, name, namespace)
 }
 
+// executePluginNode executes a plugin node by generating and applying CRD YAML
+func (e *WorkflowExecutor) executePluginNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun) error {
+	e.logger.WithFields(logrus.Fields{
+		"node_id":   node.ID,
+		"node_type": node.Type,
+	}).Info("Executing plugin node")
+
+	// Add log entry
+	run.Logs = append(run.Logs, fmt.Sprintf("[%s] Executing plugin node: %s",
+		time.Now().Format("15:04:05"), node.ID))
+
+	pluginData := node.Data
+	if pluginData == nil {
+		return fmt.Errorf("invalid plugin data in node")
+	}
+
+	// Extract plugin metadata
+	pluginID, _ := pluginData["pluginId"].(string)
+	pluginCategory, _ := pluginData["pluginCategory"].(string)
+	displayName, _ := pluginData["displayName"].(string)
+	templateID, _ := pluginData["templateId"].(string)
+
+	// Get name and namespace
+	name, ok := pluginData["name"].(string)
+	if !ok || name == "" {
+		name = node.ID
+	}
+	namespace := "default"
+	if ns, ok := pluginData["namespace"].(string); ok && ns != "" {
+		namespace = ns
+	}
+
+	e.logger.WithFields(logrus.Fields{
+		"plugin_id":       pluginID,
+		"plugin_category": pluginCategory,
+		"display_name":    displayName,
+		"template_id":     templateID,
+		"name":            name,
+		"namespace":       namespace,
+	}).Info("Plugin node details")
+
+	// Get the plugin definition to generate proper CRD YAML
+	pluginService := GetPluginService()
+	plugin, err := pluginService.GetPlugin(ctx, pluginID)
+	if err != nil {
+		return fmt.Errorf("failed to get plugin definition: %w", err)
+	}
+
+	// Find the matching node type in the plugin
+	var nodeType *models.PluginNodeType
+	for i := range plugin.NodeTypes {
+		if plugin.NodeTypes[i].Name == templateID {
+			nodeType = &plugin.NodeTypes[i]
+			break
+		}
+	}
+	if nodeType == nil {
+		return fmt.Errorf("node type %s not found in plugin %s", templateID, pluginID)
+	}
+
+	// Generate CRD YAML
+	crdYAML := e.generatePluginCRDYAML(plugin, nodeType, pluginData, name, namespace)
+
+	run.Logs = append(run.Logs, fmt.Sprintf("[%s] Generated CRD YAML for %s/%s",
+		time.Now().Format("15:04:05"), plugin.CRDGroup, displayName))
+
+	// Apply the CRD YAML to Kubernetes
+	result, err := manifestApplier.ApplyYAML(ctx, []byte(crdYAML))
+	if err != nil {
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] Failed to apply CRD: %s",
+			time.Now().Format("15:04:05"), err.Error()))
+		return fmt.Errorf("failed to apply CRD YAML: %w", err)
+	}
+
+	// Add to output
+	run.Output[node.ID] = result
+
+	// Add log entries for each applied resource
+	for _, resource := range result.AppliedResources {
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] %s %s/%s: %s",
+			time.Now().Format("15:04:05"), resource.Kind, resource.Namespace, resource.Name, resource.Operation))
+	}
+
+	// Save updated workflow run
+	if err := e.saveWorkflowRun(run); err != nil {
+		e.logger.WithError(err).Error("Failed to save updated workflow run")
+	}
+
+	return nil
+}
+
+// generatePluginCRDYAML generates YAML for a CRD based on plugin definition and node data
+func (e *WorkflowExecutor) generatePluginCRDYAML(plugin *models.Plugin, nodeType *models.PluginNodeType, data map[string]interface{}, name, namespace string) string {
+	// Determine the Kind from the node type name or use a default
+	// The node type name usually maps to a CRD kind (e.g., "virtualmachine" -> "VirtualMachine")
+	kind := nodeType.DisplayName
+	// Try to find a matching CRD kind
+	for _, crdKind := range plugin.CRDKinds {
+		if strings.EqualFold(strings.ReplaceAll(nodeType.Name, "-", ""), strings.ToLower(crdKind)) ||
+			strings.EqualFold(strings.ReplaceAll(nodeType.Name, "_", ""), strings.ToLower(crdKind)) {
+			kind = crdKind
+			break
+		}
+	}
+
+	// Use first CRD kind as fallback if no match found
+	if len(plugin.CRDKinds) > 0 && kind == nodeType.DisplayName {
+		// Try to find a partial match
+		nodeNameLower := strings.ToLower(nodeType.Name)
+		for _, crdKind := range plugin.CRDKinds {
+			if strings.Contains(nodeNameLower, strings.ToLower(crdKind)) ||
+				strings.Contains(strings.ToLower(crdKind), nodeNameLower) {
+				kind = crdKind
+				break
+			}
+		}
+	}
+
+	// Build the spec from plugin fields and data
+	spec := make(map[string]interface{})
+	for _, field := range nodeType.Fields {
+		// Skip name and namespace as they go in metadata
+		if field.ID == "name" || field.ID == "namespace" {
+			continue
+		}
+		if val, ok := data[field.ID]; ok && val != nil && val != "" {
+			spec[field.ID] = val
+		} else if field.Default != "" {
+			spec[field.ID] = field.Default
+		}
+	}
+
+	// Build labels
+	labels := map[string]string{
+		"app.kubernetes.io/managed-by": "kubeorch",
+		"kubeorch.io/plugin":           plugin.ID,
+		"kubeorch.io/node-type":        nodeType.Name,
+	}
+
+	// Create the CRD structure
+	crd := map[string]interface{}{
+		"apiVersion": fmt.Sprintf("%s/v1", plugin.CRDGroup),
+		"kind":       kind,
+		"metadata": map[string]interface{}{
+			"name":      name,
+			"namespace": namespace,
+			"labels":    labels,
+		},
+		"spec": spec,
+	}
+
+	// Convert to YAML
+	yamlBytes, err := yaml.Marshal(crd)
+	if err != nil {
+		e.logger.WithError(err).Error("Failed to marshal CRD to YAML")
+		return ""
+	}
+
+	return string(yamlBytes)
+}
+
+// deletePluginNode deletes a CRD resource created by a plugin node
+func (e *WorkflowExecutor) deletePluginNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode) error {
+	if node.Data == nil {
+		return nil
+	}
+
+	// Get resource name from node data
+	name, ok := node.Data["name"].(string)
+	if !ok || name == "" {
+		name = node.ID
+	}
+
+	// Get namespace from node data
+	namespace := "default"
+	if ns, ok := node.Data["namespace"].(string); ok && ns != "" {
+		namespace = ns
+	}
+
+	// Get plugin info
+	pluginID, _ := node.Data["pluginId"].(string)
+	templateID, _ := node.Data["templateId"].(string)
+
+	e.logger.WithFields(logrus.Fields{
+		"name":        name,
+		"namespace":   namespace,
+		"plugin_id":   pluginID,
+		"template_id": templateID,
+		"node_id":     node.ID,
+	}).Info("Deleting plugin CRD resource from workflow cleanup")
+
+	// Get the plugin to find the CRD group and kind
+	pluginService := GetPluginService()
+	plugin, err := pluginService.GetPlugin(ctx, pluginID)
+	if err != nil {
+		e.logger.WithError(err).Warn("Failed to get plugin definition for deletion, attempting generic delete")
+		return nil // Don't fail cleanup if plugin not found
+	}
+
+	// Find the matching node type
+	var nodeType *models.PluginNodeType
+	for i := range plugin.NodeTypes {
+		if plugin.NodeTypes[i].Name == templateID {
+			nodeType = &plugin.NodeTypes[i]
+			break
+		}
+	}
+
+	// Determine the Kind
+	kind := ""
+	if nodeType != nil {
+		kind = nodeType.DisplayName
+		for _, crdKind := range plugin.CRDKinds {
+			if strings.EqualFold(strings.ReplaceAll(nodeType.Name, "-", ""), strings.ToLower(crdKind)) ||
+				strings.EqualFold(strings.ReplaceAll(nodeType.Name, "_", ""), strings.ToLower(crdKind)) {
+				kind = crdKind
+				break
+			}
+		}
+	}
+
+	// Use dynamic client to delete the CRD resource
+	return manifestApplier.DeleteCRD(ctx, plugin.CRDGroup, "v1", kind, name, namespace)
+}
+
 // CleanupDeletedNodes deletes Kubernetes resources for specific nodes that were removed from a workflow
 func (e *WorkflowExecutor) CleanupDeletedNodes(ctx context.Context, workflow *models.Workflow, deletedNodes []models.WorkflowNode, userID primitive.ObjectID) error {
 	if len(deletedNodes) == 0 {
@@ -3020,7 +3291,7 @@ func (e *WorkflowExecutor) CleanupDeletedNodes(ctx context.Context, workflow *mo
 
 	// Delete resources in dependency order (same as CleanupWorkflowResources)
 	// Note: We don't delete Secrets as they are managed externally (pass-through)
-	deletionOrder := []string{"ingress", "service", "statefulset", "deployment", "configmap", "persistentvolumeclaim"}
+	deletionOrder := []string{"ingress", "service", "statefulset", "deployment", "configmap", "persistentvolumeclaim", "plugin"}
 
 	for _, nodeType := range deletionOrder {
 		nodes, ok := nodesByType[nodeType]
@@ -3042,6 +3313,8 @@ func (e *WorkflowExecutor) CleanupDeletedNodes(ctx context.Context, workflow *mo
 				err = e.deleteConfigMapNode(ctx, manifestApplier, node)
 			case "persistentvolumeclaim":
 				err = e.deletePVCNode(ctx, manifestApplier, node)
+			case "plugin":
+				err = e.deletePluginNode(ctx, manifestApplier, node)
 			}
 			if err != nil {
 				e.logger.WithError(err).WithFields(logrus.Fields{
@@ -3059,4 +3332,706 @@ func (e *WorkflowExecutor) CleanupDeletedNodes(ctx context.Context, workflow *mo
 
 	e.logger.WithField("workflow_id", workflow.ID.Hex()).Info("Deleted nodes cleanup completed")
 	return nil
+}
+
+// executeJobNode executes a Job node
+func (e *WorkflowExecutor) executeJobNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun, runtimeData map[string]interface{}) error {
+	e.logger.WithFields(logrus.Fields{
+		"node_id":   node.ID,
+		"node_type": node.Type,
+	}).Info("Executing job node")
+
+	run.Logs = append(run.Logs, fmt.Sprintf("[%s] Executing job node: %s",
+		time.Now().Format("15:04:05"), node.ID))
+
+	jobData := node.Data
+	if jobData == nil {
+		return fmt.Errorf("invalid job data in node")
+	}
+
+	// Merge runtime env values
+	if envVars, ok := runtimeData["envVars"].(map[string]interface{}); ok {
+		if nodeEnvVars, ok := envVars[node.ID].(map[string]interface{}); ok {
+			existingEnv := make(map[string]interface{})
+			if existing, ok := jobData["env"].(map[string]interface{}); ok {
+				existingEnv = existing
+			}
+			for k, v := range nodeEnvVars {
+				existingEnv[k] = v
+			}
+			jobData["env"] = existingEnv
+		}
+	}
+
+	templateValues := e.prepareJobTemplateValues(node, jobData)
+	templateID := "core/job"
+	if tid, ok := jobData["templateId"].(string); ok {
+		templateID = tid
+	}
+
+	validationResult, err := e.validator.ValidateResourceParams(templateID, templateValues)
+	if err != nil {
+		return fmt.Errorf("validation error: %w", err)
+	}
+	if !validationResult.Valid {
+		return fmt.Errorf("validation failed: %v", validationResult.Errors)
+	}
+
+	renderedYAML, err := e.templateEngine.RenderTemplate(templateID, templateValues)
+	if err != nil {
+		return fmt.Errorf("failed to render template: %w", err)
+	}
+
+	result, err := manifestApplier.ApplyYAML(ctx, renderedYAML)
+	if err != nil {
+		run.NodeStates[node.ID] = map[string]interface{}{
+			"status": "failed",
+			"error":  err.Error(),
+		}
+		e.broadcastNodeError(run.WorkflowID, node.ID, "job", err.Error())
+		return fmt.Errorf("failed to apply manifest: %w", err)
+	}
+
+	run.NodeStates[node.ID] = map[string]interface{}{
+		"status":    "completed",
+		"result":    result,
+		"timestamp": time.Now().Unix(),
+	}
+
+	if len(result.AppliedResources) > 0 {
+		resource := result.AppliedResources[0]
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] Job %s/%s: %s",
+			time.Now().Format("15:04:05"), resource.Namespace, resource.Name, resource.Operation))
+
+		if err := e.updateResourceNodeStatus(run.WorkflowID, node.ID, "job", "running", "Job created successfully", nil, nil); err != nil {
+			e.logger.WithError(err).Warn("Failed to update job node status in workflow")
+		}
+	}
+
+	run.Output[node.ID] = result
+
+	if err := e.saveWorkflowRun(run); err != nil {
+		e.logger.WithError(err).Error("Failed to save updated workflow run")
+	}
+
+	return nil
+}
+
+func (e *WorkflowExecutor) prepareJobTemplateValues(node *models.WorkflowNode, jobData map[string]interface{}) map[string]interface{} {
+	values := make(map[string]interface{})
+
+	if name, ok := jobData["name"].(string); ok {
+		values["Name"] = name
+	} else {
+		values["Name"] = node.ID
+	}
+
+	values["Namespace"] = "default"
+	if namespace, ok := jobData["namespace"].(string); ok && namespace != "" {
+		values["Namespace"] = namespace
+	}
+
+	if image, ok := jobData["image"].(string); ok {
+		values["Image"] = image
+	}
+
+	if command, ok := jobData["command"].([]interface{}); ok {
+		values["Command"] = command
+	}
+
+	if args, ok := jobData["args"].([]interface{}); ok {
+		values["Args"] = args
+	}
+
+	if completions, ok := jobData["completions"]; ok {
+		values["Completions"] = completions
+	}
+
+	if parallelism, ok := jobData["parallelism"]; ok {
+		values["Parallelism"] = parallelism
+	}
+
+	if backoffLimit, ok := jobData["backoffLimit"]; ok {
+		values["BackoffLimit"] = backoffLimit
+	}
+
+	if activeDeadlineSeconds, ok := jobData["activeDeadlineSeconds"]; ok {
+		values["ActiveDeadlineSeconds"] = activeDeadlineSeconds
+	}
+
+	if ttlSecondsAfterFinished, ok := jobData["ttlSecondsAfterFinished"]; ok {
+		values["TTLSecondsAfterFinished"] = ttlSecondsAfterFinished
+	}
+
+	if restartPolicy, ok := jobData["restartPolicy"].(string); ok {
+		values["RestartPolicy"] = restartPolicy
+	}
+
+	if env, ok := jobData["env"].(map[string]interface{}); ok {
+		values["Env"] = env
+	}
+
+	if resources, ok := jobData["resources"].(map[string]interface{}); ok {
+		values["Resources"] = resources
+	}
+
+	if volumeMounts, ok := jobData["volumeMounts"].([]interface{}); ok {
+		values["VolumeMounts"] = volumeMounts
+	}
+
+	return values
+}
+
+// executeCronJobNode executes a CronJob node
+func (e *WorkflowExecutor) executeCronJobNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun, runtimeData map[string]interface{}) error {
+	e.logger.WithFields(logrus.Fields{
+		"node_id":   node.ID,
+		"node_type": node.Type,
+	}).Info("Executing cronjob node")
+
+	run.Logs = append(run.Logs, fmt.Sprintf("[%s] Executing cronjob node: %s",
+		time.Now().Format("15:04:05"), node.ID))
+
+	cronJobData := node.Data
+	if cronJobData == nil {
+		return fmt.Errorf("invalid cronjob data in node")
+	}
+
+	// Merge runtime env values
+	if envVars, ok := runtimeData["envVars"].(map[string]interface{}); ok {
+		if nodeEnvVars, ok := envVars[node.ID].(map[string]interface{}); ok {
+			existingEnv := make(map[string]interface{})
+			if existing, ok := cronJobData["env"].(map[string]interface{}); ok {
+				existingEnv = existing
+			}
+			for k, v := range nodeEnvVars {
+				existingEnv[k] = v
+			}
+			cronJobData["env"] = existingEnv
+		}
+	}
+
+	templateValues := e.prepareCronJobTemplateValues(node, cronJobData)
+	templateID := "core/cronjob"
+	if tid, ok := cronJobData["templateId"].(string); ok {
+		templateID = tid
+	}
+
+	validationResult, err := e.validator.ValidateResourceParams(templateID, templateValues)
+	if err != nil {
+		return fmt.Errorf("validation error: %w", err)
+	}
+	if !validationResult.Valid {
+		return fmt.Errorf("validation failed: %v", validationResult.Errors)
+	}
+
+	renderedYAML, err := e.templateEngine.RenderTemplate(templateID, templateValues)
+	if err != nil {
+		return fmt.Errorf("failed to render template: %w", err)
+	}
+
+	result, err := manifestApplier.ApplyYAML(ctx, renderedYAML)
+	if err != nil {
+		run.NodeStates[node.ID] = map[string]interface{}{
+			"status": "failed",
+			"error":  err.Error(),
+		}
+		e.broadcastNodeError(run.WorkflowID, node.ID, "cronjob", err.Error())
+		return fmt.Errorf("failed to apply manifest: %w", err)
+	}
+
+	run.NodeStates[node.ID] = map[string]interface{}{
+		"status":    "completed",
+		"result":    result,
+		"timestamp": time.Now().Unix(),
+	}
+
+	if len(result.AppliedResources) > 0 {
+		resource := result.AppliedResources[0]
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] CronJob %s/%s: %s",
+			time.Now().Format("15:04:05"), resource.Namespace, resource.Name, resource.Operation))
+
+		if err := e.updateResourceNodeStatus(run.WorkflowID, node.ID, "cronjob", "active", "CronJob created successfully", nil, nil); err != nil {
+			e.logger.WithError(err).Warn("Failed to update cronjob node status in workflow")
+		}
+	}
+
+	run.Output[node.ID] = result
+
+	if err := e.saveWorkflowRun(run); err != nil {
+		e.logger.WithError(err).Error("Failed to save updated workflow run")
+	}
+
+	return nil
+}
+
+func (e *WorkflowExecutor) prepareCronJobTemplateValues(node *models.WorkflowNode, cronJobData map[string]interface{}) map[string]interface{} {
+	values := make(map[string]interface{})
+
+	if name, ok := cronJobData["name"].(string); ok {
+		values["Name"] = name
+	} else {
+		values["Name"] = node.ID
+	}
+
+	values["Namespace"] = "default"
+	if namespace, ok := cronJobData["namespace"].(string); ok && namespace != "" {
+		values["Namespace"] = namespace
+	}
+
+	if schedule, ok := cronJobData["schedule"].(string); ok {
+		values["Schedule"] = schedule
+	}
+
+	if image, ok := cronJobData["image"].(string); ok {
+		values["Image"] = image
+	}
+
+	if command, ok := cronJobData["command"].([]interface{}); ok {
+		values["Command"] = command
+	}
+
+	if args, ok := cronJobData["args"].([]interface{}); ok {
+		values["Args"] = args
+	}
+
+	if concurrencyPolicy, ok := cronJobData["concurrencyPolicy"].(string); ok {
+		values["ConcurrencyPolicy"] = concurrencyPolicy
+	}
+
+	if suspend, ok := cronJobData["suspend"].(bool); ok {
+		values["Suspend"] = suspend
+	}
+
+	if successfulJobsHistoryLimit, ok := cronJobData["successfulJobsHistoryLimit"]; ok {
+		values["SuccessfulJobsHistoryLimit"] = successfulJobsHistoryLimit
+	}
+
+	if failedJobsHistoryLimit, ok := cronJobData["failedJobsHistoryLimit"]; ok {
+		values["FailedJobsHistoryLimit"] = failedJobsHistoryLimit
+	}
+
+	if backoffLimit, ok := cronJobData["backoffLimit"]; ok {
+		values["BackoffLimit"] = backoffLimit
+	}
+
+	if restartPolicy, ok := cronJobData["restartPolicy"].(string); ok {
+		values["RestartPolicy"] = restartPolicy
+	}
+
+	if env, ok := cronJobData["env"].(map[string]interface{}); ok {
+		values["Env"] = env
+	}
+
+	if resources, ok := cronJobData["resources"].(map[string]interface{}); ok {
+		values["Resources"] = resources
+	}
+
+	if volumeMounts, ok := cronJobData["volumeMounts"].([]interface{}); ok {
+		values["VolumeMounts"] = volumeMounts
+	}
+
+	return values
+}
+
+// executeDaemonSetNode executes a DaemonSet node
+func (e *WorkflowExecutor) executeDaemonSetNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun, runtimeData map[string]interface{}) error {
+	e.logger.WithFields(logrus.Fields{
+		"node_id":   node.ID,
+		"node_type": node.Type,
+	}).Info("Executing daemonset node")
+
+	run.Logs = append(run.Logs, fmt.Sprintf("[%s] Executing daemonset node: %s",
+		time.Now().Format("15:04:05"), node.ID))
+
+	daemonSetData := node.Data
+	if daemonSetData == nil {
+		return fmt.Errorf("invalid daemonset data in node")
+	}
+
+	// Merge runtime env values
+	if envVars, ok := runtimeData["envVars"].(map[string]interface{}); ok {
+		if nodeEnvVars, ok := envVars[node.ID].(map[string]interface{}); ok {
+			existingEnv := make(map[string]interface{})
+			if existing, ok := daemonSetData["env"].(map[string]interface{}); ok {
+				existingEnv = existing
+			}
+			for k, v := range nodeEnvVars {
+				existingEnv[k] = v
+			}
+			daemonSetData["env"] = existingEnv
+		}
+	}
+
+	templateValues := e.prepareDaemonSetTemplateValues(node, daemonSetData)
+	templateID := "core/daemonset"
+	if tid, ok := daemonSetData["templateId"].(string); ok {
+		templateID = tid
+	}
+
+	validationResult, err := e.validator.ValidateResourceParams(templateID, templateValues)
+	if err != nil {
+		return fmt.Errorf("validation error: %w", err)
+	}
+	if !validationResult.Valid {
+		return fmt.Errorf("validation failed: %v", validationResult.Errors)
+	}
+
+	renderedYAML, err := e.templateEngine.RenderTemplate(templateID, templateValues)
+	if err != nil {
+		return fmt.Errorf("failed to render template: %w", err)
+	}
+
+	result, err := manifestApplier.ApplyYAML(ctx, renderedYAML)
+	if err != nil {
+		run.NodeStates[node.ID] = map[string]interface{}{
+			"status": "failed",
+			"error":  err.Error(),
+		}
+		e.broadcastNodeError(run.WorkflowID, node.ID, "daemonset", err.Error())
+		return fmt.Errorf("failed to apply manifest: %w", err)
+	}
+
+	run.NodeStates[node.ID] = map[string]interface{}{
+		"status":    "completed",
+		"result":    result,
+		"timestamp": time.Now().Unix(),
+	}
+
+	if len(result.AppliedResources) > 0 {
+		resource := result.AppliedResources[0]
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] DaemonSet %s/%s: %s",
+			time.Now().Format("15:04:05"), resource.Namespace, resource.Name, resource.Operation))
+
+		if err := e.updateResourceNodeStatus(run.WorkflowID, node.ID, "daemonset", "running", "DaemonSet created successfully", nil, nil); err != nil {
+			e.logger.WithError(err).Warn("Failed to update daemonset node status in workflow")
+		}
+	}
+
+	run.Output[node.ID] = result
+
+	if err := e.saveWorkflowRun(run); err != nil {
+		e.logger.WithError(err).Error("Failed to save updated workflow run")
+	}
+
+	return nil
+}
+
+func (e *WorkflowExecutor) prepareDaemonSetTemplateValues(node *models.WorkflowNode, daemonSetData map[string]interface{}) map[string]interface{} {
+	values := make(map[string]interface{})
+
+	if name, ok := daemonSetData["name"].(string); ok {
+		values["Name"] = name
+	} else {
+		values["Name"] = node.ID
+	}
+
+	values["Namespace"] = "default"
+	if namespace, ok := daemonSetData["namespace"].(string); ok && namespace != "" {
+		values["Namespace"] = namespace
+	}
+
+	if image, ok := daemonSetData["image"].(string); ok {
+		values["Image"] = image
+	}
+
+	if port, ok := daemonSetData["port"]; ok {
+		values["Port"] = port
+	}
+
+	if updateStrategy, ok := daemonSetData["updateStrategy"].(string); ok {
+		values["UpdateStrategy"] = updateStrategy
+	}
+
+	if maxUnavailable, ok := daemonSetData["maxUnavailable"]; ok {
+		values["MaxUnavailable"] = maxUnavailable
+	}
+
+	if nodeSelector, ok := daemonSetData["nodeSelector"].(map[string]interface{}); ok {
+		values["NodeSelector"] = nodeSelector
+	}
+
+	if tolerations, ok := daemonSetData["tolerations"].([]interface{}); ok {
+		values["Tolerations"] = tolerations
+	}
+
+	if hostNetwork, ok := daemonSetData["hostNetwork"].(bool); ok {
+		values["HostNetwork"] = hostNetwork
+	}
+
+	if hostPID, ok := daemonSetData["hostPID"].(bool); ok {
+		values["HostPID"] = hostPID
+	}
+
+	if env, ok := daemonSetData["env"].(map[string]interface{}); ok {
+		values["Env"] = env
+	}
+
+	if resources, ok := daemonSetData["resources"].(map[string]interface{}); ok {
+		values["Resources"] = resources
+	}
+
+	if volumeMounts, ok := daemonSetData["volumeMounts"].([]interface{}); ok {
+		values["VolumeMounts"] = volumeMounts
+	}
+
+	return values
+}
+
+// executeHPANodeWithConnections executes an HPA node with connection data
+func (e *WorkflowExecutor) executeHPANodeWithConnections(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun, connectedData []map[string]interface{}) error {
+	e.logger.WithFields(logrus.Fields{
+		"node_id":   node.ID,
+		"node_type": node.Type,
+	}).Info("Executing hpa node")
+
+	run.Logs = append(run.Logs, fmt.Sprintf("[%s] Executing hpa node: %s",
+		time.Now().Format("15:04:05"), node.ID))
+
+	hpaData := node.Data
+	if hpaData == nil {
+		return fmt.Errorf("invalid hpa data in node")
+	}
+
+	// Auto-populate scaleTargetName from connected deployment/statefulset
+	for _, sourceData := range connectedData {
+		if existingTarget, ok := hpaData["scaleTargetName"].(string); ok && existingTarget != "" {
+			continue // Already has a target
+		}
+		if targetName, ok := sourceData["name"].(string); ok {
+			hpaData["scaleTargetName"] = targetName
+			// Determine target kind from source node type
+			if sourceType, ok := sourceData["type"].(string); ok {
+				if sourceType == "statefulset" {
+					hpaData["scaleTargetKind"] = "StatefulSet"
+				} else {
+					hpaData["scaleTargetKind"] = "Deployment"
+				}
+			}
+			// Use same namespace
+			if namespace, ok := sourceData["namespace"].(string); ok && namespace != "" {
+				hpaData["namespace"] = namespace
+			}
+		}
+	}
+
+	templateValues := e.prepareHPATemplateValues(node, hpaData)
+	templateID := "core/hpa"
+	if tid, ok := hpaData["templateId"].(string); ok {
+		templateID = tid
+	}
+
+	validationResult, err := e.validator.ValidateResourceParams(templateID, templateValues)
+	if err != nil {
+		return fmt.Errorf("validation error: %w", err)
+	}
+	if !validationResult.Valid {
+		return fmt.Errorf("validation failed: %v", validationResult.Errors)
+	}
+
+	renderedYAML, err := e.templateEngine.RenderTemplate(templateID, templateValues)
+	if err != nil {
+		return fmt.Errorf("failed to render template: %w", err)
+	}
+
+	result, err := manifestApplier.ApplyYAML(ctx, renderedYAML)
+	if err != nil {
+		run.NodeStates[node.ID] = map[string]interface{}{
+			"status": "failed",
+			"error":  err.Error(),
+		}
+		e.broadcastNodeError(run.WorkflowID, node.ID, "hpa", err.Error())
+		return fmt.Errorf("failed to apply manifest: %w", err)
+	}
+
+	run.NodeStates[node.ID] = map[string]interface{}{
+		"status":    "completed",
+		"result":    result,
+		"timestamp": time.Now().Unix(),
+	}
+
+	if len(result.AppliedResources) > 0 {
+		resource := result.AppliedResources[0]
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] HPA %s/%s: %s",
+			time.Now().Format("15:04:05"), resource.Namespace, resource.Name, resource.Operation))
+
+		if err := e.updateResourceNodeStatus(run.WorkflowID, node.ID, "hpa", "stable", "HPA created successfully", nil, nil); err != nil {
+			e.logger.WithError(err).Warn("Failed to update hpa node status in workflow")
+		}
+	}
+
+	run.Output[node.ID] = result
+
+	if err := e.saveWorkflowRun(run); err != nil {
+		e.logger.WithError(err).Error("Failed to save updated workflow run")
+	}
+
+	return nil
+}
+
+func (e *WorkflowExecutor) prepareHPATemplateValues(node *models.WorkflowNode, hpaData map[string]interface{}) map[string]interface{} {
+	values := make(map[string]interface{})
+
+	if name, ok := hpaData["name"].(string); ok {
+		values["Name"] = name
+	} else {
+		values["Name"] = node.ID
+	}
+
+	values["Namespace"] = "default"
+	if namespace, ok := hpaData["namespace"].(string); ok && namespace != "" {
+		values["Namespace"] = namespace
+	}
+
+	if scaleTargetKind, ok := hpaData["scaleTargetKind"].(string); ok {
+		values["ScaleTargetKind"] = scaleTargetKind
+	}
+
+	if scaleTargetName, ok := hpaData["scaleTargetName"].(string); ok {
+		values["ScaleTargetName"] = scaleTargetName
+	}
+
+	if minReplicas, ok := hpaData["minReplicas"]; ok {
+		values["MinReplicas"] = minReplicas
+	}
+
+	if maxReplicas, ok := hpaData["maxReplicas"]; ok {
+		values["MaxReplicas"] = maxReplicas
+	}
+
+	if targetCPUUtilization, ok := hpaData["targetCPUUtilization"]; ok {
+		values["TargetCPUUtilization"] = targetCPUUtilization
+	}
+
+	if targetMemoryUtilization, ok := hpaData["targetMemoryUtilization"]; ok {
+		values["TargetMemoryUtilization"] = targetMemoryUtilization
+	}
+
+	if scaleDownStabilization, ok := hpaData["scaleDownStabilization"]; ok {
+		values["ScaleDownStabilization"] = scaleDownStabilization
+	}
+
+	if scaleUpStabilization, ok := hpaData["scaleUpStabilization"]; ok {
+		values["ScaleUpStabilization"] = scaleUpStabilization
+	}
+
+	return values
+}
+
+// executeNetworkPolicyNodeWithConnections executes a NetworkPolicy node with connection data
+func (e *WorkflowExecutor) executeNetworkPolicyNodeWithConnections(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode, run *models.WorkflowRun, connectedData []map[string]interface{}) error {
+	e.logger.WithFields(logrus.Fields{
+		"node_id":   node.ID,
+		"node_type": node.Type,
+	}).Info("Executing networkpolicy node")
+
+	run.Logs = append(run.Logs, fmt.Sprintf("[%s] Executing networkpolicy node: %s",
+		time.Now().Format("15:04:05"), node.ID))
+
+	npData := node.Data
+	if npData == nil {
+		return fmt.Errorf("invalid networkpolicy data in node")
+	}
+
+	// Auto-populate podSelector from connected workloads
+	for _, sourceData := range connectedData {
+		if existingSelector, ok := npData["podSelector"].(map[string]interface{}); ok && len(existingSelector) > 0 {
+			continue // Already has a selector
+		}
+		if targetName, ok := sourceData["name"].(string); ok {
+			npData["podSelector"] = map[string]interface{}{
+				"app": targetName,
+			}
+			// Use same namespace
+			if namespace, ok := sourceData["namespace"].(string); ok && namespace != "" {
+				npData["namespace"] = namespace
+			}
+		}
+	}
+
+	templateValues := e.prepareNetworkPolicyTemplateValues(node, npData)
+	templateID := "core/networkpolicy"
+	if tid, ok := npData["templateId"].(string); ok {
+		templateID = tid
+	}
+
+	validationResult, err := e.validator.ValidateResourceParams(templateID, templateValues)
+	if err != nil {
+		return fmt.Errorf("validation error: %w", err)
+	}
+	if !validationResult.Valid {
+		return fmt.Errorf("validation failed: %v", validationResult.Errors)
+	}
+
+	renderedYAML, err := e.templateEngine.RenderTemplate(templateID, templateValues)
+	if err != nil {
+		return fmt.Errorf("failed to render template: %w", err)
+	}
+
+	result, err := manifestApplier.ApplyYAML(ctx, renderedYAML)
+	if err != nil {
+		run.NodeStates[node.ID] = map[string]interface{}{
+			"status": "failed",
+			"error":  err.Error(),
+		}
+		e.broadcastNodeError(run.WorkflowID, node.ID, "networkpolicy", err.Error())
+		return fmt.Errorf("failed to apply manifest: %w", err)
+	}
+
+	run.NodeStates[node.ID] = map[string]interface{}{
+		"status":    "completed",
+		"result":    result,
+		"timestamp": time.Now().Unix(),
+	}
+
+	if len(result.AppliedResources) > 0 {
+		resource := result.AppliedResources[0]
+		run.Logs = append(run.Logs, fmt.Sprintf("[%s] NetworkPolicy %s/%s: %s",
+			time.Now().Format("15:04:05"), resource.Namespace, resource.Name, resource.Operation))
+
+		if err := e.updateResourceNodeStatus(run.WorkflowID, node.ID, "networkpolicy", "active", "NetworkPolicy created successfully", nil, nil); err != nil {
+			e.logger.WithError(err).Warn("Failed to update networkpolicy node status in workflow")
+		}
+	}
+
+	run.Output[node.ID] = result
+
+	if err := e.saveWorkflowRun(run); err != nil {
+		e.logger.WithError(err).Error("Failed to save updated workflow run")
+	}
+
+	return nil
+}
+
+func (e *WorkflowExecutor) prepareNetworkPolicyTemplateValues(node *models.WorkflowNode, npData map[string]interface{}) map[string]interface{} {
+	values := make(map[string]interface{})
+
+	if name, ok := npData["name"].(string); ok {
+		values["Name"] = name
+	} else {
+		values["Name"] = node.ID
+	}
+
+	values["Namespace"] = "default"
+	if namespace, ok := npData["namespace"].(string); ok && namespace != "" {
+		values["Namespace"] = namespace
+	}
+
+	if podSelector, ok := npData["podSelector"].(map[string]interface{}); ok {
+		values["PodSelector"] = podSelector
+	}
+
+	if policyTypes, ok := npData["policyTypes"].([]interface{}); ok {
+		values["PolicyTypes"] = policyTypes
+	}
+
+	if ingressRules, ok := npData["ingressRules"].([]interface{}); ok {
+		values["IngressRules"] = ingressRules
+	}
+
+	if egressRules, ok := npData["egressRules"].([]interface{}); ok {
+		values["EgressRules"] = egressRules
+	}
+
+	return values
 }

@@ -24,6 +24,18 @@ type KubernetesClusterService struct {
 	logger      *logrus.Logger
 }
 
+// Metrics cache with TTL
+type cachedMetrics struct {
+	metrics   *models.ClusterMetrics
+	fetchedAt time.Time
+}
+
+var (
+	metricsCache      = make(map[string]*cachedMetrics)
+	metricsCacheMutex sync.RWMutex
+	metricsCacheTTL   = 30 * time.Second
+)
+
 func NewKubernetesClusterService() *KubernetesClusterService {
 	return &KubernetesClusterService{
 		clusterRepo: repositories.NewClusterRepository(),
@@ -669,6 +681,378 @@ func (s *KubernetesClusterService) ToggleSingleNodeMode(ctx context.Context, use
 	}).Info("Toggled single-node mode")
 
 	return nil
+}
+
+// GetClusterMetrics fetches real-time cluster metrics with caching
+func (s *KubernetesClusterService) GetClusterMetrics(ctx context.Context, userID primitive.ObjectID, clusterName string) (*models.ClusterMetrics, error) {
+	// Build cache key from user and cluster
+	cacheKey := fmt.Sprintf("%s:%s", userID.Hex(), clusterName)
+
+	// Check cache first
+	metricsCacheMutex.RLock()
+	if cached, exists := metricsCache[cacheKey]; exists && time.Since(cached.fetchedAt) < metricsCacheTTL {
+		metricsCacheMutex.RUnlock()
+		s.logger.WithField("cluster", clusterName).Debug("Returning cached metrics")
+		return cached.metrics, nil
+	}
+	metricsCacheMutex.RUnlock()
+
+	// Get cluster and create connection
+	cluster, err := s.clusterRepo.GetByName(ctx, clusterName, userID)
+	if err != nil {
+		return nil, fmt.Errorf("cluster not found: %w", err)
+	}
+
+	clientset, err := s.CreateClusterConnection(cluster)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to cluster: %w", err)
+	}
+
+	// Fetch metrics in parallel
+	var wg sync.WaitGroup
+	var health []models.ComponentHealth
+	var resources models.ResourceUsage
+	var nodeCount, podCount int
+	var healthErr, resourcesErr, nodesErr, podsErr error
+
+	wg.Add(4)
+
+	// Fetch component health
+	go func() {
+		defer wg.Done()
+		health, healthErr = s.fetchComponentHealth(ctx, clientset)
+	}()
+
+	// Fetch resource usage
+	go func() {
+		defer wg.Done()
+		resources, resourcesErr = s.fetchResourceUsage(ctx, clientset)
+	}()
+
+	// Fetch node count
+	go func() {
+		defer wg.Done()
+		nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+		if err != nil {
+			nodesErr = err
+			return
+		}
+		nodeCount = len(nodes.Items)
+	}()
+
+	// Fetch pod count
+	go func() {
+		defer wg.Done()
+		pods, err := clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+		if err != nil {
+			podsErr = err
+			return
+		}
+		podCount = len(pods.Items)
+	}()
+
+	wg.Wait()
+
+	// Log any errors but continue with partial data
+	if healthErr != nil {
+		s.logger.WithError(healthErr).Warn("Failed to fetch component health")
+	}
+	if resourcesErr != nil {
+		s.logger.WithError(resourcesErr).Warn("Failed to fetch resource usage")
+	}
+	if nodesErr != nil {
+		s.logger.WithError(nodesErr).Warn("Failed to fetch node count")
+	}
+	if podsErr != nil {
+		s.logger.WithError(podsErr).Warn("Failed to fetch pod count")
+	}
+
+	metrics := &models.ClusterMetrics{
+		ClusterName: clusterName,
+		Health:      health,
+		Resources:   resources,
+		NodeCount:   nodeCount,
+		PodCount:    podCount,
+		LastUpdated: time.Now(),
+	}
+
+	// Update cache
+	metricsCacheMutex.Lock()
+	metricsCache[cacheKey] = &cachedMetrics{
+		metrics:   metrics,
+		fetchedAt: time.Now(),
+	}
+	metricsCacheMutex.Unlock()
+
+	return metrics, nil
+}
+
+// fetchComponentHealth gets health status of Kubernetes control plane components
+func (s *KubernetesClusterService) fetchComponentHealth(ctx context.Context, clientset *kubernetes.Clientset) ([]models.ComponentHealth, error) {
+	health := []models.ComponentHealth{}
+
+	// API Server is healthy if we can make requests (we already have a connection)
+	health = append(health, models.ComponentHealth{
+		Name:   "API Server",
+		Status: models.ComponentHealthy,
+	})
+
+	// Try to get ComponentStatus (deprecated in 1.19+ but still works in many clusters)
+	componentStatuses, err := clientset.CoreV1().ComponentStatuses().List(ctx, metav1.ListOptions{})
+	if err == nil && len(componentStatuses.Items) > 0 {
+		for _, cs := range componentStatuses.Items {
+			var status models.ComponentHealthStatus
+			var message string
+
+			for _, condition := range cs.Conditions {
+				if condition.Type == corev1.ComponentHealthy {
+					if condition.Status == corev1.ConditionTrue {
+						status = models.ComponentHealthy
+					} else {
+						status = models.ComponentUnhealthy
+						message = condition.Message
+					}
+					break
+				}
+			}
+
+			if status == "" {
+				status = models.ComponentUnknown
+			}
+
+			// Map component names to display names
+			displayName := cs.Name
+			switch cs.Name {
+			case "scheduler":
+				displayName = "Scheduler"
+			case "controller-manager":
+				displayName = "Controller"
+			case "etcd-0", "etcd-1", "etcd-2":
+				displayName = "etcd"
+			}
+
+			// Skip if we already have this component (e.g., multiple etcd instances)
+			found := false
+			for _, h := range health {
+				if h.Name == displayName {
+					found = true
+					break
+				}
+			}
+			if !found {
+				health = append(health, models.ComponentHealth{
+					Name:    displayName,
+					Status:  status,
+					Message: message,
+				})
+			}
+		}
+	} else {
+		// ComponentStatus not available, try health endpoints via raw REST client
+		// Check scheduler
+		schedulerHealth := s.checkHealthEndpoint(ctx, clientset, "/livez")
+		if schedulerHealth {
+			health = append(health, models.ComponentHealth{
+				Name:   "Scheduler",
+				Status: models.ComponentHealthy,
+			})
+		} else {
+			health = append(health, models.ComponentHealth{
+				Name:   "Scheduler",
+				Status: models.ComponentUnknown,
+			})
+		}
+
+		// Add controller-manager and etcd as unknown since we can't check them directly
+		health = append(health, models.ComponentHealth{
+			Name:   "Controller",
+			Status: models.ComponentUnknown,
+		})
+		health = append(health, models.ComponentHealth{
+			Name:   "etcd",
+			Status: models.ComponentUnknown,
+		})
+	}
+
+	return health, nil
+}
+
+// checkHealthEndpoint checks a health endpoint via the K8s API
+func (s *KubernetesClusterService) checkHealthEndpoint(ctx context.Context, clientset *kubernetes.Clientset, path string) bool {
+	result := clientset.Discovery().RESTClient().Get().AbsPath(path).Do(ctx)
+	if result.Error() != nil {
+		return false
+	}
+	return true
+}
+
+// fetchResourceUsage gets CPU, Memory, and Storage usage across all nodes
+func (s *KubernetesClusterService) fetchResourceUsage(ctx context.Context, clientset *kubernetes.Clientset) (models.ResourceUsage, error) {
+	usage := models.ResourceUsage{}
+
+	// Get all nodes
+	nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return usage, fmt.Errorf("failed to list nodes: %w", err)
+	}
+
+	var totalCPUCapacity, totalMemoryCapacity, totalStorageCapacity int64
+	var totalCPUUsed, totalMemoryUsed, totalStorageUsed int64
+
+	// Aggregate capacity from all nodes
+	for _, node := range nodes.Items {
+		if cpu := node.Status.Capacity.Cpu(); cpu != nil {
+			totalCPUCapacity += cpu.MilliValue()
+		}
+		if memory := node.Status.Capacity.Memory(); memory != nil {
+			totalMemoryCapacity += memory.Value()
+		}
+		if storage := node.Status.Capacity.StorageEphemeral(); storage != nil {
+			totalStorageCapacity += storage.Value()
+		}
+	}
+
+	// Try to get actual usage from metrics-server
+	metricsAvailable := s.fetchNodeMetrics(ctx, clientset, &totalCPUUsed, &totalMemoryUsed)
+
+	if !metricsAvailable {
+		// Fallback: estimate usage from allocatable vs capacity
+		for _, node := range nodes.Items {
+			if cpu := node.Status.Allocatable.Cpu(); cpu != nil {
+				allocatableCPU := cpu.MilliValue()
+				capacityCPU := node.Status.Capacity.Cpu().MilliValue()
+				// Rough estimate: system reserved = capacity - allocatable
+				totalCPUUsed += (capacityCPU - allocatableCPU)
+			}
+			if memory := node.Status.Allocatable.Memory(); memory != nil {
+				allocatableMemory := memory.Value()
+				capacityMemory := node.Status.Capacity.Memory().Value()
+				totalMemoryUsed += (capacityMemory - allocatableMemory)
+			}
+		}
+	}
+
+	// Get storage usage from PVCs
+	pvcs, err := clientset.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{})
+	if err == nil {
+		for _, pvc := range pvcs.Items {
+			if storage := pvc.Status.Capacity.Storage(); storage != nil {
+				totalStorageUsed += storage.Value()
+			}
+		}
+	}
+
+	// Calculate percentages
+	usage.CPU = models.ResourceMetric{
+		Used:       totalCPUUsed,
+		Capacity:   totalCPUCapacity,
+		Percentage: calculatePercentage(totalCPUUsed, totalCPUCapacity),
+	}
+	usage.Memory = models.ResourceMetric{
+		Used:       totalMemoryUsed,
+		Capacity:   totalMemoryCapacity,
+		Percentage: calculatePercentage(totalMemoryUsed, totalMemoryCapacity),
+	}
+	usage.Storage = models.ResourceMetric{
+		Used:       totalStorageUsed,
+		Capacity:   totalStorageCapacity,
+		Percentage: calculatePercentage(totalStorageUsed, totalStorageCapacity),
+	}
+
+	return usage, nil
+}
+
+// fetchNodeMetrics tries to fetch node metrics from metrics-server
+func (s *KubernetesClusterService) fetchNodeMetrics(ctx context.Context, clientset *kubernetes.Clientset, cpuUsed, memoryUsed *int64) bool {
+	// Use the metrics API path directly
+	result := clientset.RESTClient().Get().
+		AbsPath("/apis/metrics.k8s.io/v1beta1/nodes").
+		Do(ctx)
+
+	if result.Error() != nil {
+		s.logger.WithError(result.Error()).Debug("Metrics server not available")
+		return false
+	}
+
+	raw, err := result.Raw()
+	if err != nil {
+		s.logger.WithError(err).Debug("Failed to get raw metrics response")
+		return false
+	}
+
+	// Parse the metrics response
+	var nodeMetricsList struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Usage struct {
+				CPU    string `json:"cpu"`
+				Memory string `json:"memory"`
+			} `json:"usage"`
+		} `json:"items"`
+	}
+
+	if err := json.Unmarshal(raw, &nodeMetricsList); err != nil {
+		s.logger.WithError(err).Debug("Failed to parse metrics response")
+		return false
+	}
+
+	for _, node := range nodeMetricsList.Items {
+		// Parse CPU (format: "123m" or "123456n")
+		cpuStr := node.Usage.CPU
+		if cpuStr != "" {
+			var cpuValue int64
+			if cpuStr[len(cpuStr)-1] == 'n' {
+				// Nanocores to millicores
+				fmt.Sscanf(cpuStr, "%dn", &cpuValue)
+				cpuValue = cpuValue / 1000000
+			} else if cpuStr[len(cpuStr)-1] == 'm' {
+				fmt.Sscanf(cpuStr, "%dm", &cpuValue)
+			} else {
+				// Cores to millicores
+				var cores float64
+				fmt.Sscanf(cpuStr, "%f", &cores)
+				cpuValue = int64(cores * 1000)
+			}
+			*cpuUsed += cpuValue
+		}
+
+		// Parse Memory (format: "123Ki" or "123456")
+		memStr := node.Usage.Memory
+		if memStr != "" {
+			var memValue int64
+			if len(memStr) >= 2 {
+				suffix := memStr[len(memStr)-2:]
+				switch suffix {
+				case "Ki":
+					fmt.Sscanf(memStr, "%dKi", &memValue)
+					memValue *= 1024
+				case "Mi":
+					fmt.Sscanf(memStr, "%dMi", &memValue)
+					memValue *= 1024 * 1024
+				case "Gi":
+					fmt.Sscanf(memStr, "%dGi", &memValue)
+					memValue *= 1024 * 1024 * 1024
+				default:
+					fmt.Sscanf(memStr, "%d", &memValue)
+				}
+			} else {
+				fmt.Sscanf(memStr, "%d", &memValue)
+			}
+			*memoryUsed += memValue
+		}
+	}
+
+	return true
+}
+
+// calculatePercentage calculates a percentage, handling zero capacity
+func calculatePercentage(used, capacity int64) float64 {
+	if capacity == 0 {
+		return 0
+	}
+	return float64(used) / float64(capacity) * 100
 }
 
 // Singleton instance

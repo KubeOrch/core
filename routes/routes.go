@@ -100,6 +100,7 @@ func SetupRouter() *gin.Engine {
 			clusters.GET("/:name", clusterHandler.GetCluster)
 			clusters.PUT("/:name", clusterHandler.UpdateCluster)
 			clusters.GET("/:name/status", clusterHandler.GetClusterStatus)
+			clusters.GET("/:name/metrics", clusterHandler.GetClusterMetrics)
 			clusters.DELETE("/:name", clusterHandler.RemoveCluster)
 			clusters.PUT("/:name/default", clusterHandler.SetDefaultCluster)
 			clusters.POST("/:name/test", clusterHandler.TestConnection)
@@ -130,6 +131,40 @@ func SetupRouter() *gin.Engine {
 			registries.GET("", registryHandler.ListRegistries)
 			registries.GET("/lookup", registryHandler.GetRegistryForImage) // ?image=ghcr.io/org/app:v1
 			registries.GET("/:id", registryHandler.GetRegistry)
+		}
+
+		// Plugin routes (CRD extension plugins)
+		pluginHandler := handlers.NewPluginHandler()
+		plugins := protected.Group("/plugins")
+		{
+			plugins.GET("", pluginHandler.ListPlugins)
+			plugins.GET("/enabled", pluginHandler.GetEnabledPlugins)
+			plugins.GET("/categories", pluginHandler.GetCategories)
+			plugins.GET("/:id", pluginHandler.GetPlugin)
+			plugins.POST("/:id/enable", pluginHandler.EnablePlugin)
+			plugins.POST("/:id/disable", pluginHandler.DisablePlugin)
+		}
+
+		// Import routes (docker-compose, git repos)
+		importHandler := handlers.NewImportHandler()
+		imports := protected.Group("/import")
+		{
+			imports.POST("/analyze", importHandler.AnalyzeImportHandler)
+			imports.POST("/apply", importHandler.ApplyImportHandler)
+			imports.POST("/upload", importHandler.UploadComposeHandler)
+			imports.POST("/create-workflow", importHandler.CreateWorkflowFromImportHandler)
+			imports.GET("/:id", importHandler.GetImportSessionHandler)
+			imports.GET("/:id/stream", importHandler.StreamImportLogsHandler)
+		}
+
+		// Build routes (container image building)
+		builds := protected.Group("/builds")
+		{
+			builds.POST("/start", handlers.StartBuildHandler)
+			builds.GET("", handlers.ListBuildsHandler)
+			builds.GET("/:id", handlers.GetBuildHandler)
+			builds.GET("/:id/stream", handlers.StreamBuildLogsHandler)
+			builds.POST("/:id/cancel", handlers.CancelBuildHandler)
 		}
 
 		// Admin routes

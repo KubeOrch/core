@@ -48,6 +48,9 @@ type TemplateMetadata struct {
 	Difficulty     string              `yaml:"difficulty" json:"difficulty"`         // easy, medium, hard
 	Dependencies   []string            `yaml:"dependencies" json:"dependencies"`     // IDs of templates this depends on
 	Parameters     []TemplateParameter `yaml:"parameters" json:"parameters"`
+	// Plugin-specific fields
+	IsPlugin bool   `yaml:"isPlugin,omitempty" json:"isPlugin,omitempty"` // true if this template is from a plugin
+	PluginID string `yaml:"pluginId,omitempty" json:"pluginId,omitempty"` // ID of the source plugin
 }
 
 // Registry manages template metadata
