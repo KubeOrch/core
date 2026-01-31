@@ -110,7 +110,6 @@ func (e *LayoutEngine) CalculateLayout(nodes []models.WorkflowNode, edges []mode
 	}
 
 	// Layer 4: PVCs (right side)
-	y = StartY
 	// Align PVCs with their connected deployments
 	pvcPositions := e.alignPVCsToDeployments(pvcs, workloads, edges, positions)
 	for nodeID, pos := range pvcPositions {
@@ -254,10 +253,7 @@ func (e *LayoutEngine) ApplyPositions(nodes []models.WorkflowNode, positions map
 	for i, node := range nodes {
 		result[i] = node
 		if pos, ok := positions[node.ID]; ok {
-			result[i].Position = models.Position{
-				X: pos.X,
-				Y: pos.Y,
-			}
+			result[i].Position = models.Position(pos)
 		}
 	}
 	return result

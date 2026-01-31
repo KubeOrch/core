@@ -213,7 +213,11 @@ func (h *ImportHandler) UploadComposeHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No file uploaded: " + err.Error()})
 		return
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			h.logger.WithError(err).Warn("Failed to close uploaded file")
+		}
+	}()
 
 	// Validate file extension
 	ext := strings.ToLower(filepath.Ext(header.Filename))
@@ -330,7 +334,9 @@ func (h *ImportHandler) StreamImportLogsHandler(c *gin.Context) {
 			analysisJSON, _ := json.Marshal(session.Analysis)
 			c.SSEvent("complete", string(analysisJSON))
 		} else {
-			c.SSEvent("failed", `{"error": "`+session.ErrorMessage+`"}`)
+			errorPayload := map[string]string{"error": session.ErrorMessage}
+			errorJSON, _ := json.Marshal(errorPayload)
+			c.SSEvent("failed", string(errorJSON))
 		}
 		c.Writer.Flush()
 		return

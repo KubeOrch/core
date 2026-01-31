@@ -82,7 +82,7 @@ func (s *ImportService) AnalyzeImport(ctx context.Context, req *models.ImportReq
 		}
 		// Clean up after processing
 		if repoPath != "" {
-			defer s.gitService.CleanupRepository(repoPath)
+			defer func() { _ = s.gitService.CleanupRepository(repoPath) }()
 		}
 
 	default:
@@ -324,10 +324,7 @@ func (s *ImportService) ApplyImport(ctx context.Context, req *models.ApplyImport
 	// Apply positions to nodes
 	for i := range req.Nodes {
 		if pos, ok := req.Positions[req.Nodes[i].ID]; ok {
-			req.Nodes[i].Position = models.Position{
-				X: pos.X,
-				Y: pos.Y,
-			}
+			req.Nodes[i].Position = models.Position(pos)
 		}
 	}
 
@@ -510,7 +507,7 @@ func (s *ImportService) ExecuteAsyncImport(sessionID primitive.ObjectID, req *mo
 		s.handleImportError(ctx, sessionID, "clone", fmt.Errorf("failed to clone repository: %w", err))
 		return
 	}
-	defer s.gitService.CleanupRepository(repoPath)
+	defer func() { _ = s.gitService.CleanupRepository(repoPath) }()
 
 	s.publishImportLog(sessionID, "clone", "Repository cloned successfully", "info")
 	s.publishImportProgress(sessionID, models.ImportStatusAnalyzing, "Analyzing repository", 40)
@@ -620,7 +617,7 @@ func (s *ImportService) GetImportSession(ctx context.Context, sessionID primitiv
 // publishImportProgress publishes a progress update
 func (s *ImportService) publishImportProgress(sessionID primitive.ObjectID, status models.ImportSessionStatus, stage string, progress int) {
 	ctx := context.Background()
-	s.importRepository.UpdateStatus(ctx, sessionID, status, stage, progress)
+	_ = s.importRepository.UpdateStatus(ctx, sessionID, status, stage, progress)
 
 	s.broadcaster.Publish(StreamEvent{
 		Type:      "import",
@@ -665,7 +662,7 @@ func (s *ImportService) publishImportComplete(sessionID primitive.ObjectID, anal
 
 // handleImportError handles import failures
 func (s *ImportService) handleImportError(ctx context.Context, sessionID primitive.ObjectID, stage string, err error) {
-	s.importRepository.SetFailed(ctx, sessionID, err.Error(), stage)
+	_ = s.importRepository.SetFailed(ctx, sessionID, err.Error(), stage)
 
 	s.broadcaster.Publish(StreamEvent{
 		Type:      "import",

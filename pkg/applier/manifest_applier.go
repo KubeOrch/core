@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -725,8 +726,8 @@ func (a *ManifestApplier) DeleteCRD(ctx context.Context, group, version, kind, n
 	// Try to delete using the dynamic client
 	err := a.dynamicClient.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil && !errors.IsNotFound(err) {
-		// If the pluralized name doesn't work, try lowercase kind as resource
-		gvr.Resource = toLowerPlural(kind)
+		// If the pluralized name doesn't work, try the singular lowercase kind as a fallback
+		gvr.Resource = strings.ToLower(kind)
 		err = a.dynamicClient.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
 		if err != nil && !errors.IsNotFound(err) {
 			return fmt.Errorf("failed to delete CRD %s/%s/%s %s/%s: %w", group, version, kind, namespace, name, err)

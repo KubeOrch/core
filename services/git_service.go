@@ -147,7 +147,7 @@ func (s *GitService) CloneRepository(ctx context.Context, repoURL, branch string
 	_, err = git.PlainCloneContext(cloneCtx, tempDir, false, cloneOpts)
 	if err != nil {
 		// Clean up temp dir on error
-		os.RemoveAll(tempDir)
+		_ = os.RemoveAll(tempDir)
 		if cloneCtx.Err() == context.DeadlineExceeded {
 			return "", fmt.Errorf("clone operation timed out after %v", s.cloneTimeout)
 		}
@@ -197,7 +197,7 @@ func (s *GitService) FetchFile(ctx context.Context, repoURL, filePath, branch st
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch file: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("file not found: %s", filePath)

@@ -134,7 +134,7 @@ func (s *BuildService) ExecuteBuild(buildID primitive.ObjectID) {
 	}
 
 	// Set started time
-	s.repo.SetStarted(ctx, buildID)
+	_ = s.repo.SetStarted(ctx, buildID)
 
 	var repoPath string
 	var dockerfilePath string
@@ -180,7 +180,7 @@ func (s *BuildService) ExecuteBuild(buildID primitive.ObjectID) {
 		finalRef = digest // Use digest reference if available
 	}
 
-	s.repo.SetCompleted(ctx, buildID, finalRef, digest, 0)
+	_ = s.repo.SetCompleted(ctx, buildID, finalRef, digest, 0)
 	s.publishProgress(buildID, models.BuildStatusCompleted, "Build completed", 100)
 	s.publishComplete(buildID, finalRef, digest)
 
@@ -306,7 +306,7 @@ func (s *BuildService) stageDetectOrGenerate(ctx context.Context, build *models.
 
 	if _, err := os.Stat(dockerfilePath); err != nil {
 		s.publishLog(build.ID, "dockerfile", "No Dockerfile found", "error")
-		return "", fmt.Errorf("Dockerfile not found at %s", dockerfilePath)
+		return "", fmt.Errorf("dockerfile not found at %s", dockerfilePath)
 	}
 
 	s.publishLog(build.ID, "dockerfile", fmt.Sprintf("Using Dockerfile: %s", dockerfilePath), "info")
@@ -460,12 +460,12 @@ func (s *BuildService) stagePush(ctx context.Context, build *models.Build, image
 // stageCleanup cleans up temporary files and images
 func (s *BuildService) stageCleanup(repoPath, imageRef string) {
 	if repoPath != "" {
-		os.RemoveAll(repoPath)
+		_ = os.RemoveAll(repoPath)
 	}
 
 	if imageRef != "" {
 		// Remove local image to save space
-		exec.Command("docker", "rmi", imageRef).Run()
+		_ = exec.Command("docker", "rmi", imageRef).Run()
 	}
 }
 
@@ -527,7 +527,7 @@ func (s *BuildService) streamOutput(buildID primitive.ObjectID, stage string, re
 
 // handleBuildError handles build failures
 func (s *BuildService) handleBuildError(ctx context.Context, buildID primitive.ObjectID, stage string, err error) {
-	s.repo.SetFailed(ctx, buildID, err.Error(), stage)
+	_ = s.repo.SetFailed(ctx, buildID, err.Error(), stage)
 	s.publishProgress(buildID, models.BuildStatusFailed, fmt.Sprintf("Failed at %s stage", stage), 0)
 
 	s.broadcaster.Publish(StreamEvent{
@@ -565,7 +565,7 @@ func (s *BuildService) publishLog(buildID primitive.ObjectID, stage, message, le
 
 // publishProgress publishes a progress update
 func (s *BuildService) publishProgress(buildID primitive.ObjectID, status models.BuildStatus, stage string, progress int) {
-	s.repo.UpdateStatus(context.Background(), buildID, status, stage, progress)
+	_ = s.repo.UpdateStatus(context.Background(), buildID, status, stage, progress)
 
 	s.broadcaster.Publish(StreamEvent{
 		Type:      "build",
@@ -634,7 +634,7 @@ func (s *BuildService) CancelBuild(ctx context.Context, buildID, userID primitiv
 	}
 
 	// Update status
-	s.repo.SetCancelled(ctx, buildID)
+	_ = s.repo.SetCancelled(ctx, buildID)
 	s.publishProgress(buildID, models.BuildStatusCancelled, "Cancelled by user", 0)
 
 	s.broadcaster.Publish(StreamEvent{

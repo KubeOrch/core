@@ -104,7 +104,7 @@ func (r *BuildRepository) GetByWorkflowID(ctx context.Context, workflowID primit
 	if err != nil {
 		return nil, fmt.Errorf("failed to find builds by workflow: %w", err)
 	}
-	defer cursor.Close(ctx)
+	defer func() { _ = cursor.Close(ctx) }()
 
 	var builds []*models.Build
 	if err := cursor.All(ctx, &builds); err != nil {
@@ -134,7 +134,7 @@ func (r *BuildRepository) ListByUser(ctx context.Context, userID primitive.Objec
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to find builds: %w", err)
 	}
-	defer cursor.Close(ctx)
+	defer func() { _ = cursor.Close(ctx) }()
 
 	var builds []*models.Build
 	if err := cursor.All(ctx, &builds); err != nil {
@@ -323,7 +323,7 @@ func (r *BuildRepository) GetInProgressBuilds(ctx context.Context) ([]*models.Bu
 	if err != nil {
 		return nil, fmt.Errorf("failed to find in-progress builds: %w", err)
 	}
-	defer cursor.Close(ctx)
+	defer func() { _ = cursor.Close(ctx) }()
 
 	var builds []*models.Build
 	if err := cursor.All(ctx, &builds); err != nil {

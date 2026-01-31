@@ -880,10 +880,7 @@ func (s *KubernetesClusterService) fetchComponentHealth(ctx context.Context, cli
 // checkHealthEndpoint checks a health endpoint via the K8s API
 func (s *KubernetesClusterService) checkHealthEndpoint(ctx context.Context, clientset *kubernetes.Clientset, path string) bool {
 	result := clientset.Discovery().RESTClient().Get().AbsPath(path).Do(ctx)
-	if result.Error() != nil {
-		return false
-	}
-	return true
+	return result.Error() == nil
 }
 
 // fetchResourceUsage gets CPU, Memory, and Storage usage across all nodes
@@ -1005,14 +1002,14 @@ func (s *KubernetesClusterService) fetchNodeMetrics(ctx context.Context, clients
 			var cpuValue int64
 			if cpuStr[len(cpuStr)-1] == 'n' {
 				// Nanocores to millicores
-				fmt.Sscanf(cpuStr, "%dn", &cpuValue)
+				_, _ = fmt.Sscanf(cpuStr, "%dn", &cpuValue)
 				cpuValue = cpuValue / 1000000
 			} else if cpuStr[len(cpuStr)-1] == 'm' {
-				fmt.Sscanf(cpuStr, "%dm", &cpuValue)
+				_, _ = fmt.Sscanf(cpuStr, "%dm", &cpuValue)
 			} else {
 				// Cores to millicores
 				var cores float64
-				fmt.Sscanf(cpuStr, "%f", &cores)
+				_, _ = fmt.Sscanf(cpuStr, "%f", &cores)
 				cpuValue = int64(cores * 1000)
 			}
 			*cpuUsed += cpuValue
