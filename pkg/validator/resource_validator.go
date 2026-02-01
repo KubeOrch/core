@@ -49,6 +49,16 @@ func (v *ResourceValidator) ValidateResourceParams(resourceType string, params m
 		v.validateConfigMap(params, result)
 	case "secret", "core/secret":
 		v.validateSecret(params, result)
+	case "job", "core/job":
+		v.validateJob(params, result)
+	case "cronjob", "core/cronjob":
+		v.validateCronJob(params, result)
+	case "daemonset", "core/daemonset":
+		v.validateDaemonSet(params, result)
+	case "hpa", "core/hpa":
+		v.validateHPA(params, result)
+	case "networkpolicy", "core/networkpolicy":
+		v.validateNetworkPolicy(params, result)
 	default:
 		// For unknown types, just do basic validation
 		v.logger.WithField("type", resourceType).Debug("No specific validation for resource type")
@@ -293,4 +303,294 @@ func (v *ResourceValidator) validateResources(resources map[string]interface{}) 
 	}
 
 	return nil
+}
+
+// validateJob validates job-specific fields
+func (v *ResourceValidator) validateJob(params map[string]interface{}, result *ValidationResult) {
+	// Image validation (required)
+	if image, ok := params["Image"].(string); ok {
+		if err := v.validateImage(image); err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, fmt.Sprintf("invalid image: %v", err))
+		}
+	} else {
+		result.Valid = false
+		result.Errors = append(result.Errors, "Image is required for Job")
+	}
+
+	// RestartPolicy validation
+	if restartPolicy, ok := params["RestartPolicy"].(string); ok {
+		if restartPolicy != "Never" && restartPolicy != "OnFailure" {
+			result.Valid = false
+			result.Errors = append(result.Errors, "RestartPolicy must be Never or OnFailure for Jobs")
+		}
+	}
+
+	// Completions validation
+	if completions, ok := params["Completions"]; ok {
+		if err := v.validatePositiveNumber(completions, "Completions"); err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, err.Error())
+		}
+	}
+
+	// Parallelism validation
+	if parallelism, ok := params["Parallelism"]; ok {
+		if err := v.validatePositiveNumber(parallelism, "Parallelism"); err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, err.Error())
+		}
+	}
+
+	// BackoffLimit validation
+	if backoffLimit, ok := params["BackoffLimit"]; ok {
+		if err := v.validateNonNegativeNumber(backoffLimit, "BackoffLimit"); err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, err.Error())
+		}
+	}
+}
+
+// validateCronJob validates cronjob-specific fields
+func (v *ResourceValidator) validateCronJob(params map[string]interface{}, result *ValidationResult) {
+	// Schedule validation (required)
+	if schedule, ok := params["Schedule"].(string); ok {
+		if schedule == "" {
+			result.Valid = false
+			result.Errors = append(result.Errors, "Schedule is required for CronJob")
+		} else {
+			// Basic cron format validation (5 or 6 fields)
+			fields := strings.Fields(schedule)
+			if len(fields) < 5 || len(fields) > 6 {
+				result.Valid = false
+				result.Errors = append(result.Errors, "Schedule must be a valid cron expression (5 or 6 fields)")
+			}
+		}
+	} else {
+		result.Valid = false
+		result.Errors = append(result.Errors, "Schedule is required for CronJob")
+	}
+
+	// Image validation (required)
+	if image, ok := params["Image"].(string); ok {
+		if err := v.validateImage(image); err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, fmt.Sprintf("invalid image: %v", err))
+		}
+	} else {
+		result.Valid = false
+		result.Errors = append(result.Errors, "Image is required for CronJob")
+	}
+
+	// ConcurrencyPolicy validation
+	if policy, ok := params["ConcurrencyPolicy"].(string); ok {
+		validPolicies := map[string]bool{
+			"Allow":   true,
+			"Forbid":  true,
+			"Replace": true,
+		}
+		if !validPolicies[policy] {
+			result.Valid = false
+			result.Errors = append(result.Errors, "ConcurrencyPolicy must be Allow, Forbid, or Replace")
+		}
+	}
+}
+
+// validateDaemonSet validates daemonset-specific fields
+func (v *ResourceValidator) validateDaemonSet(params map[string]interface{}, result *ValidationResult) {
+	// Image validation (required)
+	if image, ok := params["Image"].(string); ok {
+		if err := v.validateImage(image); err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, fmt.Sprintf("invalid image: %v", err))
+		}
+	} else {
+		result.Valid = false
+		result.Errors = append(result.Errors, "Image is required for DaemonSet")
+	}
+
+	// UpdateStrategy validation
+	if strategy, ok := params["UpdateStrategy"].(string); ok {
+		validStrategies := map[string]bool{
+			"RollingUpdate": true,
+			"OnDelete":      true,
+		}
+		if !validStrategies[strategy] {
+			result.Valid = false
+			result.Errors = append(result.Errors, "UpdateStrategy must be RollingUpdate or OnDelete")
+		}
+	}
+
+	// Port validation
+	if port, ok := params["Port"]; ok {
+		if err := v.validatePort(port); err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, fmt.Sprintf("invalid port: %v", err))
+		}
+	}
+}
+
+// validateHPA validates hpa-specific fields
+func (v *ResourceValidator) validateHPA(params map[string]interface{}, result *ValidationResult) {
+	// ScaleTargetName validation (required)
+	if targetName, ok := params["ScaleTargetName"].(string); ok {
+		if targetName == "" {
+			result.Valid = false
+			result.Errors = append(result.Errors, "ScaleTargetName is required for HPA")
+		}
+	} else {
+		result.Valid = false
+		result.Errors = append(result.Errors, "ScaleTargetName is required for HPA")
+	}
+
+	// MaxReplicas validation (required)
+	maxReplicas := 0
+	if max, ok := params["MaxReplicas"]; ok {
+		if err := v.validatePositiveNumber(max, "MaxReplicas"); err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, err.Error())
+		} else {
+			maxReplicas = v.toInt(max)
+		}
+	} else {
+		result.Valid = false
+		result.Errors = append(result.Errors, "MaxReplicas is required for HPA")
+	}
+
+	// MinReplicas validation
+	if min, ok := params["MinReplicas"]; ok {
+		if err := v.validatePositiveNumber(min, "MinReplicas"); err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, err.Error())
+		} else {
+			minReplicas := v.toInt(min)
+			if minReplicas > maxReplicas && maxReplicas > 0 {
+				result.Valid = false
+				result.Errors = append(result.Errors, "MinReplicas cannot be greater than MaxReplicas")
+			}
+		}
+	}
+
+	// At least one metric target required
+	_, hasCPU := params["TargetCPUUtilization"]
+	_, hasMemory := params["TargetMemoryUtilization"]
+	if !hasCPU && !hasMemory {
+		result.Valid = false
+		result.Errors = append(result.Errors, "At least one of TargetCPUUtilization or TargetMemoryUtilization is required")
+	}
+
+	// Utilization range validation
+	if cpu, ok := params["TargetCPUUtilization"]; ok {
+		if err := v.validatePercentage(cpu, "TargetCPUUtilization"); err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, err.Error())
+		}
+	}
+	if memory, ok := params["TargetMemoryUtilization"]; ok {
+		if err := v.validatePercentage(memory, "TargetMemoryUtilization"); err != nil {
+			result.Valid = false
+			result.Errors = append(result.Errors, err.Error())
+		}
+	}
+}
+
+// validateNetworkPolicy validates networkpolicy-specific fields
+func (v *ResourceValidator) validateNetworkPolicy(params map[string]interface{}, result *ValidationResult) {
+	// PolicyTypes validation (required)
+	if policyTypes, ok := params["PolicyTypes"].([]interface{}); ok {
+		if len(policyTypes) == 0 {
+			result.Valid = false
+			result.Errors = append(result.Errors, "At least one PolicyType (Ingress or Egress) is required")
+		} else {
+			validTypes := map[string]bool{
+				"Ingress": true,
+				"Egress":  true,
+			}
+			for _, pt := range policyTypes {
+				if ptStr, ok := pt.(string); ok {
+					if !validTypes[ptStr] {
+						result.Valid = false
+						result.Errors = append(result.Errors, fmt.Sprintf("Invalid PolicyType: %s", ptStr))
+					}
+				}
+			}
+		}
+	} else {
+		result.Valid = false
+		result.Errors = append(result.Errors, "PolicyTypes is required for NetworkPolicy")
+	}
+
+	// Validate CIDR blocks in rules if present
+	if ingressRules, ok := params["IngressRules"].([]interface{}); ok {
+		for i, rule := range ingressRules {
+			if ruleMap, ok := rule.(map[string]interface{}); ok {
+				if from, ok := ruleMap["From"].([]interface{}); ok {
+					for j, peer := range from {
+						if peerMap, ok := peer.(map[string]interface{}); ok {
+							if ipBlock, ok := peerMap["IPBlock"].(map[string]interface{}); ok {
+								if cidr, ok := ipBlock["CIDR"].(string); ok {
+									if err := v.validateCIDR(cidr); err != nil {
+										result.Valid = false
+										result.Errors = append(result.Errors, fmt.Sprintf("IngressRule[%d].From[%d].IPBlock.CIDR: %v", i, j, err))
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// Helper validation functions
+
+func (v *ResourceValidator) validatePositiveNumber(value interface{}, fieldName string) error {
+	num := v.toInt(value)
+	if num < 1 {
+		return fmt.Errorf("%s must be at least 1", fieldName)
+	}
+	return nil
+}
+
+func (v *ResourceValidator) validateNonNegativeNumber(value interface{}, fieldName string) error {
+	num := v.toInt(value)
+	if num < 0 {
+		return fmt.Errorf("%s cannot be negative", fieldName)
+	}
+	return nil
+}
+
+func (v *ResourceValidator) validatePercentage(value interface{}, fieldName string) error {
+	num := v.toInt(value)
+	if num < 1 || num > 100 {
+		return fmt.Errorf("%s must be between 1 and 100", fieldName)
+	}
+	return nil
+}
+
+func (v *ResourceValidator) validateCIDR(cidr string) error {
+	// Basic CIDR format validation
+	cidrRegex := regexp.MustCompile(`^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$`)
+	if !cidrRegex.MatchString(cidr) {
+		return fmt.Errorf("invalid CIDR format")
+	}
+	return nil
+}
+
+func (v *ResourceValidator) toInt(value interface{}) int {
+	switch val := value.(type) {
+	case int:
+		return val
+	case int32:
+		return int(val)
+	case int64:
+		return int(val)
+	case float64:
+		return int(val)
+	case float32:
+		return int(val)
+	default:
+		return 0
+	}
 }

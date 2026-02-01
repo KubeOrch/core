@@ -575,7 +575,7 @@ func GetWorkflowRunsHandler(c *gin.Context) {
 
 // GetTemplatesHandler returns all available component templates
 func GetTemplatesHandler(c *gin.Context) {
-	_, ok := getUserIDFromContext(c)
+	userID, ok := getUserIDFromContext(c)
 	if !ok {
 		return
 	}
@@ -588,10 +588,65 @@ func GetTemplatesHandler(c *gin.Context) {
 		return
 	}
 
-	// Get all templates
-	templates := registry.GetAllTemplates()
+	// Get all core templates
+	coreTemplates := registry.GetAllTemplates()
 
-	c.JSON(http.StatusOK, gin.H{"templates": templates})
+	// Get enabled plugin node types for the user
+	pluginService := services.GetPluginService()
+	enabledNodeTypes, err := pluginService.GetEnabledNodeTypes(c.Request.Context(), userID)
+	if err != nil {
+		logrus.WithError(err).Warn("Failed to get enabled plugin node types, continuing with core templates only")
+	}
+
+	// Convert plugin node types to template format and combine with core templates
+	allTemplates := make([]*template.TemplateMetadata, 0, len(coreTemplates)+len(enabledNodeTypes))
+	allTemplates = append(allTemplates, coreTemplates...)
+
+	for _, nodeType := range enabledNodeTypes {
+		// Convert PluginNodeField to TemplateParameter
+		params := make([]template.TemplateParameter, 0, len(nodeType.Fields))
+		for _, field := range nodeType.Fields {
+			param := template.TemplateParameter{
+				Name:        field.ID,
+				Label:       field.Label,
+				Description: field.Placeholder,
+				Type:        field.Type,
+				Required:    field.Required,
+			}
+			if field.Default != "" {
+				param.Default = field.Default
+			}
+			if len(field.Options) > 0 {
+				param.Options = make([]template.ParameterOption, 0, len(field.Options))
+				for _, opt := range field.Options {
+					param.Options = append(param.Options, template.ParameterOption{
+						Value: opt,
+						Label: opt,
+					})
+				}
+			}
+			params = append(params, param)
+		}
+
+		// Create template metadata from plugin node type
+		tmpl := &template.TemplateMetadata{
+			ID:             nodeType.Name,
+			Name:           nodeType.Name,
+			DisplayName:    nodeType.DisplayName,
+			Category:       nodeType.Category,
+			Description:    nodeType.Description,
+			Version:        "1.0.0",
+			Tags:           []string{"plugin", nodeType.Category, nodeType.PluginName},
+			UsageFrequency: "medium",
+			Difficulty:     "medium",
+			Parameters:     params,
+			IsPlugin:       true,
+			PluginID:       nodeType.PluginID,
+		}
+		allTemplates = append(allTemplates, tmpl)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"templates": allTemplates})
 }
 
 // StreamWorkflowStatusHandler streams real-time workflow status updates via Server-Sent Events (SSE)

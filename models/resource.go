@@ -85,11 +85,54 @@ type OwnerReference struct {
 
 // ResourceSpec contains type-specific specifications
 type ResourceSpec struct {
-	// Deployment/StatefulSet/DaemonSet specs
+	// Deployment/StatefulSet specs
 	Replicas          *int32 `bson:"replicas,omitempty" json:"replicas,omitempty"`
 	AvailableReplicas *int32 `bson:"availableReplicas,omitempty" json:"availableReplicas,omitempty"`
 	ReadyReplicas     *int32 `bson:"readyReplicas,omitempty" json:"readyReplicas,omitempty"`
 	UpdatedReplicas   *int32 `bson:"updatedReplicas,omitempty" json:"updatedReplicas,omitempty"`
+
+	// Job specs
+	Completions    *int32     `bson:"completions,omitempty" json:"completions,omitempty"`
+	Parallelism    *int32     `bson:"parallelism,omitempty" json:"parallelism,omitempty"`
+	BackoffLimit   *int32     `bson:"backoffLimit,omitempty" json:"backoffLimit,omitempty"`
+	JobSucceeded   int32      `bson:"jobSucceeded,omitempty" json:"jobSucceeded,omitempty"`
+	JobFailed      int32      `bson:"jobFailed,omitempty" json:"jobFailed,omitempty"`
+	JobActive      int32      `bson:"jobActive,omitempty" json:"jobActive,omitempty"`
+	StartTime      *time.Time `bson:"startTime,omitempty" json:"startTime,omitempty"`
+	CompletionTime *time.Time `bson:"completionTime,omitempty" json:"completionTime,omitempty"`
+
+	// CronJob specs
+	Schedule           string     `bson:"schedule,omitempty" json:"schedule,omitempty"`
+	Suspend            *bool      `bson:"suspend,omitempty" json:"suspend,omitempty"`
+	ConcurrencyPolicy  string     `bson:"concurrencyPolicy,omitempty" json:"concurrencyPolicy,omitempty"`
+	LastScheduleTime   *time.Time `bson:"lastScheduleTime,omitempty" json:"lastScheduleTime,omitempty"`
+	LastSuccessfulTime *time.Time `bson:"lastSuccessfulTime,omitempty" json:"lastSuccessfulTime,omitempty"`
+	ActiveJobs         int32      `bson:"activeJobs,omitempty" json:"activeJobs,omitempty"`
+
+	// DaemonSet specs
+	DesiredNumberScheduled int32  `bson:"desiredNumberScheduled,omitempty" json:"desiredNumberScheduled,omitempty"`
+	CurrentNumberScheduled int32  `bson:"currentNumberScheduled,omitempty" json:"currentNumberScheduled,omitempty"`
+	NumberReady            int32  `bson:"numberReady,omitempty" json:"numberReady,omitempty"`
+	NumberAvailable        int32  `bson:"numberAvailable,omitempty" json:"numberAvailable,omitempty"`
+	NumberMisscheduled     int32  `bson:"numberMisscheduled,omitempty" json:"numberMisscheduled,omitempty"`
+	UpdateStrategy         string `bson:"updateStrategy,omitempty" json:"updateStrategy,omitempty"`
+
+	// HPA specs
+	MinReplicas     *int32 `bson:"minReplicas,omitempty" json:"minReplicas,omitempty"`
+	MaxReplicas     int32  `bson:"maxReplicas,omitempty" json:"maxReplicas,omitempty"`
+	CurrentReplicas int32  `bson:"currentReplicas,omitempty" json:"currentReplicas,omitempty"`
+	DesiredReplicas int32  `bson:"desiredReplicas,omitempty" json:"desiredReplicas,omitempty"`
+	TargetCPU       *int32 `bson:"targetCPUUtilization,omitempty" json:"targetCPUUtilization,omitempty"`
+	TargetMemory    *int32 `bson:"targetMemoryUtilization,omitempty" json:"targetMemoryUtilization,omitempty"`
+	CurrentCPU      *int32 `bson:"currentCPUUtilization,omitempty" json:"currentCPUUtilization,omitempty"`
+	CurrentMemory   *int32 `bson:"currentMemoryUtilization,omitempty" json:"currentMemoryUtilization,omitempty"`
+	ScaleTargetRef  string `bson:"scaleTargetRef,omitempty" json:"scaleTargetRef,omitempty"`
+
+	// NetworkPolicy specs
+	PolicyTypes       []string          `bson:"policyTypes,omitempty" json:"policyTypes,omitempty"`
+	IngressRulesCount int               `bson:"ingressRulesCount,omitempty" json:"ingressRulesCount,omitempty"`
+	EgressRulesCount  int               `bson:"egressRulesCount,omitempty" json:"egressRulesCount,omitempty"`
+	PodSelectorLabels map[string]string `bson:"podSelectorLabels,omitempty" json:"podSelectorLabels,omitempty"`
 
 	// Pod specs
 	Containers []ContainerSpec `bson:"containers,omitempty" json:"containers,omitempty"`

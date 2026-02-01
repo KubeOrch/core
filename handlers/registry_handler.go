@@ -39,23 +39,28 @@ type UpdateRegistryRequest struct {
 }
 
 type RegistryResponse struct {
-	ID           string               `json:"id"`
-	Name         string               `json:"name"`
-	RegistryType models.RegistryType  `json:"registryType"`
-	RegistryURL  string               `json:"registryUrl"`
+	ID           string                `json:"id"`
+	Name         string                `json:"name"`
+	RegistryType models.RegistryType   `json:"registryType"`
+	RegistryURL  string                `json:"registryUrl"`
+	PreviewURL   string                `json:"previewUrl,omitempty"`
 	Status       models.RegistryStatus `json:"status"`
-	IsDefault    bool                 `json:"isDefault"`
-	LastCheck    string               `json:"lastCheck,omitempty"`
-	CreatedAt    string               `json:"createdAt"`
-	UpdatedAt    string               `json:"updatedAt"`
+	IsDefault    bool                  `json:"isDefault"`
+	LastCheck    string                `json:"lastCheck,omitempty"`
+	CreatedAt    string                `json:"createdAt"`
+	UpdatedAt    string                `json:"updatedAt"`
 }
 
 func registryToResponse(r *models.Registry) RegistryResponse {
+	// Populate the preview URL before converting
+	r.PopulatePreviewURL()
+
 	resp := RegistryResponse{
 		ID:           r.ID.Hex(),
 		Name:         r.Name,
 		RegistryType: r.RegistryType,
 		RegistryURL:  r.RegistryURL,
+		PreviewURL:   r.PreviewURL,
 		Status:       r.Status,
 		IsDefault:    r.IsDefault,
 		CreatedAt:    r.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),

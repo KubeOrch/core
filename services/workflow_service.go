@@ -316,3 +316,58 @@ func GetWorkflowsByUserAndCluster(ownerID primitive.ObjectID, clusterID string) 
 
 	return workflows, nil
 }
+
+// UpdateWorkflowDeploymentImage updates the image field of all deployment nodes in a workflow
+// This is called after a build completes to set the built image reference
+func UpdateWorkflowDeploymentImage(workflowID primitive.ObjectID, imageRef string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Get the workflow
+	workflow, err := GetWorkflowByID(workflowID)
+	if err != nil {
+		return err
+	}
+
+	// Update deployment nodes with the built image
+	updated := false
+	for i := range workflow.Nodes {
+		if workflow.Nodes[i].Type == "deployment" {
+			if workflow.Nodes[i].Data == nil {
+				workflow.Nodes[i].Data = make(map[string]interface{})
+			}
+			workflow.Nodes[i].Data["image"] = imageRef
+			updated = true
+		}
+	}
+
+	if !updated {
+		// No deployment nodes to update
+		return nil
+	}
+
+	// Save the updated nodes
+	filter := bson.M{"_id": workflowID, "deleted_at": nil}
+	update := bson.M{
+		"$set": bson.M{
+			"nodes":      workflow.Nodes,
+			"updated_at": time.Now(),
+		},
+	}
+
+	result, err := database.WorkflowColl.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return err
+	}
+
+	if result.MatchedCount == 0 {
+		return errors.New("workflow not found")
+	}
+
+	logrus.WithFields(logrus.Fields{
+		"workflow_id": workflowID.Hex(),
+		"image_ref":   imageRef,
+	}).Info("Updated workflow deployment image")
+
+	return nil
+}

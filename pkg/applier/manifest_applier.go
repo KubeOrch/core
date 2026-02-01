@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -699,4 +700,77 @@ func (a *ManifestApplier) DeleteStatefulSet(ctx context.Context, name, namespace
 	}
 
 	return nil
+}
+
+// DeleteCRD deletes a Custom Resource Definition object by group, version, kind, name and namespace
+func (a *ManifestApplier) DeleteCRD(ctx context.Context, group, version, kind, name, namespace string) error {
+	if namespace == "" {
+		namespace = a.namespace
+	}
+
+	a.logger.WithFields(logrus.Fields{
+		"group":     group,
+		"version":   version,
+		"kind":      kind,
+		"name":      name,
+		"namespace": namespace,
+	}).Info("Deleting CRD resource")
+
+	// Build the GVR (GroupVersionResource) for the CRD
+	gvr := schema.GroupVersionResource{
+		Group:    group,
+		Version:  version,
+		Resource: pluralize(kind), // CRDs typically use pluralized resource names
+	}
+
+	// Try to delete using the dynamic client
+	err := a.dynamicClient.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !errors.IsNotFound(err) {
+		// If the pluralized name doesn't work, try the singular lowercase kind as a fallback
+		gvr.Resource = strings.ToLower(kind)
+		err = a.dynamicClient.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+		if err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete CRD %s/%s/%s %s/%s: %w", group, version, kind, namespace, name, err)
+		}
+	}
+
+	return nil
+}
+
+// pluralize returns a simple pluralized form of a word
+func pluralize(word string) string {
+	if word == "" {
+		return word
+	}
+	lower := toLowerPlural(word)
+	return lower
+}
+
+// toLowerPlural converts a kind to its lowercase plural form
+func toLowerPlural(kind string) string {
+	lower := ""
+	for i, r := range kind {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			lower += string(r + 32) // Convert to lowercase
+		} else if r >= 'A' && r <= 'Z' {
+			lower += string(r + 32)
+		} else {
+			lower += string(r)
+		}
+	}
+	// Simple pluralization rules
+	if len(lower) > 0 {
+		lastChar := lower[len(lower)-1]
+		if lastChar == 's' || lastChar == 'x' || lastChar == 'z' {
+			return lower + "es"
+		}
+		if lastChar == 'y' && len(lower) > 1 {
+			prevChar := lower[len(lower)-2]
+			if prevChar != 'a' && prevChar != 'e' && prevChar != 'i' && prevChar != 'o' && prevChar != 'u' {
+				return lower[:len(lower)-1] + "ies"
+			}
+		}
+		return lower + "s"
+	}
+	return lower
 }
