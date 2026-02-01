@@ -173,7 +173,7 @@ func (s *NixpacksService) GenerateDockerfile(ctx context.Context, repoPath strin
 
 	// Verify the Dockerfile was created
 	if _, err := os.Stat(dockerfilePath); err != nil {
-		return "", fmt.Errorf("Dockerfile not found at expected path %s: %w", dockerfilePath, err)
+		return "", fmt.Errorf("dockerfile not found at expected path %s: %w", dockerfilePath, err)
 	}
 
 	return dockerfilePath, nil
@@ -255,14 +255,16 @@ EXPOSE %d
 
 CMD ["%s"]
 `, func() string {
-		if packageManager == "yarn" {
+		switch packageManager {
+		case "yarn":
 			return "COPY yarn.lock* ./"
-		} else if packageManager == "pnpm" {
+		case "pnpm":
 			return "COPY pnpm-lock.yaml* ./"
-		} else if packageManager == "bun" {
+		case "bun":
 			return "COPY bun.lockb* ./"
+		default:
+			return ""
 		}
-		return ""
 	}(), installCmd, buildStep, result.DefaultPort, result.DefaultPort, result.StartCommand)
 }
 

@@ -1023,19 +1023,19 @@ func (s *KubernetesClusterService) fetchNodeMetrics(ctx context.Context, clients
 				suffix := memStr[len(memStr)-2:]
 				switch suffix {
 				case "Ki":
-					fmt.Sscanf(memStr, "%dKi", &memValue)
+					_, _ = fmt.Sscanf(memStr, "%dKi", &memValue)
 					memValue *= 1024
 				case "Mi":
-					fmt.Sscanf(memStr, "%dMi", &memValue)
+					_, _ = fmt.Sscanf(memStr, "%dMi", &memValue)
 					memValue *= 1024 * 1024
 				case "Gi":
-					fmt.Sscanf(memStr, "%dGi", &memValue)
+					_, _ = fmt.Sscanf(memStr, "%dGi", &memValue)
 					memValue *= 1024 * 1024 * 1024
 				default:
-					fmt.Sscanf(memStr, "%d", &memValue)
+					_, _ = fmt.Sscanf(memStr, "%d", &memValue)
 				}
 			} else {
-				fmt.Sscanf(memStr, "%d", &memValue)
+				_, _ = fmt.Sscanf(memStr, "%d", &memValue)
 			}
 			*memoryUsed += memValue
 		}

@@ -142,42 +142,6 @@ func (e *LayoutEngine) filterByType(nodes []models.WorkflowNode, nodeType string
 	return result
 }
 
-// alignServicesToDeployments positions services next to their connected deployments
-// Note: This function is kept for backward compatibility but the main layout now uses alignDeploymentsToServices
-func (e *LayoutEngine) alignServicesToDeployments(services, deployments []models.WorkflowNode, edges []models.WorkflowEdge, existingPositions map[string]models.NodePosition) map[string]models.NodePosition {
-	positions := make(map[string]models.NodePosition)
-
-	// Build edge map: service -> deployment
-	serviceToDeployment := make(map[string]string)
-	for _, edge := range edges {
-		// Check if source is a service and target is a deployment
-		for _, svc := range services {
-			if edge.Source == svc.ID {
-				for _, dep := range deployments {
-					if edge.Target == dep.ID {
-						serviceToDeployment[svc.ID] = dep.ID
-						break
-					}
-				}
-			}
-		}
-	}
-
-	// Position services aligned with their deployments
-	for _, svc := range services {
-		if depID, ok := serviceToDeployment[svc.ID]; ok {
-			if depPos, exists := existingPositions[depID]; exists {
-				positions[svc.ID] = models.NodePosition{
-					X: StartX + LayerSpacingX,
-					Y: depPos.Y,
-				}
-			}
-		}
-	}
-
-	return positions
-}
-
 // alignDeploymentsToServices positions deployments next to their connected services
 func (e *LayoutEngine) alignDeploymentsToServices(deployments, services []models.WorkflowNode, edges []models.WorkflowEdge, existingPositions map[string]models.NodePosition) map[string]models.NodePosition {
 	positions := make(map[string]models.NodePosition)

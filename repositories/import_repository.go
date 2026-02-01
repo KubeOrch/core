@@ -114,7 +114,7 @@ func (r *ImportRepository) ListByUser(ctx context.Context, userID primitive.Obje
 	if err != nil {
 		return nil, 0, err
 	}
-	defer cursor.Close(ctx)
+	defer func() { _ = cursor.Close(ctx) }()
 
 	var sessions []*models.ImportSession
 	if err := cursor.All(ctx, &sessions); err != nil {
