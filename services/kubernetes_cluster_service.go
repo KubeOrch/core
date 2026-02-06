@@ -293,7 +293,11 @@ func (s *KubernetesClusterService) UpdateCluster(ctx context.Context, userID pri
 	}
 
 	// If credentials changed, test the connection
-	if updatedCluster.Credentials.Token != "" || updatedCluster.Credentials.KubeConfig != "" {
+	credentialsProvided := updatedCluster.Credentials.Token != "" ||
+		updatedCluster.Credentials.KubeConfig != "" ||
+		updatedCluster.Credentials.ClientCertData != "" ||
+		updatedCluster.Credentials.OIDCIssuerURL != ""
+	if credentialsProvided {
 		clientset, err := s.CreateClusterConnection(updatedCluster)
 		if err != nil {
 			return fmt.Errorf("invalid configuration: %w", err)
@@ -310,7 +314,7 @@ func (s *KubernetesClusterService) UpdateCluster(ctx context.Context, userID pri
 		// Create connection with existing cluster credentials
 		connectCluster := existingCluster
 		// Use new credentials if provided
-		if updatedCluster.Credentials.Token != "" || updatedCluster.Credentials.KubeConfig != "" {
+		if credentialsProvided {
 			connectCluster.Credentials = updatedCluster.Credentials
 		}
 
@@ -342,7 +346,7 @@ func (s *KubernetesClusterService) UpdateCluster(ctx context.Context, userID pri
 	}
 
 	// Only update credentials if they were provided
-	if updatedCluster.Credentials.Token != "" || updatedCluster.Credentials.KubeConfig != "" {
+	if credentialsProvided {
 		updateFields["credentials"] = updatedCluster.Credentials
 		updateFields["status"] = models.ClusterStatusConnected
 	}
