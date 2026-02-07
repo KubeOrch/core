@@ -463,8 +463,10 @@ func (s *KubernetesClusterService) ClusterToAuthConfig(cluster *models.Cluster) 
 	auth.ServerURL = cluster.Server
 
 	switch cluster.AuthType {
-	case models.ClusterAuthToken, models.ClusterAuthServiceAccount:
+	case models.ClusterAuthToken:
 		auth.BearerToken = cluster.Credentials.Token
+	case models.ClusterAuthServiceAccount:
+		auth.ServiceAccountToken = cluster.Credentials.Token
 	case models.ClusterAuthCertificate:
 		auth.ClientCertData = cluster.Credentials.ClientCertData
 		auth.ClientKeyData = cluster.Credentials.ClientKeyData
