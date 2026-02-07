@@ -42,6 +42,18 @@ func NewWorkflowExecutor() *WorkflowExecutor {
 	}
 }
 
+// toSlice converts a value to []interface{}, handling both primitive.A (from MongoDB)
+// and plain []interface{} types. Returns nil if the value is neither type.
+func toSlice(v interface{}) []interface{} {
+	if a, ok := v.(primitive.A); ok {
+		return []interface{}(a)
+	}
+	if s, ok := v.([]interface{}); ok {
+		return s
+	}
+	return nil
+}
+
 // ExecuteWorkflow executes a workflow with optional runtime data (e.g., secret values)
 func (e *WorkflowExecutor) ExecuteWorkflow(ctx context.Context, workflowID primitive.ObjectID, userID primitive.ObjectID, runtimeData map[string]interface{}) (*models.WorkflowRun, error) {
 	// Get workflow
@@ -929,7 +941,7 @@ func (e *WorkflowExecutor) prepareIngressTemplateValues(node *models.WorkflowNod
 	if tlsSecretName, ok := ingressData["tlsSecretName"].(string); ok {
 		values["TLSSecretName"] = tlsSecretName
 	}
-	if tlsHosts, ok := ingressData["tlsHosts"].([]interface{}); ok {
+	if tlsHosts := toSlice(ingressData["tlsHosts"]); tlsHosts != nil {
 		values["TLSHosts"] = tlsHosts
 	}
 
@@ -977,7 +989,7 @@ func (e *WorkflowExecutor) prepareServiceTemplateValues(node *models.WorkflowNod
 	if targetPort, ok := serviceData["targetPort"]; ok {
 		values["TargetPort"] = targetPort
 	}
-	if ports, ok := serviceData["ports"].([]interface{}); ok {
+	if ports := toSlice(serviceData["ports"]); ports != nil {
 		values["Ports"] = ports
 	}
 	if selector, ok := serviceData["selector"].(map[string]interface{}); ok {
@@ -997,7 +1009,7 @@ func (e *WorkflowExecutor) prepareServiceTemplateValues(node *models.WorkflowNod
 	if loadBalancerIP, ok := serviceData["loadBalancerIP"].(string); ok {
 		values["LoadBalancerIP"] = loadBalancerIP
 	}
-	if sourceRanges, ok := serviceData["loadBalancerSourceRanges"].([]interface{}); ok {
+	if sourceRanges := toSlice(serviceData["loadBalancerSourceRanges"]); sourceRanges != nil {
 		values["LoadBalancerSourceRanges"] = sourceRanges
 	}
 	if externalTrafficPolicy, ok := serviceData["externalTrafficPolicy"].(string); ok {
@@ -2814,14 +2826,9 @@ func (e *WorkflowExecutor) CleanupWorkflowResources(ctx context.Context, workflo
 		nodesByType[node.Type] = append(nodesByType[node.Type], node)
 	}
 
-	// Delete resources in dependency order:
-	// 1. Ingress (depends on services)
-	// 2. Services (depends on deployments/statefulsets)
-	// 3. StatefulSets and Deployments (depends on configmaps/secrets/pvcs)
-	// 4. ConfigMaps (used by deployments/statefulsets)
-	// 5. PVCs last (used by deployments/statefulsets)
+	// Delete resources in dependency order
 	// Note: We don't delete Secrets as they are managed externally (pass-through)
-	deletionOrder := []string{"ingress", "service", "statefulset", "deployment", "configmap", "persistentvolumeclaim", "plugin"}
+	deletionOrder := []string{"ingress", "service", "cronjob", "job", "statefulset", "deployment", "daemonset", "configmap", "persistentvolumeclaim", "plugin"}
 
 	for _, nodeType := range deletionOrder {
 		nodes, ok := nodesByType[nodeType]
@@ -2830,21 +2837,10 @@ func (e *WorkflowExecutor) CleanupWorkflowResources(ctx context.Context, workflo
 		}
 		for _, node := range nodes {
 			var err error
-			switch nodeType {
-			case "ingress":
-				err = e.deleteIngressNode(ctx, manifestApplier, node)
-			case "service":
-				err = e.deleteServiceNode(ctx, manifestApplier, node)
-			case "statefulset":
-				err = e.deleteStatefulSetNode(ctx, manifestApplier, node)
-			case "deployment":
-				err = e.deleteDeploymentNode(ctx, manifestApplier, node)
-			case "configmap":
-				err = e.deleteConfigMapNode(ctx, manifestApplier, node)
-			case "persistentvolumeclaim":
-				err = e.deletePVCNode(ctx, manifestApplier, node)
-			case "plugin":
+			if nodeType == "plugin" {
 				err = e.deletePluginNode(ctx, manifestApplier, node)
+			} else {
+				err = e.deleteNode(ctx, manifestApplier, node)
 			}
 			if err != nil {
 				e.logger.WithError(err).WithFields(logrus.Fields{
@@ -2864,166 +2860,30 @@ func (e *WorkflowExecutor) CleanupWorkflowResources(ctx context.Context, workflo
 	return nil
 }
 
-// deleteConfigMapNode deletes a Kubernetes ConfigMap created by a configmap node
-func (e *WorkflowExecutor) deleteConfigMapNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode) error {
+// deleteNode deletes a Kubernetes resource created by any standard workflow node
+func (e *WorkflowExecutor) deleteNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode) error {
 	if node.Data == nil {
 		return nil
 	}
 
-	// Get configmap name from node data
 	name, ok := node.Data["name"].(string)
 	if !ok || name == "" {
-		name = node.ID // Fallback to node ID
+		name = node.ID
 	}
 
-	// Get namespace from node data
 	namespace := "default"
 	if ns, ok := node.Data["namespace"].(string); ok && ns != "" {
 		namespace = ns
 	}
 
 	e.logger.WithFields(logrus.Fields{
-		"configmap": name,
+		"kind":      node.Type,
+		"name":      name,
 		"namespace": namespace,
 		"node_id":   node.ID,
-	}).Info("Deleting configmap from workflow cleanup")
+	}).Info("Deleting resource from workflow cleanup")
 
-	return manifestApplier.DeleteConfigMap(ctx, name, namespace)
-}
-
-// deleteDeploymentNode deletes a Kubernetes Deployment created by a deployment node
-func (e *WorkflowExecutor) deleteDeploymentNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode) error {
-	if node.Data == nil {
-		return nil
-	}
-
-	// Get deployment name from node data
-	name, ok := node.Data["name"].(string)
-	if !ok || name == "" {
-		name = node.ID // Fallback to node ID
-	}
-
-	// Get namespace from node data
-	namespace := "default"
-	if ns, ok := node.Data["namespace"].(string); ok && ns != "" {
-		namespace = ns
-	}
-
-	e.logger.WithFields(logrus.Fields{
-		"deployment": name,
-		"namespace":  namespace,
-		"node_id":    node.ID,
-	}).Info("Deleting deployment from workflow cleanup")
-
-	return manifestApplier.DeleteDeployment(ctx, name, namespace)
-}
-
-// deleteServiceNode deletes a Kubernetes Service created by a service node
-func (e *WorkflowExecutor) deleteServiceNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode) error {
-	if node.Data == nil {
-		return nil
-	}
-
-	// Get service name from node data
-	name, ok := node.Data["name"].(string)
-	if !ok || name == "" {
-		name = node.ID // Fallback to node ID
-	}
-
-	// Get namespace from node data
-	namespace := "default"
-	if ns, ok := node.Data["namespace"].(string); ok && ns != "" {
-		namespace = ns
-	}
-
-	e.logger.WithFields(logrus.Fields{
-		"service":   name,
-		"namespace": namespace,
-		"node_id":   node.ID,
-	}).Info("Deleting service from workflow cleanup")
-
-	return manifestApplier.DeleteService(ctx, name, namespace)
-}
-
-// deleteIngressNode deletes a Kubernetes Ingress created by an ingress node
-func (e *WorkflowExecutor) deleteIngressNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode) error {
-	if node.Data == nil {
-		return nil
-	}
-
-	// Get ingress name from node data
-	name, ok := node.Data["name"].(string)
-	if !ok || name == "" {
-		name = node.ID // Fallback to node ID
-	}
-
-	// Get namespace from node data
-	namespace := "default"
-	if ns, ok := node.Data["namespace"].(string); ok && ns != "" {
-		namespace = ns
-	}
-
-	e.logger.WithFields(logrus.Fields{
-		"ingress":   name,
-		"namespace": namespace,
-		"node_id":   node.ID,
-	}).Info("Deleting ingress from workflow cleanup")
-
-	return manifestApplier.DeleteIngress(ctx, name, namespace)
-}
-
-// deletePVCNode deletes a Kubernetes PersistentVolumeClaim created by a PVC node
-func (e *WorkflowExecutor) deletePVCNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode) error {
-	if node.Data == nil {
-		return nil
-	}
-
-	// Get PVC name from node data
-	name, ok := node.Data["name"].(string)
-	if !ok || name == "" {
-		name = node.ID // Fallback to node ID
-	}
-
-	// Get namespace from node data
-	namespace := "default"
-	if ns, ok := node.Data["namespace"].(string); ok && ns != "" {
-		namespace = ns
-	}
-
-	e.logger.WithFields(logrus.Fields{
-		"pvc":       name,
-		"namespace": namespace,
-		"node_id":   node.ID,
-	}).Info("Deleting PVC from workflow cleanup")
-
-	return manifestApplier.DeletePVC(ctx, name, namespace)
-}
-
-// deleteStatefulSetNode deletes a Kubernetes StatefulSet created by a statefulset node
-func (e *WorkflowExecutor) deleteStatefulSetNode(ctx context.Context, manifestApplier *applier.ManifestApplier, node *models.WorkflowNode) error {
-	if node.Data == nil {
-		return nil
-	}
-
-	// Get StatefulSet name from node data
-	name, ok := node.Data["name"].(string)
-	if !ok || name == "" {
-		name = node.ID // Fallback to node ID
-	}
-
-	// Get namespace from node data
-	namespace := "default"
-	if ns, ok := node.Data["namespace"].(string); ok && ns != "" {
-		namespace = ns
-	}
-
-	e.logger.WithFields(logrus.Fields{
-		"statefulset": name,
-		"namespace":   namespace,
-		"node_id":     node.ID,
-	}).Info("Deleting StatefulSet from workflow cleanup")
-
-	return manifestApplier.DeleteStatefulSet(ctx, name, namespace)
+	return manifestApplier.DeleteResource(ctx, node.Type, name, namespace)
 }
 
 // executePluginNode executes a plugin node by generating and applying CRD YAML
@@ -3291,7 +3151,7 @@ func (e *WorkflowExecutor) CleanupDeletedNodes(ctx context.Context, workflow *mo
 
 	// Delete resources in dependency order (same as CleanupWorkflowResources)
 	// Note: We don't delete Secrets as they are managed externally (pass-through)
-	deletionOrder := []string{"ingress", "service", "statefulset", "deployment", "configmap", "persistentvolumeclaim", "plugin"}
+	deletionOrder := []string{"ingress", "service", "cronjob", "job", "statefulset", "deployment", "daemonset", "configmap", "persistentvolumeclaim", "plugin"}
 
 	for _, nodeType := range deletionOrder {
 		nodes, ok := nodesByType[nodeType]
@@ -3300,21 +3160,10 @@ func (e *WorkflowExecutor) CleanupDeletedNodes(ctx context.Context, workflow *mo
 		}
 		for _, node := range nodes {
 			var err error
-			switch nodeType {
-			case "ingress":
-				err = e.deleteIngressNode(ctx, manifestApplier, node)
-			case "service":
-				err = e.deleteServiceNode(ctx, manifestApplier, node)
-			case "statefulset":
-				err = e.deleteStatefulSetNode(ctx, manifestApplier, node)
-			case "deployment":
-				err = e.deleteDeploymentNode(ctx, manifestApplier, node)
-			case "configmap":
-				err = e.deleteConfigMapNode(ctx, manifestApplier, node)
-			case "persistentvolumeclaim":
-				err = e.deletePVCNode(ctx, manifestApplier, node)
-			case "plugin":
+			if nodeType == "plugin" {
 				err = e.deletePluginNode(ctx, manifestApplier, node)
+			} else {
+				err = e.deleteNode(ctx, manifestApplier, node)
 			}
 			if err != nil {
 				e.logger.WithError(err).WithFields(logrus.Fields{
@@ -3435,11 +3284,11 @@ func (e *WorkflowExecutor) prepareJobTemplateValues(node *models.WorkflowNode, j
 		values["Image"] = image
 	}
 
-	if command, ok := jobData["command"].([]interface{}); ok {
+	if command := toSlice(jobData["command"]); command != nil {
 		values["Command"] = command
 	}
 
-	if args, ok := jobData["args"].([]interface{}); ok {
+	if args := toSlice(jobData["args"]); args != nil {
 		values["Args"] = args
 	}
 
@@ -3475,7 +3324,7 @@ func (e *WorkflowExecutor) prepareJobTemplateValues(node *models.WorkflowNode, j
 		values["Resources"] = resources
 	}
 
-	if volumeMounts, ok := jobData["volumeMounts"].([]interface{}); ok {
+	if volumeMounts := toSlice(jobData["volumeMounts"]); volumeMounts != nil {
 		values["VolumeMounts"] = volumeMounts
 	}
 
@@ -3587,11 +3436,11 @@ func (e *WorkflowExecutor) prepareCronJobTemplateValues(node *models.WorkflowNod
 		values["Image"] = image
 	}
 
-	if command, ok := cronJobData["command"].([]interface{}); ok {
+	if command := toSlice(cronJobData["command"]); command != nil {
 		values["Command"] = command
 	}
 
-	if args, ok := cronJobData["args"].([]interface{}); ok {
+	if args := toSlice(cronJobData["args"]); args != nil {
 		values["Args"] = args
 	}
 
@@ -3627,7 +3476,7 @@ func (e *WorkflowExecutor) prepareCronJobTemplateValues(node *models.WorkflowNod
 		values["Resources"] = resources
 	}
 
-	if volumeMounts, ok := cronJobData["volumeMounts"].([]interface{}); ok {
+	if volumeMounts := toSlice(cronJobData["volumeMounts"]); volumeMounts != nil {
 		values["VolumeMounts"] = volumeMounts
 	}
 
@@ -3751,7 +3600,7 @@ func (e *WorkflowExecutor) prepareDaemonSetTemplateValues(node *models.WorkflowN
 		values["NodeSelector"] = nodeSelector
 	}
 
-	if tolerations, ok := daemonSetData["tolerations"].([]interface{}); ok {
+	if tolerations := toSlice(daemonSetData["tolerations"]); tolerations != nil {
 		values["Tolerations"] = tolerations
 	}
 
@@ -3771,7 +3620,7 @@ func (e *WorkflowExecutor) prepareDaemonSetTemplateValues(node *models.WorkflowN
 		values["Resources"] = resources
 	}
 
-	if volumeMounts, ok := daemonSetData["volumeMounts"].([]interface{}); ok {
+	if volumeMounts := toSlice(daemonSetData["volumeMounts"]); volumeMounts != nil {
 		values["VolumeMounts"] = volumeMounts
 	}
 
@@ -4021,15 +3870,15 @@ func (e *WorkflowExecutor) prepareNetworkPolicyTemplateValues(node *models.Workf
 		values["PodSelector"] = podSelector
 	}
 
-	if policyTypes, ok := npData["policyTypes"].([]interface{}); ok {
+	if policyTypes := toSlice(npData["policyTypes"]); policyTypes != nil {
 		values["PolicyTypes"] = policyTypes
 	}
 
-	if ingressRules, ok := npData["ingressRules"].([]interface{}); ok {
+	if ingressRules := toSlice(npData["ingressRules"]); ingressRules != nil {
 		values["IngressRules"] = ingressRules
 	}
 
-	if egressRules, ok := npData["egressRules"].([]interface{}); ok {
+	if egressRules := toSlice(npData["egressRules"]); egressRules != nil {
 		values["EgressRules"] = egressRules
 	}
 

@@ -150,10 +150,14 @@ func (s *ImportService) fetchFromGit(ctx context.Context, req *models.ImportRequ
 		branch = "main"
 	}
 
-	// Try to get GitHub credentials from GHCR registry
+	// Load Git credentials based on repository domain
 	urlInfo, err := s.gitService.ParseGitURL(repoURL)
-	if err == nil && urlInfo.IsGitHub {
-		s.loadGitHubCredentials(ctx)
+	if err == nil {
+		if urlInfo.IsGitHub {
+			s.loadGitHubCredentials(ctx)
+		} else {
+			s.loadGitCredentialsByDomain(ctx, urlInfo.Host)
+		}
 	}
 
 	// First, try to fetch docker-compose file directly without cloning
@@ -257,6 +261,39 @@ func (s *ImportService) loadGitHubCredentials(ctx context.Context) {
 	}
 
 	s.logger.Debug("No GHCR credentials found for GitHub repository access")
+}
+
+// loadGitCredentialsByDomain loads Git credentials from any registry whose URL matches the given domain.
+// This handles GitLab, self-hosted registries, and any other Git host with a matching registry.
+func (s *ImportService) loadGitCredentialsByDomain(ctx context.Context, domain string) {
+	domain = strings.ToLower(domain)
+
+	// Search all registry types for a matching domain
+	allTypes := []models.RegistryType{
+		models.RegistryTypeCustom,
+		models.RegistryTypeDockerHub,
+		models.RegistryTypeGHCR,
+		models.RegistryTypeECR,
+		models.RegistryTypeGCR,
+		models.RegistryTypeACR,
+	}
+
+	for _, regType := range allTypes {
+		registries, err := s.registryRepository.GetByType(ctx, regType)
+		if err != nil {
+			continue
+		}
+		for _, registry := range registries {
+			registryDomain := strings.ToLower(registry.RegistryURL)
+			if strings.Contains(registryDomain, domain) && registry.Credentials.Password != "" {
+				s.logger.WithField("domain", domain).Info("Using registry credentials for Git repository access")
+				s.gitService.SetCredentials(registry.Credentials.Username, registry.Credentials.Password)
+				return
+			}
+		}
+	}
+
+	s.logger.WithField("domain", domain).Debug("No matching registry credentials found for domain")
 }
 
 // parseContent determines the content type and parses it
@@ -395,10 +432,14 @@ func (s *ImportService) TryFastImport(ctx context.Context, req *models.ImportReq
 			branch = "main"
 		}
 
-		// Try to get GitHub credentials from GHCR registry
+		// Load Git credentials based on repository domain
 		urlInfo, err := s.gitService.ParseGitURL(repoURL)
-		if err == nil && urlInfo.IsGitHub {
-			s.loadGitHubCredentials(ctx)
+		if err == nil {
+			if urlInfo.IsGitHub {
+				s.loadGitHubCredentials(ctx)
+			} else {
+				s.loadGitCredentialsByDomain(ctx, urlInfo.Host)
+			}
 		}
 
 		// Try to fetch docker-compose file directly
@@ -495,10 +536,14 @@ func (s *ImportService) ExecuteAsyncImport(sessionID primitive.ObjectID, req *mo
 		branch = "main"
 	}
 
-	// Load credentials if GitHub
+	// Load Git credentials based on repository domain
 	urlInfo, _ := s.gitService.ParseGitURL(repoURL)
-	if urlInfo != nil && urlInfo.IsGitHub {
-		s.loadGitHubCredentials(ctx)
+	if urlInfo != nil {
+		if urlInfo.IsGitHub {
+			s.loadGitHubCredentials(ctx)
+		} else {
+			s.loadGitCredentialsByDomain(ctx, urlInfo.Host)
+		}
 	}
 
 	var err error

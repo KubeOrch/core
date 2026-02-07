@@ -109,15 +109,16 @@ func (r *ResourceRepository) GetByID(ctx context.Context, id primitive.ObjectID,
 
 // List retrieves resources with filtering
 func (r *ResourceRepository) List(ctx context.Context, userID primitive.ObjectID, filter bson.M, opts ...*options.FindOptions) ([]*models.Resource, error) {
-	// Add user filter
-	filter["userId"] = userID
-
-	// Exclude deleted resources by default
-	if _, exists := filter["deletedAt"]; !exists {
-		filter["deletedAt"] = bson.M{"$exists": false}
+	queryFilter := make(bson.M, len(filter)+2)
+	for k, v := range filter {
+		queryFilter[k] = v
+	}
+	queryFilter["userId"] = userID
+	if _, exists := queryFilter["deletedAt"]; !exists {
+		queryFilter["deletedAt"] = bson.M{"$exists": false}
 	}
 
-	cursor, err := r.collection.Find(ctx, filter, opts...)
+	cursor, err := r.collection.Find(ctx, queryFilter, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -131,6 +132,20 @@ func (r *ResourceRepository) List(ctx context.Context, userID primitive.ObjectID
 	}
 
 	return resources, nil
+}
+
+// Count returns the total number of resources matching the filter
+func (r *ResourceRepository) Count(ctx context.Context, userID primitive.ObjectID, filter bson.M) (int64, error) {
+	queryFilter := make(bson.M, len(filter)+2)
+	for k, v := range filter {
+		queryFilter[k] = v
+	}
+	queryFilter["userId"] = userID
+	if _, exists := queryFilter["deletedAt"]; !exists {
+		queryFilter["deletedAt"] = bson.M{"$exists": false}
+	}
+
+	return r.collection.CountDocuments(ctx, queryFilter)
 }
 
 // MarkDeleted marks resources as deleted that weren't seen in latest sync

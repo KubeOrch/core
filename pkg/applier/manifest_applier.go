@@ -373,41 +373,47 @@ func (a *ManifestApplier) GetServiceStatus(ctx context.Context, name, namespace 
 	return status, nil
 }
 
-// DeleteDeployment deletes a Kubernetes Deployment by name and namespace
-func (a *ManifestApplier) DeleteDeployment(ctx context.Context, name, namespace string) error {
+// DeleteResource deletes any standard Kubernetes resource by kind, name, and namespace
+func (a *ManifestApplier) DeleteResource(ctx context.Context, kind, name, namespace string) error {
 	if namespace == "" {
 		namespace = a.namespace
 	}
 
 	a.logger.WithFields(logrus.Fields{
-		"kind":      "Deployment",
+		"kind":      kind,
 		"name":      name,
 		"namespace": namespace,
-	}).Info("Deleting deployment")
+	}).Info("Deleting resource")
 
-	err := a.clientset.AppsV1().Deployments(namespace).Delete(ctx, name, metav1.DeleteOptions{})
-	if err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete deployment %s/%s: %w", namespace, name, err)
+	var err error
+	switch strings.ToLower(kind) {
+	case "deployment":
+		err = a.clientset.AppsV1().Deployments(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	case "service":
+		err = a.clientset.CoreV1().Services(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	case "ingress":
+		err = a.clientset.NetworkingV1().Ingresses(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	case "configmap":
+		err = a.clientset.CoreV1().ConfigMaps(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	case "persistentvolumeclaim":
+		err = a.clientset.CoreV1().PersistentVolumeClaims(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	case "statefulset":
+		err = a.clientset.AppsV1().StatefulSets(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	case "cronjob":
+		err = a.clientset.BatchV1().CronJobs(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	case "job":
+		propagation := metav1.DeletePropagationBackground
+		err = a.clientset.BatchV1().Jobs(namespace).Delete(ctx, name, metav1.DeleteOptions{
+			PropagationPolicy: &propagation,
+		})
+	case "daemonset":
+		err = a.clientset.AppsV1().DaemonSets(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	default:
+		return fmt.Errorf("unsupported resource kind for deletion: %s", kind)
 	}
 
-	return nil
-}
-
-// DeleteService deletes a Kubernetes Service by name and namespace
-func (a *ManifestApplier) DeleteService(ctx context.Context, name, namespace string) error {
-	if namespace == "" {
-		namespace = a.namespace
-	}
-
-	a.logger.WithFields(logrus.Fields{
-		"kind":      "Service",
-		"name":      name,
-		"namespace": namespace,
-	}).Info("Deleting service")
-
-	err := a.clientset.CoreV1().Services(namespace).Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete service %s/%s: %w", namespace, name, err)
+		return fmt.Errorf("failed to delete %s %s/%s: %w", kind, namespace, name, err)
 	}
 
 	return nil
@@ -509,45 +515,6 @@ func (a *ManifestApplier) GetIngressStatus(ctx context.Context, name, namespace 
 	return status, nil
 }
 
-// DeleteIngress deletes a Kubernetes Ingress by name and namespace
-func (a *ManifestApplier) DeleteIngress(ctx context.Context, name, namespace string) error {
-	if namespace == "" {
-		namespace = a.namespace
-	}
-
-	a.logger.WithFields(logrus.Fields{
-		"kind":      "Ingress",
-		"name":      name,
-		"namespace": namespace,
-	}).Info("Deleting ingress")
-
-	err := a.clientset.NetworkingV1().Ingresses(namespace).Delete(ctx, name, metav1.DeleteOptions{})
-	if err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete ingress %s/%s: %w", namespace, name, err)
-	}
-
-	return nil
-}
-
-// DeleteConfigMap deletes a Kubernetes ConfigMap by name and namespace
-func (a *ManifestApplier) DeleteConfigMap(ctx context.Context, name, namespace string) error {
-	if namespace == "" {
-		namespace = a.namespace
-	}
-
-	a.logger.WithFields(logrus.Fields{
-		"kind":      "ConfigMap",
-		"name":      name,
-		"namespace": namespace,
-	}).Info("Deleting configmap")
-
-	err := a.clientset.CoreV1().ConfigMaps(namespace).Delete(ctx, name, metav1.DeleteOptions{})
-	if err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete configmap %s/%s: %w", namespace, name, err)
-	}
-
-	return nil
-}
 
 // CheckSecretExists checks if a Kubernetes Secret exists
 func (a *ManifestApplier) CheckSecretExists(ctx context.Context, name, namespace string) (bool, error) {
@@ -613,25 +580,6 @@ func (a *ManifestApplier) GetPVCStatus(ctx context.Context, name, namespace stri
 	return status, nil
 }
 
-// DeletePVC deletes a Kubernetes PersistentVolumeClaim by name and namespace
-func (a *ManifestApplier) DeletePVC(ctx context.Context, name, namespace string) error {
-	if namespace == "" {
-		namespace = a.namespace
-	}
-
-	a.logger.WithFields(logrus.Fields{
-		"kind":      "PersistentVolumeClaim",
-		"name":      name,
-		"namespace": namespace,
-	}).Info("Deleting PVC")
-
-	err := a.clientset.CoreV1().PersistentVolumeClaims(namespace).Delete(ctx, name, metav1.DeleteOptions{})
-	if err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete PVC %s/%s: %w", namespace, name, err)
-	}
-
-	return nil
-}
 
 // StatefulSetStatus represents the status of a Kubernetes StatefulSet
 type StatefulSetStatus struct {
@@ -682,25 +630,6 @@ func (a *ManifestApplier) GetStatefulSetStatus(ctx context.Context, name, namesp
 	return status, nil
 }
 
-// DeleteStatefulSet deletes a Kubernetes StatefulSet by name and namespace
-func (a *ManifestApplier) DeleteStatefulSet(ctx context.Context, name, namespace string) error {
-	if namespace == "" {
-		namespace = a.namespace
-	}
-
-	a.logger.WithFields(logrus.Fields{
-		"kind":      "StatefulSet",
-		"name":      name,
-		"namespace": namespace,
-	}).Info("Deleting StatefulSet")
-
-	err := a.clientset.AppsV1().StatefulSets(namespace).Delete(ctx, name, metav1.DeleteOptions{})
-	if err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete StatefulSet %s/%s: %w", namespace, name, err)
-	}
-
-	return nil
-}
 
 // DeleteCRD deletes a Custom Resource Definition object by group, version, kind, name and namespace
 func (a *ManifestApplier) DeleteCRD(ctx context.Context, group, version, kind, name, namespace string) error {
