@@ -19,6 +19,10 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
+      go-version:
+        applies-to: version-updates
+        patterns:
+          - "*"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -33,3 +37,7 @@ updates:
       - "mohit-nagaraj"
     commit-message:
       prefix: "chore(ci)"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
