@@ -190,7 +190,11 @@ func (s *GitService) FetchFile(ctx context.Context, repoURL, filePath, branch st
 
 	// Add authentication header if credentials are set (for private repos)
 	if s.credentials != nil && s.credentials.Password != "" {
-		req.Header.Set("Authorization", "token "+s.credentials.Password)
+		if urlInfo.IsGitLab {
+			req.Header.Set("PRIVATE-TOKEN", s.credentials.Password)
+		} else {
+			req.Header.Set("Authorization", "token "+s.credentials.Password)
+		}
 	}
 
 	resp, err := s.httpClient.Do(req)
