@@ -295,7 +295,7 @@ func (s *KubernetesClusterService) UpdateCluster(ctx context.Context, userID pri
 	// If credentials changed, test the connection
 	credentialsProvided := updatedCluster.Credentials.Token != "" ||
 		updatedCluster.Credentials.KubeConfig != "" ||
-		(updatedCluster.Credentials.ClientCertData != "" || updatedCluster.Credentials.ClientKeyData != "") ||
+		(updatedCluster.Credentials.ClientCertData != "" && updatedCluster.Credentials.ClientKeyData != "") ||
 		updatedCluster.Credentials.OIDCIssuerURL != ""
 	if credentialsProvided {
 		clientset, err := s.CreateClusterConnection(updatedCluster)
