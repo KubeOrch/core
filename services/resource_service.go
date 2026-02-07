@@ -10,6 +10,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
@@ -888,8 +889,24 @@ func (s *ResourceService) networkPolicyToResource(np *networkingv1.NetworkPolicy
 }
 
 // GetResources retrieves resources from database with optional filtering
-func (s *ResourceService) GetResources(ctx context.Context, userID primitive.ObjectID, filter bson.M) ([]*models.Resource, error) {
-	return s.resourceRepo.List(ctx, userID, filter)
+func (s *ResourceService) GetResources(ctx context.Context, userID primitive.ObjectID, filter bson.M, opts ...*options.FindOptions) ([]*models.Resource, int64, error) {
+	// Clone filter for count (both List and Count mutate the filter)
+	countFilter := bson.M{}
+	for k, v := range filter {
+		countFilter[k] = v
+	}
+
+	total, err := s.resourceRepo.Count(ctx, userID, countFilter)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	resources, err := s.resourceRepo.List(ctx, userID, filter, opts...)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return resources, total, nil
 }
 
 // GetResourceByID retrieves a single resource by ID

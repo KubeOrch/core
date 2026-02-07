@@ -133,6 +133,17 @@ func (r *ResourceRepository) List(ctx context.Context, userID primitive.ObjectID
 	return resources, nil
 }
 
+// Count returns the total number of resources matching the filter
+func (r *ResourceRepository) Count(ctx context.Context, userID primitive.ObjectID, filter bson.M) (int64, error) {
+	filter["userId"] = userID
+
+	if _, exists := filter["deletedAt"]; !exists {
+		filter["deletedAt"] = bson.M{"$exists": false}
+	}
+
+	return r.collection.CountDocuments(ctx, filter)
+}
+
 // MarkDeleted marks resources as deleted that weren't seen in latest sync
 func (r *ResourceRepository) MarkDeleted(ctx context.Context, userID, clusterID primitive.ObjectID, syncTime time.Time) error {
 	filter := bson.M{

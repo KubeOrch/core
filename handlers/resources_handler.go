@@ -17,8 +17,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
+	"regexp"
+
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/kubectl/pkg/scheme"
@@ -110,8 +113,85 @@ func (h *ResourcesHandler) GetResources(c *gin.Context) {
 		filter["type"] = resourceType
 	}
 
+	// Search filter
+	if search := c.Query("search"); search != "" {
+		escaped := regexp.QuoteMeta(search)
+		searchRegex := bson.M{"$regex": escaped, "$options": "i"}
+		filter["$or"] = []bson.M{
+			{"name": searchRegex},
+			{"namespace": searchRegex},
+		}
+	}
+
+	// Hide system resources filter (server-side)
+	if c.Query("hideSystem") == "true" {
+		systemNamespaces := []string{
+			"kube-system", "kube-public", "kube-node-lease", "kube-flannel",
+			"ingress-nginx", "kubernetes-dashboard", "metallb-system",
+			"cert-manager", "monitoring", "istio-system", "linkerd",
+		}
+
+		systemFilters := []bson.M{
+			{"namespace": bson.M{"$in": systemNamespaces}},
+			{"type": "Node"},
+			{"$and": []bson.M{
+				{"type": "ConfigMap"},
+				{"name": "kube-root-ca.crt"},
+			}},
+			{"$and": []bson.M{
+				{"type": "Service"},
+				{"name": "kubernetes"},
+			}},
+			{"$and": []bson.M{
+				{"type": "Namespace"},
+				{"name": bson.M{"$in": systemNamespaces}},
+			}},
+		}
+
+		filter["$nor"] = systemFilters
+	}
+
+	// Pagination
+	limit := int64(25)
+	offset := int64(0)
+	if l := c.Query("limit"); l != "" {
+		if parsed, err := strconv.ParseInt(l, 10, 64); err == nil && parsed > 0 && parsed <= 100 {
+			limit = parsed
+		}
+	}
+	if o := c.Query("offset"); o != "" {
+		if parsed, err := strconv.ParseInt(o, 10, 64); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+
+	// Sorting
+	findOpts := options.Find().SetLimit(limit).SetSkip(offset)
+
+	sortByMap := map[string]string{
+		"name":      "name",
+		"type":      "type",
+		"namespace": "namespace",
+		"cluster":   "clusterName",
+		"status":    "status",
+		"created":   "createdAt",
+	}
+
+	if sortBy := c.Query("sort_by"); sortBy != "" {
+		if bsonField, ok := sortByMap[sortBy]; ok {
+			sortDir := 1 // ascending
+			if c.Query("sort_order") == "desc" {
+				sortDir = -1
+			}
+			findOpts.SetSort(bson.D{{Key: bsonField, Value: sortDir}})
+		}
+	} else {
+		// Default sort: newest first
+		findOpts.SetSort(bson.D{{Key: "createdAt", Value: -1}})
+	}
+
 	// Get resources from database
-	resources, err := h.resourceService.GetResources(ctx, userID, filter)
+	resources, total, err := h.resourceService.GetResources(ctx, userID, filter, findOpts)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to get resources")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get resources"})
@@ -137,7 +217,9 @@ func (h *ResourcesHandler) GetResources(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"resources": minimalList,
-		"count":     len(minimalList),
+		"total":     total,
+		"limit":     limit,
+		"offset":    offset,
 	})
 }
 
@@ -265,45 +347,77 @@ func (h *ResourcesHandler) GetDeploymentPods(c *gin.Context) {
 
 	ctx := c.Request.Context()
 
-	// Get the deployment resource
-	deployment, err := h.resourceService.GetResourceByID(ctx, objID, userID)
+	resource, err := h.resourceService.GetResourceByID(ctx, objID, userID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Resource not found"})
 		return
 	}
 
-	// Verify it's a deployment or statefulset
-	if deployment.Type != "Deployment" && deployment.Type != "StatefulSet" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Resource is not a deployment or statefulset"})
+	var filter bson.M
+	childKey := "pods" // response key name
+
+	switch string(resource.Type) {
+	case "Deployment", "StatefulSet":
+		// Deployment -> ReplicaSet -> Pod: match by app label or name prefix
+		filter = bson.M{
+			"clusterName": resource.ClusterName,
+			"namespace":   resource.Namespace,
+			"type":        "Pod",
+			"$or": []bson.M{
+				{"labels.app": resource.Name},
+				{"name": bson.M{"$regex": "^" + regexp.QuoteMeta(resource.Name) + "-"}},
+			},
+		}
+
+	case "Job":
+		// Job -> Pod: pods have label "job-name" matching the job name
+		filter = bson.M{
+			"clusterName":        resource.ClusterName,
+			"namespace":          resource.Namespace,
+			"type":               "Pod",
+			"labels.job-name":    resource.Name,
+		}
+
+	case "CronJob":
+		// CronJob -> Jobs: jobs have label "app" matching cronjob name or name prefix
+		childKey = "jobs"
+		filter = bson.M{
+			"clusterName": resource.ClusterName,
+			"namespace":   resource.Namespace,
+			"type":        "Job",
+			"$or": []bson.M{
+				{"labels.app": resource.Name},
+				{"name": bson.M{"$regex": "^" + regexp.QuoteMeta(resource.Name) + "-"}},
+			},
+		}
+
+	case "DaemonSet":
+		// DaemonSet -> Pod: match by app label or name prefix
+		filter = bson.M{
+			"clusterName": resource.ClusterName,
+			"namespace":   resource.Namespace,
+			"type":        "Pod",
+			"$or": []bson.M{
+				{"labels.app": resource.Name},
+				{"name": bson.M{"$regex": "^" + regexp.QuoteMeta(resource.Name) + "-"}},
+			},
+		}
+
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Resource type does not have child resources"})
 		return
 	}
 
-	// Find pods that belong to this deployment/statefulset
-	// In Kubernetes, Deployment -> ReplicaSet -> Pod, so pods don't directly reference the deployment.
-	// Instead, we match by the "app" label which is typically set to the deployment name.
-	// We also match pods whose name starts with the deployment name (deployment-X-hash-hash pattern).
-	filter := bson.M{
-		"clusterName": deployment.ClusterName,
-		"namespace":   deployment.Namespace,
-		"type":        "Pod",
-		"$or": []bson.M{
-			// Match by "app" label (most reliable)
-			{"labels.app": deployment.Name},
-			// Match by name prefix (fallback for pods without app label)
-			{"name": bson.M{"$regex": "^" + deployment.Name + "-"}},
-		},
-	}
-
-	pods, err := h.resourceService.GetResources(ctx, userID, filter)
+	children, _, err := h.resourceService.GetResources(ctx, userID, filter)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get pods"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get child resources"})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"deployment": deployment,
-		"pods":       pods,
-		"count":      len(pods),
+		"parent":  resource,
+		childKey:  children,
+		"count":   len(children),
 	})
 }
 
@@ -492,11 +606,12 @@ func (h *ResourcesHandler) StreamPodLogs(c *gin.Context) {
 	// STEP 3: Start K8s follow stream via manager (if not already running)
 	// Follow stream should NOT include tail lines - only new logs from now onwards
 	logStreamManager := services.GetPodLogStreamManager()
+	zeroTailLines := int64(0)
 	followOptions := &corev1.PodLogOptions{
 		Container:  container,
-		Follow:     true,  // Follow for new logs
+		Follow:     true,           // Follow for new logs
 		Timestamps: true,
-		TailLines:  nil,   // No tail lines - we already sent historical logs above
+		TailLines:  &zeroTailLines, // 0 = no historical replay, only new logs
 	}
 
 	started, err := logStreamManager.StartLogStream(resourceID, clientset, resource.Namespace, resource.Name, container, followOptions)
