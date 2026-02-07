@@ -357,8 +357,8 @@ func (h *ResourcesHandler) GetDeploymentPods(c *gin.Context) {
 	childKey := "pods" // response key name
 
 	switch string(resource.Type) {
-	case "Deployment", "StatefulSet":
-		// Deployment -> ReplicaSet -> Pod: match by app label or name prefix
+	case "Deployment", "StatefulSet", "DaemonSet":
+		// Match child pods by app label or name prefix
 		filter = bson.M{
 			"clusterName": resource.ClusterName,
 			"namespace":   resource.Namespace,
@@ -372,10 +372,10 @@ func (h *ResourcesHandler) GetDeploymentPods(c *gin.Context) {
 	case "Job":
 		// Job -> Pod: pods have label "job-name" matching the job name
 		filter = bson.M{
-			"clusterName":        resource.ClusterName,
-			"namespace":          resource.Namespace,
-			"type":               "Pod",
-			"labels.job-name":    resource.Name,
+			"clusterName":     resource.ClusterName,
+			"namespace":       resource.Namespace,
+			"type":            "Pod",
+			"labels.job-name": resource.Name,
 		}
 
 	case "CronJob":
@@ -385,18 +385,6 @@ func (h *ResourcesHandler) GetDeploymentPods(c *gin.Context) {
 			"clusterName": resource.ClusterName,
 			"namespace":   resource.Namespace,
 			"type":        "Job",
-			"$or": []bson.M{
-				{"labels.app": resource.Name},
-				{"name": bson.M{"$regex": "^" + regexp.QuoteMeta(resource.Name) + "-"}},
-			},
-		}
-
-	case "DaemonSet":
-		// DaemonSet -> Pod: match by app label or name prefix
-		filter = bson.M{
-			"clusterName": resource.ClusterName,
-			"namespace":   resource.Namespace,
-			"type":        "Pod",
 			"$or": []bson.M{
 				{"labels.app": resource.Name},
 				{"name": bson.M{"$regex": "^" + regexp.QuoteMeta(resource.Name) + "-"}},
