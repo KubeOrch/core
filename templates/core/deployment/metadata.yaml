@@ -87,3 +87,19 @@ parameters:
     description: Health check to determine if pod is ready
     type: object
     required: false
+  - name: version
+    label: Version
+    description: Application version label (e.g., v1, v2)
+    type: string
+    required: false
+    default: "v1"
+  - name: volumeMounts
+    label: Volume Mounts
+    description: "Volumes to mount into the container. Each item has: name (string), mountPath (string), type (configMap|secret|persistentVolumeClaim)"
+    type: array
+    required: false
+  - name: imagePullSecrets
+    label: Image Pull Secrets
+    description: Names of Kubernetes secrets for pulling images from private registries
+    type: array
+    required: false

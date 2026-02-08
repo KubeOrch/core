@@ -104,3 +104,19 @@ parameters:
         label: "None"
       - value: "ClientIP"
         label: "ClientIP"
+  - name: labels
+    label: Custom Labels
+    description: Additional labels to apply to the Service
+    type: object
+    required: false
+  - name: annotations
+    label: Annotations
+    description: Custom annotations for the Service (e.g., cloud provider settings)
+    type: object
+    required: false
+  - name: sessionAffinityTimeout
+    label: Session Affinity Timeout (seconds)
+    description: Timeout for session affinity when using ClientIP
+    type: number
+    required: false
+    default: 10800
