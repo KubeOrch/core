@@ -1,0 +1,117 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace | default "default" }}
+  labels:
+    app: {{ .Name }}
+    managed-by: kubeorch
+    {{- range $key, $value := .Labels }}
+    {{ $key }}: {{ $value }}
+    {{- end }}
+spec:
+  {{- if .Completions }}
+  completions: {{ .Completions }}
+  {{- end }}
+  {{- if .Parallelism }}
+  parallelism: {{ .Parallelism }}
+  {{- end }}
+  {{- if .BackoffLimit }}
+  backoffLimit: {{ .BackoffLimit }}
+  {{- end }}
+  {{- if .ActiveDeadlineSeconds }}
+  activeDeadlineSeconds: {{ .ActiveDeadlineSeconds }}
+  {{- end }}
+  {{- if .TTLSecondsAfterFinished }}
+  ttlSecondsAfterFinished: {{ .TTLSecondsAfterFinished }}
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Name }}
+        {{- range $key, $value := .Labels }}
+        {{ $key }}: {{ $value }}
+        {{- end }}
+    spec:
+      restartPolicy: {{ .RestartPolicy | default "Never" }}
+      {{- if .ServiceAccountName }}
+      serviceAccountName: {{ .ServiceAccountName }}
+      {{- end }}
+      containers:
+      - name: {{ .Name }}
+        image: {{ .Image }}
+        {{- if .ImagePullPolicy }}
+        imagePullPolicy: {{ .ImagePullPolicy }}
+        {{- end }}
+        {{- if .Command }}
+        command:
+        {{- range .Command }}
+        - {{ . | quote }}
+        {{- end }}
+        {{- end }}
+        {{- if .Args }}
+        args:
+        {{- range .Args }}
+        - {{ . | quote }}
+        {{- end }}
+        {{- end }}
+        {{- if .Env }}
+        env:
+        {{- range $key, $value := .Env }}
+        - name: {{ $key }}
+          value: {{ $value | quote }}
+        {{- end }}
+        {{- end }}
+        {{- if .Resources }}
+        resources:
+          {{- if .Resources.Requests }}
+          requests:
+            {{- if .Resources.Requests.Memory }}
+            memory: {{ .Resources.Requests.Memory }}
+            {{- end }}
+            {{- if .Resources.Requests.CPU }}
+            cpu: {{ .Resources.Requests.CPU }}
+            {{- end }}
+          {{- end }}
+          {{- if .Resources.Limits }}
+          limits:
+            {{- if .Resources.Limits.Memory }}
+            memory: {{ .Resources.Limits.Memory }}
+            {{- end }}
+            {{- if .Resources.Limits.CPU }}
+            cpu: {{ .Resources.Limits.CPU }}
+            {{- end }}
+          {{- end }}
+        {{- end }}
+        {{- if .VolumeMounts }}
+        volumeMounts:
+        {{- range .VolumeMounts }}
+        - name: {{ .Name }}-volume
+          mountPath: {{ .MountPath }}
+          {{- if or (eq .Type "configMap") (eq .Type "secret") }}
+          readOnly: true
+          {{- end }}
+        {{- end }}
+        {{- end }}
+      {{- if .ImagePullSecrets }}
+      imagePullSecrets:
+      {{- range .ImagePullSecrets }}
+      - name: {{ . }}
+      {{- end }}
+      {{- end }}
+      {{- if .VolumeMounts }}
+      volumes:
+      {{- range .VolumeMounts }}
+      - name: {{ .Name }}-volume
+        {{- if eq .Type "configMap" }}
+        configMap:
+          name: {{ .Name }}
+        {{- else if eq .Type "secret" }}
+        secret:
+          secretName: {{ .Name }}
+        {{- else if eq .Type "persistentVolumeClaim" }}
+        persistentVolumeClaim:
+          claimName: {{ .Name }}
+        {{- end }}
+      {{- end }}
+      {{- end }}

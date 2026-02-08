@@ -1,0 +1,114 @@
+id: core/statefulset
+name: statefulset
+displayName: StatefulSet
+category: core
+description: Deploy stateful applications like databases (PostgreSQL, MongoDB), message queues (Kafka), and caches (Redis clusters) with stable network identities and persistent storage
+icon: Database
+version: "1.0.0"
+tags:
+  - stateful
+  - database
+  - persistence
+  - storage
+usageFrequency: high
+difficulty: medium
+dependencies: []
+parameters:
+  - name: name
+    label: StatefulSet Name
+    description: Name of the StatefulSet
+    type: string
+    required: true
+    default: "my-statefulset"
+  - name: namespace
+    label: Namespace
+    description: Kubernetes namespace
+    type: string
+    required: false
+    default: "default"
+  - name: serviceName
+    label: Headless Service Name
+    description: Name of the headless service for stable network identities (required for DNS)
+    type: string
+    required: true
+  - name: image
+    label: Docker Image
+    description: Container image to deploy
+    type: string
+    required: true
+    default: "postgres:15"
+  - name: replicas
+    label: Replicas
+    description: Number of pod replicas
+    type: number
+    required: false
+    default: 1
+  - name: port
+    label: Container Port
+    description: Port the container listens on
+    type: number
+    required: false
+    default: 5432
+  - name: resources
+    label: Resource Configuration
+    description: CPU and memory limits/requests
+    type: object
+    required: false
+  - name: volumeClaimTemplates
+    label: Volume Claim Templates
+    description: "Persistent volume claims for each pod replica. Each item has: name (string), accessModes (array, e.g. ReadWriteOnce), storage (string, e.g. 10Gi), storageClassName (string, optional)"
+    type: array
+    required: false
+  - name: version
+    label: Version
+    description: Application version label (e.g., v1, v2)
+    type: string
+    required: false
+    default: "v1"
+  - name: labels
+    label: Custom Labels
+    description: Additional labels to apply to the StatefulSet and its pods
+    type: object
+    required: false
+  - name: serviceAccountName
+    label: Service Account
+    description: ServiceAccount to use for the pods
+    type: string
+    required: false
+  - name: imagePullPolicy
+    label: Image Pull Policy
+    description: When to pull the container image
+    type: select
+    required: false
+    options:
+      - value: "Always"
+        label: "Always - Pull every time"
+      - value: "IfNotPresent"
+        label: "IfNotPresent - Pull only if not cached"
+      - value: "Never"
+        label: "Never - Use local image only"
+  - name: env
+    label: Environment Variables
+    description: Environment variables for the container
+    type: object
+    required: false
+  - name: livenessProbe
+    label: Liveness Probe
+    description: "HTTP liveness probe configuration. Fields: path (string, default /health), initialDelaySeconds (number, default 30), periodSeconds (number, default 10)"
+    type: object
+    required: false
+  - name: readinessProbe
+    label: Readiness Probe
+    description: "HTTP readiness probe configuration. Fields: path (string, default /ready), initialDelaySeconds (number, default 5), periodSeconds (number, default 5)"
+    type: object
+    required: false
+  - name: volumeMounts
+    label: Volume Mounts
+    description: "Existing volumes to mount into the container. Each item has: name (string), mountPath (string), type (configMap|secret|persistentVolumeClaim)"
+    type: array
+    required: false
+  - name: imagePullSecrets
+    label: Image Pull Secrets
+    description: Names of Kubernetes secrets for pulling images from private registries
+    type: array
+    required: false

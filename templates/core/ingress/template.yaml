@@ -1,0 +1,62 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace | default "default" }}
+  labels:
+    app: {{ .Name }}
+    managed-by: kubeorch
+    {{- range $key, $value := .Labels }}
+    {{ $key }}: {{ $value }}
+    {{- end }}
+  {{- if .Annotations }}
+  annotations:
+    {{- range $key, $value := .Annotations }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+  {{- end }}
+spec:
+  {{- if .IngressClassName }}
+  ingressClassName: {{ .IngressClassName }}
+  {{- end }}
+  {{- if .TLSEnabled }}
+  tls:
+  - hosts:
+    {{- if .TLSHosts }}
+    {{- range .TLSHosts }}
+    - {{ . }}
+    {{- end }}
+    {{- else if .Host }}
+    - {{ .Host }}
+    {{- end }}
+    {{- if .TLSSecretName }}
+    secretName: {{ .TLSSecretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+  - {{- if .Host }}
+    host: {{ .Host }}
+    {{- end }}
+    http:
+      paths:
+      {{- if .Paths }}
+      {{- range .Paths }}
+      {{- if and .ServiceName .ServicePort }}
+      - path: {{ .Path | default "/" }}
+        pathType: {{ .PathType | default "Prefix" }}
+        backend:
+          service:
+            name: {{ .ServiceName }}
+            port:
+              number: {{ .ServicePort }}
+      {{- end }}
+      {{- end }}
+      {{- else if and .ServiceName .ServicePort }}
+      - path: {{ .Path | default "/" }}
+        pathType: {{ .PathType | default "Prefix" }}
+        backend:
+          service:
+            name: {{ .ServiceName }}
+            port:
+              number: {{ .ServicePort }}
+      {{- end }}

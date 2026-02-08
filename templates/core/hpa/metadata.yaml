@@ -1,0 +1,89 @@
+id: core/hpa
+name: hpa
+displayName: HorizontalPodAutoscaler
+category: core
+description: Automatically scale pods based on CPU, memory, or custom metrics
+icon: TrendingUp
+version: "1.0.0"
+tags:
+  - autoscaling
+  - scaling
+  - metrics
+usageFrequency: high
+difficulty: medium
+dependencies: []
+parameters:
+  - name: name
+    label: HPA Name
+    description: Name of the HorizontalPodAutoscaler
+    type: string
+    required: true
+    default: "my-hpa"
+  - name: namespace
+    label: Namespace
+    description: Kubernetes namespace
+    type: string
+    required: false
+    default: "default"
+  - name: scaleTargetKind
+    label: Target Kind
+    description: Kind of workload to scale
+    type: select
+    required: false
+    default: "Deployment"
+    options:
+      - value: "Deployment"
+        label: "Deployment"
+      - value: "StatefulSet"
+        label: "StatefulSet"
+  - name: scaleTargetName
+    label: Target Name
+    description: Name of the workload to scale
+    type: string
+    required: true
+  - name: minReplicas
+    label: Min Replicas
+    description: Minimum number of replicas
+    type: number
+    required: false
+    default: 1
+    min: 1
+  - name: maxReplicas
+    label: Max Replicas
+    description: Maximum number of replicas
+    type: number
+    required: true
+    default: 10
+    min: 1
+  - name: targetCPUUtilization
+    label: Target CPU Utilization (%)
+    description: Target average CPU utilization percentage
+    type: number
+    required: false
+    default: 80
+    min: 1
+    max: 100
+  - name: targetMemoryUtilization
+    label: Target Memory Utilization (%)
+    description: Target average memory utilization percentage
+    type: number
+    required: false
+    min: 1
+    max: 100
+  - name: scaleDownStabilization
+    label: Scale Down Stabilization (seconds)
+    description: Time to wait before scaling down
+    type: number
+    required: false
+    default: 300
+  - name: scaleUpStabilization
+    label: Scale Up Stabilization (seconds)
+    description: Time to wait before scaling up
+    type: number
+    required: false
+    default: 0
+  - name: labels
+    label: Custom Labels
+    description: Additional labels to apply to the HPA
+    type: object
+    required: false

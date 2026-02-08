@@ -1,0 +1,55 @@
+id: core/networkpolicy
+name: networkpolicy
+displayName: NetworkPolicy
+category: core
+description: Control network traffic between pods for security and isolation
+icon: Shield
+version: "1.0.0"
+tags:
+  - security
+  - network
+  - firewall
+  - isolation
+usageFrequency: medium
+difficulty: hard
+dependencies: []
+parameters:
+  - name: name
+    label: NetworkPolicy Name
+    description: Name of the NetworkPolicy
+    type: string
+    required: true
+    default: "my-network-policy"
+  - name: namespace
+    label: Namespace
+    description: Kubernetes namespace
+    type: string
+    required: false
+    default: "default"
+  - name: podSelector
+    label: Pod Selector
+    description: Labels to select which pods this policy applies to
+    type: object
+    required: false
+  - name: policyTypes
+    label: Policy Types
+    description: Types of traffic to control
+    type: array
+    required: true
+    default:
+      - "Ingress"
+  - name: ingressRules
+    label: Ingress Rules
+    description: "Rules for incoming traffic. Each rule has: from (array of selectors with podSelector, namespaceSelector, or ipBlock), ports (array with protocol and port)"
+    type: array
+    required: false
+  - name: egressRules
+    label: Egress Rules
+    description: "Rules for outgoing traffic. Each rule has: to (array of selectors with podSelector, namespaceSelector, or ipBlock), ports (array with protocol and port)"
+    type: array
+    required: false
+  - name: labels
+    label: Custom Labels
+    description: Additional labels to apply to the NetworkPolicy
+    type: object
+    required: false

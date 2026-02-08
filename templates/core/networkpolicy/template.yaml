@@ -1,0 +1,107 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace | default "default" }}
+  labels:
+    app: {{ .Name }}
+    managed-by: kubeorch
+    {{- range $key, $value := .Labels }}
+    {{ $key }}: {{ $value }}
+    {{- end }}
+spec:
+  podSelector:
+    {{- if .PodSelector }}
+    matchLabels:
+      {{- range $key, $value := .PodSelector }}
+      {{ $key }}: {{ $value | quote }}
+      {{- end }}
+    {{- else }}
+    {} {{/* Empty selector selects all pods in namespace */}}
+    {{- end }}
+  policyTypes:
+  {{- range .PolicyTypes }}
+  - {{ . }}
+  {{- end }}
+  {{- if .IngressRules }}
+  ingress:
+  {{- range .IngressRules }}
+  - {{- if .From }}
+    from:
+    {{- range .From }}
+    - {{- if .PodSelector }}
+      podSelector:
+        matchLabels:
+          {{- range $key, $value := .PodSelector }}
+          {{ $key }}: {{ $value | quote }}
+          {{- end }}
+      {{- end }}
+      {{- if .NamespaceSelector }}
+      namespaceSelector:
+        matchLabels:
+          {{- range $key, $value := .NamespaceSelector }}
+          {{ $key }}: {{ $value | quote }}
+          {{- end }}
+      {{- end }}
+      {{- if .IPBlock }}
+      ipBlock:
+        cidr: {{ .IPBlock.CIDR }}
+        {{- if .IPBlock.Except }}
+        except:
+        {{- range .IPBlock.Except }}
+        - {{ . }}
+        {{- end }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
+    {{- end }}
+    {{- if .Ports }}
+    ports:
+    {{- range .Ports }}
+    - protocol: {{ .Protocol | default "TCP" }}
+      port: {{ .Port }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- if .EgressRules }}
+  egress:
+  {{- range .EgressRules }}
+  - {{- if .To }}
+    to:
+    {{- range .To }}
+    - {{- if .PodSelector }}
+      podSelector:
+        matchLabels:
+          {{- range $key, $value := .PodSelector }}
+          {{ $key }}: {{ $value | quote }}
+          {{- end }}
+      {{- end }}
+      {{- if .NamespaceSelector }}
+      namespaceSelector:
+        matchLabels:
+          {{- range $key, $value := .NamespaceSelector }}
+          {{ $key }}: {{ $value | quote }}
+          {{- end }}
+      {{- end }}
+      {{- if .IPBlock }}
+      ipBlock:
+        cidr: {{ .IPBlock.CIDR }}
+        {{- if .IPBlock.Except }}
+        except:
+        {{- range .IPBlock.Except }}
+        - {{ . }}
+        {{- end }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
+    {{- end }}
+    {{- if .Ports }}
+    ports:
+    {{- range .Ports }}
+    - protocol: {{ .Protocol | default "TCP" }}
+      port: {{ .Port }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+  {{- end }}

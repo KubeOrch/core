@@ -1,0 +1,140 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace | default "default" }}
+  labels:
+    app: {{ .Name }}
+    version: {{ .Version | default "v1" }}
+    managed-by: kubeorch
+    {{- range $key, $value := .Labels }}
+    {{ $key }}: {{ $value }}
+    {{- end }}
+spec:
+  serviceName: {{ .ServiceName }}
+  replicas: {{ .Replicas | default 1 }}
+  selector:
+    matchLabels:
+      app: {{ .Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Name }}
+        version: {{ .Version | default "v1" }}
+        {{- range $key, $value := .Labels }}
+        {{ $key }}: {{ $value }}
+        {{- end }}
+    spec:
+      {{- if .ServiceAccountName }}
+      serviceAccountName: {{ .ServiceAccountName }}
+      {{- end }}
+      containers:
+      - name: {{ .Name }}
+        image: {{ .Image }}
+        {{- if .ImagePullPolicy }}
+        imagePullPolicy: {{ .ImagePullPolicy }}
+        {{- end }}
+        {{- if .Port }}
+        ports:
+        - containerPort: {{ .Port }}
+          protocol: TCP
+          name: http
+        {{- end }}
+        {{- if .Env }}
+        env:
+        {{- range $key, $value := .Env }}
+        - name: {{ $key }}
+          value: {{ $value | quote }}
+        {{- end }}
+        {{- end }}
+        {{- if .Resources }}
+        resources:
+          {{- if .Resources.Requests }}
+          requests:
+            {{- if .Resources.Requests.Memory }}
+            memory: {{ .Resources.Requests.Memory }}
+            {{- end }}
+            {{- if .Resources.Requests.CPU }}
+            cpu: {{ .Resources.Requests.CPU }}
+            {{- end }}
+          {{- end }}
+          {{- if .Resources.Limits }}
+          limits:
+            {{- if .Resources.Limits.Memory }}
+            memory: {{ .Resources.Limits.Memory }}
+            {{- end }}
+            {{- if .Resources.Limits.CPU }}
+            cpu: {{ .Resources.Limits.CPU }}
+            {{- end }}
+          {{- end }}
+        {{- end }}
+        {{- if .LivenessProbe }}
+        livenessProbe:
+          httpGet:
+            path: {{ .LivenessProbe.Path | default "/health" }}
+            port: {{ .Port | default 8080 }}
+          initialDelaySeconds: {{ .LivenessProbe.InitialDelaySeconds | default 30 }}
+          periodSeconds: {{ .LivenessProbe.PeriodSeconds | default 10 }}
+        {{- end }}
+        {{- if .ReadinessProbe }}
+        readinessProbe:
+          httpGet:
+            path: {{ .ReadinessProbe.Path | default "/ready" }}
+            port: {{ .Port | default 8080 }}
+          initialDelaySeconds: {{ .ReadinessProbe.InitialDelaySeconds | default 5 }}
+          periodSeconds: {{ .ReadinessProbe.PeriodSeconds | default 5 }}
+        {{- end }}
+        {{- if or .VolumeMounts .VolumeClaimTemplates }}
+        volumeMounts:
+        {{- range .VolumeMounts }}
+        - name: {{ .Name }}-volume
+          mountPath: {{ .MountPath }}
+          {{- if or (eq .Type "configMap") (eq .Type "secret") }}
+          readOnly: true
+          {{- end }}
+        {{- end }}
+        {{- range .VolumeClaimTemplates }}
+        - name: {{ .Name }}
+          mountPath: /data/{{ .Name }}
+        {{- end }}
+        {{- end }}
+      {{- if .ImagePullSecrets }}
+      imagePullSecrets:
+      {{- range .ImagePullSecrets }}
+      - name: {{ . }}
+      {{- end }}
+      {{- end }}
+      {{- if .VolumeMounts }}
+      volumes:
+      {{- range .VolumeMounts }}
+      - name: {{ .Name }}-volume
+        {{- if eq .Type "configMap" }}
+        configMap:
+          name: {{ .Name }}
+        {{- else if eq .Type "secret" }}
+        secret:
+          secretName: {{ .Name }}
+        {{- else if eq .Type "persistentVolumeClaim" }}
+        persistentVolumeClaim:
+          claimName: {{ .Name }}
+        {{- end }}
+      {{- end }}
+      {{- end }}
+  {{- if .VolumeClaimTemplates }}
+  volumeClaimTemplates:
+  {{- range .VolumeClaimTemplates }}
+  - metadata:
+      name: {{ .Name }}
+    spec:
+      accessModes:
+      {{- range .AccessModes }}
+      - {{ . }}
+      {{- end }}
+      {{- if .StorageClassName }}
+      storageClassName: {{ .StorageClassName }}
+      {{- end }}
+      resources:
+        requests:
+          storage: {{ .Storage }}
+  {{- end }}
+  {{- end }}
