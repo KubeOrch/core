@@ -14,14 +14,16 @@ const (
 )
 
 type User struct {
-	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	Email     string             `bson:"email" json:"email"`
-	Name      string             `bson:"name" json:"name"`
-	Password  string             `bson:"password" json:"-"`
-	Role      UserRole           `bson:"role" json:"role"`
-	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
-	UpdatedAt time.Time          `bson:"updated_at" json:"updated_at"`
-	DeletedAt *time.Time         `bson:"deleted_at,omitempty" json:"-"`
+	ID             primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Email          string             `bson:"email" json:"email"`
+	Name           string             `bson:"name" json:"name"`
+	Password       string             `bson:"password" json:"-"`
+	Role           UserRole           `bson:"role" json:"role"`
+	AuthProvider   string             `bson:"auth_provider,omitempty" json:"authProvider,omitempty"`
+	ProviderUserID string             `bson:"provider_user_id,omitempty" json:"-"`
+	CreatedAt      time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt      time.Time          `bson:"updated_at" json:"updated_at"`
+	DeletedAt      *time.Time         `bson:"deleted_at,omitempty" json:"-"`
 }
 
 func (u *User) IsAdmin() bool {

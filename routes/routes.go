@@ -32,6 +32,14 @@ func SetupRouter() *gin.Engine {
 			auth.POST("/register", handlers.RegisterHandler)
 			auth.POST("/login", handlers.LoginHandler)
 			auth.POST("/refresh", middleware.RefreshTokenMiddleware(), handlers.RefreshTokenHandler)
+
+			// Public: discover available auth methods
+			auth.GET("/methods", handlers.GetAuthMethodsHandler)
+
+			// OAuth2/OIDC routes
+			auth.GET("/oauth/:provider/authorize", handlers.OAuthAuthorizeHandler)
+			auth.GET("/oauth/:provider/callback", handlers.OAuthCallbackHandler)
+			auth.POST("/oauth/exchange", handlers.OAuthExchangeHandler)
 		}
 
 		// Protected routes

@@ -137,6 +137,28 @@ func GetUserCount() (int64, error) {
 	return CountUsers()
 }
 
+func GetUserByProviderID(provider, providerUserID string) (*models.User, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var user models.User
+	filter := bson.M{
+		"auth_provider":    provider,
+		"provider_user_id": providerUserID,
+		"deleted_at":       nil,
+	}
+
+	err := database.UserColl.FindOne(ctx, filter).Decode(&user)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, errors.New("user not found")
+		}
+		return nil, err
+	}
+
+	return &user, nil
+}
+
 func GetAllUsers() ([]models.User, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

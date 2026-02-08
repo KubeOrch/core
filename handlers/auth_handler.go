@@ -10,12 +10,18 @@ import (
 	"github.com/KubeOrch/core/models"
 	"github.com/KubeOrch/core/services"
 	"github.com/KubeOrch/core/utils"
+	"github.com/KubeOrch/core/utils/config"
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 )
 
 func RegisterHandler(c *gin.Context) {
+	if !config.GetAuthBuiltinEnabled() || !config.GetAuthSignupEnabled() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Registration is disabled"})
+		return
+	}
+
 	var req struct {
 		Email      string `json:"email" binding:"required,email"`
 		Password   string `json:"password" binding:"required,min=6"`
@@ -189,6 +195,11 @@ func RegisterHandler(c *gin.Context) {
 }
 
 func LoginHandler(c *gin.Context) {
+	if !config.GetAuthBuiltinEnabled() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Password login is disabled"})
+		return
+	}
+
 	var req struct {
 		Email    string `json:"email" binding:"required,email"`
 		Password string `json:"password" binding:"required,min=6"`

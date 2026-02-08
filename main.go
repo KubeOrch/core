@@ -36,6 +36,28 @@ func main() {
 	logrus.SetLevel(level)
 	logrus.Infof("Log level set to: %s", level)
 
+	// Validate that at least one authentication method is enabled
+	builtinEnabled := config.GetAuthBuiltinEnabled()
+	oauthProviders := config.GetEnabledOAuthProviders()
+	if !builtinEnabled && len(oauthProviders) == 0 {
+		logrus.Fatal("At least one authentication method must be enabled. " +
+			"Set AUTH.BUILTIN.ENABLED=true or configure at least one OAuth provider.")
+	}
+	for _, p := range oauthProviders {
+		if p.ClientID == "" || p.ClientSecret == "" {
+			logrus.Fatalf("OAuth provider %q is enabled but missing CLIENT_ID or CLIENT_SECRET", p.Name)
+		}
+		if p.Type == "oidc" && p.IssuerURL == "" {
+			logrus.Fatalf("OIDC provider %q is enabled but missing ISSUER_URL", p.Name)
+		}
+		if p.Type == "oauth2" && (p.AuthorizationURL == "" || p.TokenURL == "" || p.UserinfoURL == "") {
+			logrus.Fatalf("OAuth2 provider %q requires AUTHORIZATION_URL, TOKEN_URL, and USERINFO_URL", p.Name)
+		}
+	}
+	if len(oauthProviders) > 0 {
+		logrus.Infof("OAuth providers configured: %d enabled", len(oauthProviders))
+	}
+
 	// Connect to MongoDB
 	if err := database.Connect(); err != nil {
 		logrus.Fatalf("Failed to connect to MongoDB: %v", err)
