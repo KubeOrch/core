@@ -104,3 +104,13 @@ parameters:
     description: Custom annotations for controller-specific configurations
     type: object
     required: false
+  - name: labels
+    label: Custom Labels
+    description: Additional labels to apply to the Ingress
+    type: object
+    required: false
+  - name: paths
+    label: Additional Paths
+    description: "Multiple path rules for the Ingress. Each item has: path (string), pathType (Prefix|Exact), serviceName (string), servicePort (number). When provided, overrides the single path/serviceName/servicePort params"
+    type: array
+    required: false

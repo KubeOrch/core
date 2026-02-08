@@ -40,11 +40,16 @@ parameters:
       - "Ingress"
   - name: ingressRules
     label: Ingress Rules
-    description: Rules for incoming traffic
+    description: "Rules for incoming traffic. Each rule has: from (array of selectors with podSelector, namespaceSelector, or ipBlock), ports (array with protocol and port)"
     type: array
     required: false
   - name: egressRules
     label: Egress Rules
-    description: Rules for outgoing traffic
+    description: "Rules for outgoing traffic. Each rule has: to (array of selectors with podSelector, namespaceSelector, or ipBlock), ports (array with protocol and port)"
     type: array
+    required: false
+  - name: labels
+    label: Custom Labels
+    description: Additional labels to apply to the NetworkPolicy
+    type: object
     required: false

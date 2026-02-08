@@ -54,3 +54,8 @@ parameters:
         label: "Filesystem - Mount as a directory"
       - value: "Block"
         label: "Block - Expose as raw block device"
+  - name: labels
+    label: Custom Labels
+    description: Additional labels to apply to the PVC
+    type: object
+    required: false

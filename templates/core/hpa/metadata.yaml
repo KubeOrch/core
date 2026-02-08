@@ -82,3 +82,8 @@ parameters:
     type: number
     required: false
     default: 0
+  - name: labels
+    label: Custom Labels
+    description: Additional labels to apply to the HPA
+    type: object
+    required: false

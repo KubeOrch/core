@@ -89,3 +89,35 @@ parameters:
     description: CPU and memory limits/requests
     type: object
     required: false
+  - name: labels
+    label: Custom Labels
+    description: Additional labels to apply to the Job and its pods
+    type: object
+    required: false
+  - name: serviceAccountName
+    label: Service Account
+    description: ServiceAccount to use for the pods
+    type: string
+    required: false
+  - name: imagePullPolicy
+    label: Image Pull Policy
+    description: When to pull the container image
+    type: select
+    required: false
+    options:
+      - value: "Always"
+        label: "Always - Pull every time"
+      - value: "IfNotPresent"
+        label: "IfNotPresent - Pull only if not cached"
+      - value: "Never"
+        label: "Never - Use local image only"
+  - name: volumeMounts
+    label: Volume Mounts
+    description: "Volumes to mount into the container. Each item has: name (string), mountPath (string), type (configMap|secret|persistentVolumeClaim)"
+    type: array
+    required: false
+  - name: imagePullSecrets
+    label: Image Pull Secrets
+    description: Names of Kubernetes secrets for pulling images from private registries
+    type: array
+    required: false
