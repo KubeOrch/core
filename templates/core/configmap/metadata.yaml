@@ -1,0 +1,38 @@
+id: core/configmap
+name: configmap
+displayName: ConfigMap
+category: configuration
+description: Store non-sensitive configuration data as key-value pairs
+icon: FileSliders
+version: "1.0.0"
+tags:
+  - configuration
+  - config
+  - environment
+usageFrequency: high
+difficulty: easy
+dependencies: []
+parameters:
+  - name: name
+    label: ConfigMap Name
+    description: Name of the ConfigMap
+    type: string
+    required: true
+    default: "my-configmap"
+  - name: namespace
+    label: Namespace
+    description: Kubernetes namespace
+    type: string
+    required: false
+    default: "default"
+  - name: data
+    label: Configuration Data
+    description: Key-value pairs to store in the ConfigMap
+    type: object
+    required: false
+  - name: mountPath
+    label: Mount Path
+    description: Directory path where ConfigMap will be mounted in containers
+    type: string
+    required: false
+    default: "/etc/config"

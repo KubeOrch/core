@@ -1,0 +1,56 @@
+id: core/persistentvolumeclaim
+name: persistentvolumeclaim
+displayName: PersistentVolumeClaim
+category: storage
+description: Request persistent storage for your applications with flexible access modes and storage classes
+icon: HardDrive
+version: "1.0.0"
+tags:
+  - storage
+  - persistence
+  - volumes
+usageFrequency: high
+difficulty: easy
+dependencies: []
+parameters:
+  - name: name
+    label: PVC Name
+    description: Name of the PersistentVolumeClaim
+    type: string
+    required: true
+    default: "my-pvc"
+  - name: namespace
+    label: Namespace
+    description: Kubernetes namespace
+    type: string
+    required: false
+    default: "default"
+  - name: storageClassName
+    label: Storage Class
+    description: Name of the StorageClass to use (leave empty for cluster default)
+    type: string
+    required: false
+  - name: storage
+    label: Storage Size
+    description: Amount of storage to request (e.g., 1Gi, 10Gi, 100Gi)
+    type: string
+    required: true
+    default: "10Gi"
+  - name: accessModes
+    label: Access Modes
+    description: How the volume can be mounted (ReadWriteOnce, ReadOnlyMany, ReadWriteMany, ReadWriteOncePod)
+    type: array
+    required: true
+    default:
+      - "ReadWriteOnce"
+  - name: volumeMode
+    label: Volume Mode
+    description: Whether the volume is a filesystem or raw block device
+    type: select
+    required: false
+    default: "Filesystem"
+    options:
+      - value: "Filesystem"
+        label: "Filesystem - Mount as a directory"
+      - value: "Block"
+        label: "Block - Expose as raw block device"

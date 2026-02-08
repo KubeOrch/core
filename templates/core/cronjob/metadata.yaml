@@ -1,0 +1,106 @@
+id: core/cronjob
+name: cronjob
+displayName: CronJob
+category: core
+description: Schedule recurring tasks like backups, reports, and cleanup jobs
+icon: Clock
+version: "1.0.0"
+tags:
+  - scheduled
+  - cron
+  - batch
+usageFrequency: high
+difficulty: easy
+dependencies: []
+parameters:
+  - name: name
+    label: CronJob Name
+    description: Name of the Kubernetes CronJob
+    type: string
+    required: true
+    default: "my-cronjob"
+  - name: namespace
+    label: Namespace
+    description: Kubernetes namespace
+    type: string
+    required: false
+    default: "default"
+  - name: schedule
+    label: Schedule
+    description: Cron schedule expression (e.g., "0 2 * * *" for 2 AM daily)
+    type: string
+    required: true
+    default: "0 * * * *"
+  - name: image
+    label: Container Image
+    description: Docker image to run
+    type: string
+    required: true
+  - name: command
+    label: Command
+    description: Command to run in the container
+    type: array
+    required: false
+  - name: args
+    label: Arguments
+    description: Arguments to pass to the command
+    type: array
+    required: false
+  - name: concurrencyPolicy
+    label: Concurrency Policy
+    description: How to handle concurrent job executions
+    type: select
+    required: false
+    default: "Allow"
+    options:
+      - value: "Allow"
+        label: "Allow - Run concurrent jobs"
+      - value: "Forbid"
+        label: "Forbid - Skip if previous job running"
+      - value: "Replace"
+        label: "Replace - Replace previous job"
+  - name: suspend
+    label: Suspend
+    description: Suspend the CronJob (no new jobs will be created)
+    type: boolean
+    required: false
+    default: false
+  - name: successfulJobsHistoryLimit
+    label: Successful Jobs History Limit
+    description: Number of successful jobs to keep
+    type: number
+    required: false
+    default: 3
+  - name: failedJobsHistoryLimit
+    label: Failed Jobs History Limit
+    description: Number of failed jobs to keep
+    type: number
+    required: false
+    default: 1
+  - name: backoffLimit
+    label: Backoff Limit
+    description: Number of retries before marking job as failed
+    type: number
+    required: false
+    default: 6
+  - name: restartPolicy
+    label: Restart Policy
+    description: Pod restart policy
+    type: select
+    required: false
+    default: "OnFailure"
+    options:
+      - value: "Never"
+        label: "Never - Do not restart"
+      - value: "OnFailure"
+        label: "OnFailure - Restart on failure"
+  - name: env
+    label: Environment Variables
+    description: Environment variables for the container
+    type: object
+    required: false
+  - name: resources
+    label: Resource Limits
+    description: CPU and memory limits/requests
+    type: object
+    required: false

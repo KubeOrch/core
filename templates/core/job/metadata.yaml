@@ -1,0 +1,91 @@
+id: core/job
+name: job
+displayName: Job
+category: core
+description: Run-to-completion tasks like database migrations, batch processing, and one-time scripts
+icon: PlayCircle
+version: "1.0.0"
+tags:
+  - batch
+  - migration
+  - one-time
+usageFrequency: high
+difficulty: easy
+dependencies: []
+parameters:
+  - name: name
+    label: Job Name
+    description: Name of the Kubernetes Job
+    type: string
+    required: true
+    default: "my-job"
+  - name: namespace
+    label: Namespace
+    description: Kubernetes namespace
+    type: string
+    required: false
+    default: "default"
+  - name: image
+    label: Container Image
+    description: Docker image to run (e.g., postgres:15, my-migration:v1)
+    type: string
+    required: true
+  - name: command
+    label: Command
+    description: Command to run in the container
+    type: array
+    required: false
+  - name: args
+    label: Arguments
+    description: Arguments to pass to the command
+    type: array
+    required: false
+  - name: completions
+    label: Completions
+    description: Number of successful completions required
+    type: number
+    required: false
+    default: 1
+  - name: parallelism
+    label: Parallelism
+    description: Maximum number of pods running at the same time
+    type: number
+    required: false
+    default: 1
+  - name: backoffLimit
+    label: Backoff Limit
+    description: Number of retries before marking job as failed
+    type: number
+    required: false
+    default: 6
+  - name: activeDeadlineSeconds
+    label: Active Deadline (seconds)
+    description: Maximum time the job can run
+    type: number
+    required: false
+  - name: ttlSecondsAfterFinished
+    label: TTL After Finished (seconds)
+    description: Time to keep the job after completion
+    type: number
+    required: false
+  - name: restartPolicy
+    label: Restart Policy
+    description: Pod restart policy
+    type: select
+    required: false
+    default: "Never"
+    options:
+      - value: "Never"
+        label: "Never - Do not restart"
+      - value: "OnFailure"
+        label: "OnFailure - Restart on failure"
+  - name: env
+    label: Environment Variables
+    description: Environment variables for the container
+    type: object
+    required: false
+  - name: resources
+    label: Resource Limits
+    description: CPU and memory limits/requests
+    type: object
+    required: false

@@ -58,6 +58,6 @@ tmp/
 CLAUDE.md
 
 # Build artifacts
-core
-main
-kubeorch-server
+/core
+/main
+/kubeorch-server

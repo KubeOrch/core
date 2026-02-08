@@ -1,0 +1,153 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace | default "default" }}
+  labels:
+    app: {{ .Name }}
+    managed-by: kubeorch
+    {{- range $key, $value := .Labels }}
+    {{ $key }}: {{ $value }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ .Name }}
+  {{- if .UpdateStrategy }}
+  updateStrategy:
+    type: {{ .UpdateStrategy }}
+    {{- if eq .UpdateStrategy "RollingUpdate" }}
+    rollingUpdate:
+      maxUnavailable: {{ .MaxUnavailable | default 1 }}
+    {{- end }}
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Name }}
+        {{- range $key, $value := .Labels }}
+        {{ $key }}: {{ $value }}
+        {{- end }}
+    spec:
+      {{- if .ServiceAccountName }}
+      serviceAccountName: {{ .ServiceAccountName }}
+      {{- end }}
+      {{- if .NodeSelector }}
+      nodeSelector:
+        {{- range $key, $value := .NodeSelector }}
+        {{ $key }}: {{ $value | quote }}
+        {{- end }}
+      {{- end }}
+      {{- if .Tolerations }}
+      tolerations:
+      {{- range .Tolerations }}
+      - key: {{ .Key | quote }}
+        operator: {{ .Operator | default "Equal" }}
+        {{- if .Value }}
+        value: {{ .Value | quote }}
+        {{- end }}
+        effect: {{ .Effect }}
+        {{- if .TolerationSeconds }}
+        tolerationSeconds: {{ .TolerationSeconds }}
+        {{- end }}
+      {{- end }}
+      {{- end }}
+      {{- if .HostNetwork }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      {{- if .HostPID }}
+      hostPID: true
+      {{- end }}
+      containers:
+      - name: {{ .Name }}
+        image: {{ .Image }}
+        {{- if .ImagePullPolicy }}
+        imagePullPolicy: {{ .ImagePullPolicy }}
+        {{- end }}
+        {{- if .Port }}
+        ports:
+        - containerPort: {{ .Port }}
+          protocol: TCP
+          name: http
+        {{- end }}
+        {{- if .Env }}
+        env:
+        {{- range $key, $value := .Env }}
+        - name: {{ $key }}
+          value: {{ $value | quote }}
+        {{- end }}
+        {{- end }}
+        {{- if .Resources }}
+        resources:
+          {{- if .Resources.Requests }}
+          requests:
+            {{- if .Resources.Requests.Memory }}
+            memory: {{ .Resources.Requests.Memory }}
+            {{- end }}
+            {{- if .Resources.Requests.CPU }}
+            cpu: {{ .Resources.Requests.CPU }}
+            {{- end }}
+          {{- end }}
+          {{- if .Resources.Limits }}
+          limits:
+            {{- if .Resources.Limits.Memory }}
+            memory: {{ .Resources.Limits.Memory }}
+            {{- end }}
+            {{- if .Resources.Limits.CPU }}
+            cpu: {{ .Resources.Limits.CPU }}
+            {{- end }}
+          {{- end }}
+        {{- end }}
+        {{- if .VolumeMounts }}
+        volumeMounts:
+        {{- range .VolumeMounts }}
+        - name: {{ .Name }}-volume
+          mountPath: {{ .MountPath }}
+          {{- if or (eq .Type "configMap") (eq .Type "secret") }}
+          readOnly: true
+          {{- end }}
+        {{- end }}
+        {{- end }}
+        {{- if .SecurityContext }}
+        securityContext:
+          {{- if .SecurityContext.Privileged }}
+          privileged: {{ .SecurityContext.Privileged }}
+          {{- end }}
+          {{- if .SecurityContext.RunAsUser }}
+          runAsUser: {{ .SecurityContext.RunAsUser }}
+          {{- end }}
+          {{- if .SecurityContext.Capabilities }}
+          capabilities:
+            add:
+            {{- range .SecurityContext.Capabilities }}
+            - {{ . }}
+            {{- end }}
+          {{- end }}
+        {{- end }}
+      {{- if .ImagePullSecrets }}
+      imagePullSecrets:
+      {{- range .ImagePullSecrets }}
+      - name: {{ . }}
+      {{- end }}
+      {{- end }}
+      {{- if .VolumeMounts }}
+      volumes:
+      {{- range .VolumeMounts }}
+      - name: {{ .Name }}-volume
+        {{- if eq .Type "configMap" }}
+        configMap:
+          name: {{ .Name }}
+        {{- else if eq .Type "secret" }}
+        secret:
+          secretName: {{ .Name }}
+        {{- else if eq .Type "hostPath" }}
+        hostPath:
+          path: {{ .HostPath }}
+          type: {{ .HostPathType | default "Directory" }}
+        {{- else if eq .Type "persistentVolumeClaim" }}
+        persistentVolumeClaim:
+          claimName: {{ .Name }}
+        {{- end }}
+      {{- end }}
+      {{- end }}

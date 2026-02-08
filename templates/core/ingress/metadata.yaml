@@ -1,0 +1,106 @@
+id: core/ingress
+name: ingress
+displayName: Ingress
+category: networking
+description: Expose HTTP/HTTPS routes to services with host-based and path-based routing
+icon: Globe
+version: "1.0.0"
+tags:
+  - networking
+  - routing
+  - http
+  - https
+  - load-balancer
+usageFrequency: high
+difficulty: medium
+dependencies: []
+parameters:
+  - name: name
+    label: Ingress Name
+    description: Name of the Kubernetes Ingress
+    type: string
+    required: true
+    default: "my-ingress"
+  - name: namespace
+    label: Namespace
+    description: Kubernetes namespace
+    type: string
+    required: false
+    default: "default"
+  - name: ingressClassName
+    label: Ingress Class
+    description: Ingress controller class to use
+    type: select
+    required: false
+    default: "nginx"
+    options:
+      - value: "nginx"
+        label: "nginx - NGINX Ingress Controller"
+      - value: "traefik"
+        label: "traefik - Traefik Ingress Controller"
+      - value: "alb"
+        label: "alb - AWS Application Load Balancer"
+      - value: "gce"
+        label: "gce - Google Cloud Load Balancer"
+  - name: host
+    label: Hostname
+    description: Optional hostname for routing (leave empty for any host)
+    type: string
+    required: false
+  - name: path
+    label: Path
+    description: URL path to match
+    type: string
+    required: true
+    default: "/"
+  - name: pathType
+    label: Path Type
+    description: How to match the path
+    type: select
+    required: false
+    default: "Prefix"
+    options:
+      - value: "Prefix"
+        label: "Prefix - Match path prefix"
+      - value: "Exact"
+        label: "Exact - Match exact path"
+      - value: "ImplementationSpecific"
+        label: "ImplementationSpecific - Controller-defined matching"
+  - name: serviceName
+    label: Service Name
+    description: Name of the backend service to route traffic to
+    type: string
+    required: true
+  - name: servicePort
+    label: Service Port
+    description: Port of the backend service
+    type: number
+    required: true
+    default: 80
+  - name: tlsEnabled
+    label: Enable TLS
+    description: Enable HTTPS/TLS termination
+    type: boolean
+    required: false
+    default: false
+  - name: tlsSecretName
+    label: TLS Secret Name
+    description: Kubernetes secret containing TLS certificate and key
+    type: string
+    required: false
+    dependsOn:
+      field: tlsEnabled
+      value: true
+  - name: tlsHosts
+    label: TLS Hosts
+    description: List of hosts covered by the TLS certificate
+    type: array
+    required: false
+    dependsOn:
+      field: tlsEnabled
+      value: true
+  - name: annotations
+    label: Annotations
+    description: Custom annotations for controller-specific configurations
+    type: object
+    required: false

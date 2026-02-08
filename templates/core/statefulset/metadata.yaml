@@ -1,0 +1,61 @@
+id: core/statefulset
+name: statefulset
+displayName: StatefulSet
+category: core
+description: Deploy stateful applications like databases (PostgreSQL, MongoDB), message queues (Kafka), and caches (Redis clusters) with stable network identities and persistent storage
+icon: Database
+version: "1.0.0"
+tags:
+  - stateful
+  - database
+  - persistence
+  - storage
+usageFrequency: high
+difficulty: medium
+dependencies: []
+parameters:
+  - name: name
+    label: StatefulSet Name
+    description: Name of the StatefulSet
+    type: string
+    required: true
+    default: "my-statefulset"
+  - name: namespace
+    label: Namespace
+    description: Kubernetes namespace
+    type: string
+    required: false
+    default: "default"
+  - name: serviceName
+    label: Headless Service Name
+    description: Name of the headless service for stable network identities (required for DNS)
+    type: string
+    required: true
+  - name: image
+    label: Docker Image
+    description: Container image to deploy
+    type: string
+    required: true
+    default: "postgres:15"
+  - name: replicas
+    label: Replicas
+    description: Number of pod replicas
+    type: number
+    required: false
+    default: 1
+  - name: port
+    label: Container Port
+    description: Port the container listens on
+    type: number
+    required: false
+    default: 5432
+  - name: resources
+    label: Resource Configuration
+    description: CPU and memory limits/requests
+    type: object
+    required: false
+  - name: volumeClaimTemplates
+    label: Volume Claim Templates
+    description: Persistent volume claims for each pod replica
+    type: array
+    required: false
