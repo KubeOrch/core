@@ -21,6 +21,8 @@ var (
 	WorkflowColl        *mongo.Collection
 	WorkflowRunColl     *mongo.Collection
 	WorkflowVersionColl *mongo.Collection
+	OAuthStateColl      *mongo.Collection
+	OAuthCodeColl       *mongo.Collection
 )
 
 func Connect() error {
@@ -62,6 +64,8 @@ func Connect() error {
 	WorkflowColl = Database.Collection("workflows")
 	WorkflowRunColl = Database.Collection("workflow_runs")
 	WorkflowVersionColl = Database.Collection("workflow_versions")
+	OAuthStateColl = Database.Collection("oauth_states")
+	OAuthCodeColl = Database.Collection("oauth_codes")
 
 	logrus.Info("MongoDB connection established")
 
@@ -111,6 +115,41 @@ func createIndexes() error {
 	_, err = WorkflowVersionColl.Indexes().CreateMany(ctx, versionIndexes)
 	if err != nil {
 		return fmt.Errorf("failed to create workflow version indexes: %v", err)
+	}
+
+	// Sparse compound index on users for OAuth provider lookup
+	providerIndex := mongo.IndexModel{
+		Keys: bson.D{
+			{Key: "auth_provider", Value: 1},
+			{Key: "provider_user_id", Value: 1},
+		},
+		Options: options.Index().SetSparse(true),
+	}
+	_, err = UserColl.Indexes().CreateOne(ctx, providerIndex)
+	if err != nil {
+		return fmt.Errorf("failed to create provider index: %v", err)
+	}
+
+	// TTL index on oauth_states — auto-delete after 10 minutes
+	oauthStateTTL := int32(600)
+	stateIndex := mongo.IndexModel{
+		Keys:    bson.D{{Key: "created_at", Value: 1}},
+		Options: options.Index().SetExpireAfterSeconds(oauthStateTTL),
+	}
+	_, err = OAuthStateColl.Indexes().CreateOne(ctx, stateIndex)
+	if err != nil {
+		return fmt.Errorf("failed to create oauth_states TTL index: %v", err)
+	}
+
+	// TTL index on oauth_codes — auto-delete after 30 seconds
+	oauthCodeTTL := int32(30)
+	codeIndex := mongo.IndexModel{
+		Keys:    bson.D{{Key: "created_at", Value: 1}},
+		Options: options.Index().SetExpireAfterSeconds(oauthCodeTTL),
+	}
+	_, err = OAuthCodeColl.Indexes().CreateOne(ctx, codeIndex)
+	if err != nil {
+		return fmt.Errorf("failed to create oauth_codes TTL index: %v", err)
 	}
 
 	logrus.Info("Database indexes created successfully")

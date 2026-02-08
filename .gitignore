@@ -60,3 +60,4 @@ CLAUDE.md
 # Build artifacts
 core
 main
+kubeorch-server

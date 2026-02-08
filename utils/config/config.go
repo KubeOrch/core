@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 
+	"github.com/KubeOrch/core/models"
 	"github.com/fsnotify/fsnotify"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
@@ -79,4 +81,62 @@ func GetTokenRefreshMaxAgeDays() int {
 
 func GetLogLevel() string {
 	return viper.GetString("LOG_LEVEL")
+}
+
+func GetBaseURL() string {
+	return viper.GetString("BASE_URL")
+}
+
+func GetFrontendURL() string {
+	return viper.GetString("FRONTEND_URL")
+}
+
+func GetAuthBuiltinEnabled() bool {
+	if !viper.IsSet("AUTH.BUILTIN.ENABLED") {
+		return true
+	}
+	return viper.GetBool("AUTH.BUILTIN.ENABLED")
+}
+
+func GetAuthSignupEnabled() bool {
+	if !viper.IsSet("AUTH.BUILTIN.SIGNUP_ENABLED") {
+		return true
+	}
+	return viper.GetBool("AUTH.BUILTIN.SIGNUP_ENABLED")
+}
+
+func GetAuthAllowedDomains() []string {
+	return viper.GetStringSlice("AUTH.BUILTIN.ALLOWED_DOMAINS")
+}
+
+func GetOAuthProviders() []models.OAuthProvider {
+	var authConfig struct {
+		Providers []models.OAuthProvider `mapstructure:"PROVIDERS"`
+	}
+	if err := viper.UnmarshalKey("AUTH", &authConfig); err != nil {
+		log.Errorf("Failed to decode OAuth providers config: %v", err)
+		return nil
+	}
+	return authConfig.Providers
+}
+
+func GetEnabledOAuthProviders() []models.OAuthProvider {
+	all := GetOAuthProviders()
+	var enabled []models.OAuthProvider
+	for _, p := range all {
+		if p.Enabled {
+			enabled = append(enabled, p)
+		}
+	}
+	return enabled
+}
+
+func GetOAuthProviderByName(name string) (*models.OAuthProvider, error) {
+	providers := GetEnabledOAuthProviders()
+	for i := range providers {
+		if providers[i].Name == name {
+			return &providers[i], nil
+		}
+	}
+	return nil, fmt.Errorf("provider %q not found or not enabled", name)
 }

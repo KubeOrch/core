@@ -12,3 +12,48 @@ MONGO_URI: "mongodb://username:password@localhost:27017/kubeorch?directConnectio
 PORT: 3000
 REGENERATE_INVITE_AFTER_SIGNUP: true
 TOKEN_REFRESH_MAX_AGE_DAYS: 7
+
+# Backend external URL (required for OAuth callback URLs)
+BASE_URL: "http://localhost:3000"
+# Frontend URL (required for OAuth post-auth redirects)
+FRONTEND_URL: "http://localhost:3001"
+
+# Authentication Configuration
+# If this section is omitted, only builtin email/password auth is enabled (default behavior)
+# AUTH:
+#   BUILTIN:
+#     ENABLED: true           # Enable/disable email+password login
+#     SIGNUP_ENABLED: true    # Enable/disable the registration form
+#     ALLOWED_DOMAINS: ["company.com"]  # Restrict signup to specific email domains
+#   PROVIDERS:
+#     # OIDC provider example (Authentik, Keycloak, Okta, etc.)
+#     - NAME: "authentik"                    # URL-safe slug, used in route paths
+#       DISPLAY_NAME: "Authentik SSO"        # Button label shown on login page
+#       TYPE: "oidc"                         # "oidc" auto-discovers endpoints via .well-known
+#       ENABLED: true
+#       CLIENT_ID: "your-client-id"
+#       CLIENT_SECRET: "your-client-secret"
+#       ISSUER_URL: "https://auth.example.com/application/o/kubeorch/"
+#       SCOPES: ["openid", "profile", "email"]
+#       ICON: "lock"                         # lucide icon name for the button
+#       # Optional: restrict to specific email domains (enforced server-side)
+#       # ALLOWED_DOMAINS: ["company.com", "subsidiary.com"]
+#       # Optional: map non-standard claim names
+#       # CLAIM_MAPPINGS:
+#       #   EMAIL: "email"
+#       #   NAME: "preferred_username"
+#
+#     # OAuth2 provider example (GitHub, GitLab, etc.)
+#     - NAME: "github"
+#       DISPLAY_NAME: "GitHub"
+#       TYPE: "oauth2"                       # Requires explicit endpoint URLs
+#       ENABLED: true
+#       CLIENT_ID: "your-github-client-id"
+#       CLIENT_SECRET: "your-github-client-secret"
+#       AUTHORIZATION_URL: "https://github.com/login/oauth/authorize"
+#       TOKEN_URL: "https://github.com/login/oauth/access_token"
+#       USERINFO_URL: "https://api.github.com/user"
+#       SCOPES: ["user:email"]
+#       # Optional: only allow GitHub users with specific email domains
+#       # ALLOWED_DOMAINS: ["company.com"]
+#       ICON: "github"
