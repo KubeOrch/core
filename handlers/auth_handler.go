@@ -36,6 +36,17 @@ func RegisterHandler(c *gin.Context) {
 		return
 	}
 
+	// Check email domain restriction
+	allowedDomains := config.GetAuthAllowedDomains()
+	if len(allowedDomains) > 0 {
+		if err := services.ValidateEmailAgainstDomains(req.Email, allowedDomains); err != nil {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error": "Your email domain is not authorized to register",
+			})
+			return
+		}
+	}
+
 	// Check if user already exists
 	exists, err := services.UserExistsByEmail(req.Email)
 	if err != nil {

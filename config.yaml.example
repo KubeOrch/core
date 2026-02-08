@@ -24,6 +24,7 @@ FRONTEND_URL: "http://localhost:3001"
 #   BUILTIN:
 #     ENABLED: true           # Enable/disable email+password login
 #     SIGNUP_ENABLED: true    # Enable/disable the registration form
+#     ALLOWED_DOMAINS: ["company.com"]  # Restrict signup to specific email domains
 #   PROVIDERS:
 #     # OIDC provider example (Authentik, Keycloak, Okta, etc.)
 #     - NAME: "authentik"                    # URL-safe slug, used in route paths

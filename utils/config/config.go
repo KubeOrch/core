@@ -105,6 +105,10 @@ func GetAuthSignupEnabled() bool {
 	return viper.GetBool("AUTH.BUILTIN.SIGNUP_ENABLED")
 }
 
+func GetAuthAllowedDomains() []string {
+	return viper.GetStringSlice("AUTH.BUILTIN.ALLOWED_DOMAINS")
+}
+
 func GetOAuthProviders() []models.OAuthProvider {
 	var authConfig struct {
 		Providers []models.OAuthProvider `mapstructure:"PROVIDERS"`

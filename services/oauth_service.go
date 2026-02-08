@@ -222,10 +222,10 @@ func FetchOAuthUserInfo(provider *models.OAuthProvider, token *oauth2.Token) (em
 	return email, name, providerUserID, nil
 }
 
-// ValidateEmailDomain checks if the email's domain is in the provider's allowed domains list.
-// If no allowed domains are configured, all domains are permitted.
-func ValidateEmailDomain(provider *models.OAuthProvider, email string) error {
-	if len(provider.AllowedDomains) == 0 {
+// ValidateEmailAgainstDomains checks if the email's domain is in the allowed list.
+// Returns nil if the list is empty (all domains permitted) or if the domain matches.
+func ValidateEmailAgainstDomains(email string, allowedDomains []string) error {
+	if len(allowedDomains) == 0 {
 		return nil
 	}
 
@@ -235,13 +235,21 @@ func ValidateEmailDomain(provider *models.OAuthProvider, email string) error {
 	}
 	domain := strings.ToLower(parts[1])
 
-	for _, allowed := range provider.AllowedDomains {
+	for _, allowed := range allowedDomains {
 		if strings.ToLower(allowed) == domain {
 			return nil
 		}
 	}
 
-	return fmt.Errorf("email domain %q is not allowed for provider %s", domain, provider.Name)
+	return fmt.Errorf("email domain %q is not allowed", domain)
+}
+
+// ValidateEmailDomain checks the email against a provider's allowed domains list.
+func ValidateEmailDomain(provider *models.OAuthProvider, email string) error {
+	if len(provider.AllowedDomains) == 0 {
+		return nil
+	}
+	return ValidateEmailAgainstDomains(email, provider.AllowedDomains)
 }
 
 // FindOrCreateOAuthUser finds an existing user or creates a new one for an OAuth login
