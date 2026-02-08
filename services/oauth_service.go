@@ -48,7 +48,7 @@ func DiscoverOIDC(issuerURL string) (*OIDCDiscovery, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch OIDC discovery: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("OIDC discovery returned status %d", resp.StatusCode)
@@ -192,7 +192,7 @@ func FetchOAuthUserInfo(provider *models.OAuthProvider, token *oauth2.Token) (em
 	if err != nil {
 		return "", "", "", fmt.Errorf("failed to fetch userinfo: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -263,13 +263,17 @@ func FindOrCreateOAuthUser(email, name, providerName, providerUserID string) (*m
 	// 2. Try to find by email (account linking)
 	user, err = GetUserByEmail(email)
 	if err == nil {
-		// Link the OAuth provider to the existing account
-		user.AuthProvider = providerName
-		user.ProviderUserID = providerUserID
-		if updateErr := UpdateUser(user); updateErr != nil {
-			logrus.Warnf("Failed to link OAuth provider to existing user %s: %v", email, updateErr)
+		// Only link if the account is password-only (no existing provider).
+		// If already linked to a provider, reject to prevent account takeover.
+		if user.AuthProvider == "" {
+			user.AuthProvider = providerName
+			user.ProviderUserID = providerUserID
+			if updateErr := UpdateUser(user); updateErr != nil {
+				logrus.Warnf("Failed to link OAuth provider to existing user %s: %v", email, updateErr)
+			}
+			return user, false, nil
 		}
-		return user, false, nil
+		return nil, false, fmt.Errorf("user with email %s is already linked to a provider", email)
 	}
 
 	// 3. Create new user
@@ -346,17 +350,8 @@ func parseJWTPayload(tokenString string) (map[string]interface{}, error) {
 		return nil, errors.New("invalid JWT format")
 	}
 
-	// Decode the payload (second part)
-	payload := parts[1]
-	// Add padding if needed
-	switch len(payload) % 4 {
-	case 2:
-		payload += "=="
-	case 3:
-		payload += "="
-	}
-
-	decoded, err := base64.URLEncoding.DecodeString(payload)
+	// Decode the payload (second part) using RawURLEncoding (no padding, as per JWT spec)
+	decoded, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode JWT payload: %w", err)
 	}
@@ -407,7 +402,7 @@ func fetchGitHubEmail(client *http.Client) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var emails []struct {
 		Email    string `json:"email"`
