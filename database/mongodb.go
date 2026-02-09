@@ -23,6 +23,7 @@ var (
 	WorkflowVersionColl *mongo.Collection
 	OAuthStateColl      *mongo.Collection
 	OAuthCodeColl       *mongo.Collection
+	DashboardStatsColl  *mongo.Collection
 )
 
 func Connect() error {
@@ -66,6 +67,7 @@ func Connect() error {
 	WorkflowVersionColl = Database.Collection("workflow_versions")
 	OAuthStateColl = Database.Collection("oauth_states")
 	OAuthCodeColl = Database.Collection("oauth_codes")
+	DashboardStatsColl = Database.Collection("dashboard_stats")
 
 	logrus.Info("MongoDB connection established")
 

@@ -63,6 +63,10 @@ func SetupRouter() *gin.Engine {
 		}
 
 
+		// Dashboard routes
+		protected.GET("/dashboard/recent-workflows", handlers.RecentWorkflowsHandler)
+		protected.GET("/dashboard/stats", handlers.DashboardStatsHandler)
+
 		// Workflow routes
 		workflows := protected.Group("/workflows")
 		{
