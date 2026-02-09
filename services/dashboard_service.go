@@ -145,28 +145,20 @@ func GetDashboardStats() (*models.DashboardStatsResponse, error) {
 
 // buildResponse converts raw stats + optional previous month into the API response.
 func buildResponse(current models.StatsSnapshot, previous *models.StatsSnapshot) *models.DashboardStatsResponse {
+	if previous == nil {
+		return &models.DashboardStatsResponse{
+			TotalWorkflows:     makeStat(current.TotalWorkflows, nil),
+			PublishedWorkflows: makeStat(current.PublishedWorkflows, nil),
+			TotalRuns:          makeStat(current.TotalRuns, nil),
+			SuccessRate:        makeFloatStat(current.SuccessRate, nil),
+		}
+	}
 	return &models.DashboardStatsResponse{
-		TotalWorkflows:     makeStat(current.TotalWorkflows, intPtr(previous, func(s *models.StatsSnapshot) int { return s.TotalWorkflows })),
-		PublishedWorkflows: makeStat(current.PublishedWorkflows, intPtr(previous, func(s *models.StatsSnapshot) int { return s.PublishedWorkflows })),
-		TotalRuns:          makeStat(current.TotalRuns, intPtr(previous, func(s *models.StatsSnapshot) int { return s.TotalRuns })),
-		SuccessRate:        makeFloatStat(current.SuccessRate, floatPtr(previous, func(s *models.StatsSnapshot) float64 { return s.SuccessRate })),
+		TotalWorkflows:     makeStat(current.TotalWorkflows, &previous.TotalWorkflows),
+		PublishedWorkflows: makeStat(current.PublishedWorkflows, &previous.PublishedWorkflows),
+		TotalRuns:          makeStat(current.TotalRuns, &previous.TotalRuns),
+		SuccessRate:        makeFloatStat(current.SuccessRate, &previous.SuccessRate),
 	}
-}
-
-func intPtr(s *models.StatsSnapshot, fn func(*models.StatsSnapshot) int) *int {
-	if s == nil {
-		return nil
-	}
-	v := fn(s)
-	return &v
-}
-
-func floatPtr(s *models.StatsSnapshot, fn func(*models.StatsSnapshot) float64) *float64 {
-	if s == nil {
-		return nil
-	}
-	v := fn(s)
-	return &v
 }
 
 func makeStat(current int, previous *int) models.StatChange {

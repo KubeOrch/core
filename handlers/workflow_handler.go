@@ -656,7 +656,13 @@ func RecentWorkflowsHandler(c *gin.Context) {
 		return
 	}
 
-	workflows, err := services.GetRecentWorkflows(userID, 5)
+	limitStr := c.DefaultQuery("limit", "5")
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil || limit < 1 || limit > 20 {
+		limit = 5
+	}
+
+	workflows, err := services.GetRecentWorkflows(userID, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get recent workflows"})
 		return
