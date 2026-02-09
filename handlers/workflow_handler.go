@@ -649,6 +649,22 @@ func GetTemplatesHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"templates": allTemplates})
 }
 
+// RecentWorkflowsHandler returns the most recently updated workflows for the dashboard
+func RecentWorkflowsHandler(c *gin.Context) {
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
+		return
+	}
+
+	workflows, err := services.GetRecentWorkflows(userID, 5)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get recent workflows"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"workflows": workflows})
+}
+
 // StreamWorkflowStatusHandler streams real-time workflow status updates via Server-Sent Events (SSE)
 func StreamWorkflowStatusHandler(c *gin.Context) {
 	userID, ok := getUserIDFromContext(c)

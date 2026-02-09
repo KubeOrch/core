@@ -289,6 +289,44 @@ func GetWorkflowRuns(workflowID primitive.ObjectID, limit int) ([]models.Workflo
 	return runs, nil
 }
 
+// GetRecentWorkflows returns the most recently updated workflows for a user,
+// excluding heavy fields (nodes, edges, versions) for dashboard use.
+func GetRecentWorkflows(ownerID primitive.ObjectID, limit int) ([]models.Workflow, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	filter := bson.M{
+		"owner_id":   ownerID,
+		"deleted_at": nil,
+	}
+
+	opts := options.Find().
+		SetSort(bson.D{{Key: "updated_at", Value: -1}}).
+		SetLimit(int64(limit)).
+		SetProjection(bson.M{
+			"nodes":    0,
+			"edges":    0,
+			"versions": 0,
+		})
+
+	cursor, err := database.WorkflowColl.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := cursor.Close(ctx); err != nil {
+			logrus.WithError(err).Warn("Failed to close cursor")
+		}
+	}()
+
+	var workflows []models.Workflow
+	if err = cursor.All(ctx, &workflows); err != nil {
+		return nil, err
+	}
+
+	return workflows, nil
+}
+
 // GetWorkflowsByUserAndCluster gets all workflows for a user that use a specific cluster
 func GetWorkflowsByUserAndCluster(ownerID primitive.ObjectID, clusterID string) ([]models.Workflow, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
