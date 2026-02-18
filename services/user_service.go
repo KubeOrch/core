@@ -202,6 +202,22 @@ func UpdateUserName(id primitive.ObjectID, name string) (*models.User, error) {
 		}
 		return nil, err
 	}
-	
+
 	return &user, nil
+}
+
+func UpdateUserPassword(id primitive.ObjectID, hashedPassword string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	filter := bson.M{"_id": id, "deleted_at": nil}
+	update := bson.M{
+		"$set": bson.M{
+			"password":   hashedPassword,
+			"updated_at": time.Now(),
+		},
+	}
+
+	_, err := database.UserColl.UpdateOne(ctx, filter, update)
+	return err
 }

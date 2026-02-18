@@ -48,6 +48,7 @@ func SetupRouter() *gin.Engine {
 		{
 			protected.GET("/profile", handlers.GetProfileHandler)
 			protected.PUT("/profile", handlers.UpdateProfileHandler)
+			protected.PUT("/profile/password", handlers.ChangePasswordHandler)
 
 			// Search route
 			protected.GET("/search", handlers.SearchHandler)
@@ -177,6 +178,56 @@ func SetupRouter() *gin.Engine {
 			builds.GET("/:id", handlers.GetBuildHandler)
 			builds.GET("/:id/stream", handlers.StreamBuildLogsHandler)
 			builds.POST("/:id/cancel", handlers.CancelBuildHandler)
+		}
+
+		// Alert routes (monitoring)
+		alertHandler := handlers.NewAlertHandler()
+		alerts := protected.Group("/alerts")
+		{
+			alerts.GET("/overview", alertHandler.GetOverview)
+			alerts.GET("/rules", alertHandler.ListRules)
+			alerts.POST("/rules", alertHandler.CreateRule)
+			alerts.GET("/rules/:id", alertHandler.GetRule)
+			alerts.PUT("/rules/:id", alertHandler.UpdateRule)
+			alerts.DELETE("/rules/:id", alertHandler.DeleteRule)
+			alerts.PATCH("/rules/:id/toggle", alertHandler.ToggleRule)
+			alerts.GET("/templates", alertHandler.ListTemplates)
+			alerts.POST("/templates/:templateId/enable", alertHandler.EnableTemplate)
+			alerts.GET("/events", alertHandler.ListEvents)
+			alerts.PATCH("/events/:id/acknowledge", alertHandler.AcknowledgeEvent)
+			alerts.PATCH("/events/:id/resolve", alertHandler.ResolveEvent)
+			alerts.GET("/stream", alertHandler.StreamAlerts)
+			alerts.POST("/test-fire", alertHandler.FireTestAlert)
+		}
+
+		// Notification channel routes (integrations)
+		notifHandler := handlers.NewNotificationHandler()
+		notifications := protected.Group("/notifications")
+		{
+			notifications.GET("/channels", notifHandler.ListChannels)
+			notifications.POST("/channels", notifHandler.CreateChannel)
+			notifications.GET("/channels/:id", notifHandler.GetChannel)
+			notifications.PUT("/channels/:id", notifHandler.UpdateChannel)
+			notifications.DELETE("/channels/:id", notifHandler.DeleteChannel)
+			notifications.POST("/channels/:id/test", notifHandler.TestChannel)
+		}
+
+		// Metrics routes (monitoring)
+		metricsHandler := handlers.NewMetricsHandler()
+		metrics := protected.Group("/metrics")
+		{
+			metrics.GET("/overview", metricsHandler.GetMetricsOverview)
+			metrics.GET("/resources", metricsHandler.GetResourceMetrics)
+		}
+
+		// User notification routes (in-app notifications)
+		userNotifications := protected.Group("/user-notifications")
+		{
+			userNotifications.GET("", handlers.ListUserNotificationsHandler)
+			userNotifications.GET("/unread-count", handlers.UserNotificationUnreadCountHandler)
+			userNotifications.GET("/stream", handlers.StreamUserNotificationsHandler)
+			userNotifications.PATCH("/:id/read", handlers.MarkUserNotificationReadHandler)
+			userNotifications.POST("/mark-all-read", handlers.MarkAllUserNotificationsReadHandler)
 		}
 
 		// Admin routes

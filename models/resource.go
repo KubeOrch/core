@@ -64,6 +64,8 @@ type Resource struct {
 	OwnerReferences  []OwnerReference   `bson:"ownerReferences,omitempty" json:"ownerReferences,omitempty"`
 	Spec             ResourceSpec       `bson:"spec,omitempty" json:"spec,omitempty"`
 	Metadata         ResourceMetadata   `bson:"metadata,omitempty" json:"metadata,omitempty"`
+	WorkflowID       *primitive.ObjectID `bson:"workflowId,omitempty" json:"workflowId,omitempty"`       // Workflow that deployed this resource
+	WorkflowName     string             `bson:"workflowName,omitempty" json:"workflowName,omitempty"`   // Name of the deploying workflow
 	UserTags         []string           `bson:"userTags,omitempty" json:"userTags,omitempty"`           // User-added tags
 	UserNotes        string             `bson:"userNotes,omitempty" json:"userNotes,omitempty"`         // User notes
 	IsFavorite       bool               `bson:"isFavorite" json:"isFavorite"`                           // User favorite

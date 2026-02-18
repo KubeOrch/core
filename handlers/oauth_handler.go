@@ -162,12 +162,13 @@ func OAuthCallbackHandler(c *gin.Context) {
 
 	// Store a one-time exchange code (the frontend will exchange it for the JWT)
 	exchangeUser := models.OAuthExchangeUser{
-		ID:        user.ID.Hex(),
-		Email:     user.Email,
-		Name:      user.Name,
-		Role:      string(user.Role),
-		AvatarURL: utils.GetGravatarURL(user.Email, 200),
-		CreatedAt: user.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		ID:           user.ID.Hex(),
+		Email:        user.Email,
+		Name:         user.Name,
+		Role:         string(user.Role),
+		AvatarURL:    utils.GetGravatarURL(user.Email, 200),
+		CreatedAt:    user.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		AuthProvider: providerName,
 	}
 
 	exchangeCode, err := services.StoreExchangeCode(jwtToken, exchangeUser)

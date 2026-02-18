@@ -87,6 +87,17 @@ func (e *WorkflowExecutor) ExecuteWorkflow(ctx context.Context, workflowID primi
 		return nil, fmt.Errorf("failed to save workflow run: %w", err)
 	}
 
+	// Send failure notification if workflow doesn't complete successfully
+	defer func() {
+		if workflowRun.Status == models.WorkflowRunStatusFailed {
+			link := fmt.Sprintf("/dashboard/workflow/%s", workflowID.Hex())
+			_, _ = CreateNotification(userID, models.NotificationWorkflowFailed,
+				"Workflow failed",
+				fmt.Sprintf("'%s' failed to deploy", workflow.Name),
+				link, workflowID.Hex())
+		}
+	}()
+
 	cluster, err := e.getClusterForWorkflow(ctx, workflow.ClusterID, userID)
 	if err != nil {
 		e.updateWorkflowRunStatus(workflowRun, models.WorkflowRunStatusFailed, err.Error())
@@ -235,6 +246,9 @@ func (e *WorkflowExecutor) ExecuteWorkflow(ctx context.Context, workflowID primi
 			}
 			executedNodeData[node.ID] = node.Data
 		}
+
+		// Link the deployed resource to this workflow in the database
+		e.linkNodeResourceToWorkflow(ctx, node, userID, cluster.Name, workflowID, workflow.Name)
 	}
 	completedAt := time.Now()
 	workflowRun.CompletedAt = &completedAt
@@ -244,7 +258,56 @@ func (e *WorkflowExecutor) ExecuteWorkflow(ctx context.Context, workflowID primi
 	// Update workflow statistics
 	e.updateWorkflowStats(workflowID, true)
 
+	// Send success notification
+	link := fmt.Sprintf("/dashboard/workflow/%s", workflowID.Hex())
+	_, _ = CreateNotification(userID, models.NotificationWorkflowDeployed,
+		"Workflow deployed",
+		fmt.Sprintf("'%s' deployed successfully", workflow.Name),
+		link, workflowID.Hex())
+
 	return workflowRun, nil
+}
+
+// nodeTypeToResourceType maps workflow node types to Kubernetes resource types
+var nodeTypeToResourceType = map[string]models.ResourceType{
+	"deployment":            models.ResourceTypeDeployment,
+	"service":               models.ResourceTypeService,
+	"ingress":               models.ResourceTypeIngress,
+	"configmap":             models.ResourceTypeConfigMap,
+	"secret":                models.ResourceTypeSecret,
+	"persistentvolumeclaim": models.ResourceTypePersistentVolumeClaim,
+	"statefulset":           models.ResourceTypeStatefulSet,
+	"job":                   models.ResourceTypeJob,
+	"cronjob":               models.ResourceTypeCronJob,
+	"daemonset":             models.ResourceTypeDaemonSet,
+	"hpa":                   models.ResourceTypeHPA,
+	"networkpolicy":         models.ResourceTypeNetworkPolicy,
+}
+
+// linkNodeResourceToWorkflow links a deployed resource to its workflow in the database
+func (e *WorkflowExecutor) linkNodeResourceToWorkflow(ctx context.Context, node *models.WorkflowNode, userID primitive.ObjectID, clusterName string, workflowID primitive.ObjectID, workflowName string) {
+	resourceType, ok := nodeTypeToResourceType[node.Type]
+	if !ok {
+		return // plugin or unknown type, skip
+	}
+
+	name, _ := node.Data["name"].(string)
+	if name == "" {
+		return
+	}
+
+	namespace, _ := node.Data["namespace"].(string)
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	if err := GetResourceService().LinkWorkflowToResource(ctx, userID, clusterName, namespace, name, resourceType, workflowID, workflowName); err != nil {
+		e.logger.WithError(err).WithFields(logrus.Fields{
+			"resource_name": name,
+			"namespace":     namespace,
+			"workflow_id":   workflowID.Hex(),
+		}).Warn("Failed to link resource to workflow (resource may not be synced yet)")
+	}
 }
 
 // buildNodeMap creates a map of node ID to node for quick lookup
@@ -2404,6 +2467,11 @@ func (e *WorkflowExecutor) updateWorkflowRunStatus(run *models.WorkflowRun, stat
 
 	if err := e.saveWorkflowRun(run); err != nil {
 		e.logger.WithError(err).Error("Failed to update workflow run status")
+	}
+
+	// Event-driven alert evaluation for failed workflow runs
+	if status == models.WorkflowRunStatusFailed {
+		go GetAlertEvaluator().EvaluateWorkflowEvent(run)
 	}
 }
 

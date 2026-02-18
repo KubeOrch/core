@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/KubeOrch/core/database"
@@ -56,8 +57,10 @@ func (r *ResourceRepository) CreateOrUpdate(ctx context.Context, resource *model
 		}
 		resource.ID = result.InsertedID.(primitive.ObjectID)
 
-		// Record creation in history
-		r.recordHistory(ctx, resource.ID, resource.UserID, "created", nil, "", resource.Status, "Resource discovered")
+		// Record creation in history with snapshot
+		snapshot := BuildCreationSnapshot(resource)
+		message := BuildCreationMessage(resource)
+		r.recordHistory(ctx, resource.ID, resource.UserID, "created", snapshot, "", resource.Status, message)
 		return nil
 	}
 
@@ -76,15 +79,51 @@ func (r *ResourceRepository) CreateOrUpdate(ctx context.Context, resource *model
 	resource.UserNotes = existing.UserNotes
 	resource.IsFavorite = existing.IsFavorite
 
-	// Track status change
-	if existing.Status != resource.Status {
-		r.recordHistory(ctx, existing.ID, resource.UserID, "status_changed", nil, existing.Status, resource.Status, "Status changed")
+	// Keep workflow linking fields
+	resource.WorkflowID = existing.WorkflowID
+	resource.WorkflowName = existing.WorkflowName
+
+	// Compute diff and track changes
+	diff := ComputeResourceDiff(&existing, resource)
+	statusChanged := existing.Status != resource.Status
+
+	if diff != nil && statusChanged {
+		// Both field changes and status change — merge into one entry
+		r.recordHistory(ctx, existing.ID, resource.UserID, diff.Action, diff.Changes, existing.Status, resource.Status,
+			fmt.Sprintf("%s (status: %s → %s)", diff.Message, existing.Status, resource.Status))
+	} else if diff != nil {
+		// Field changes only
+		r.recordHistory(ctx, existing.ID, resource.UserID, diff.Action, diff.Changes, "", "", diff.Message)
+	} else if statusChanged {
+		// Status change only
+		r.recordHistory(ctx, existing.ID, resource.UserID, "status_changed", nil, existing.Status, resource.Status,
+			fmt.Sprintf("Status changed from %s to %s", existing.Status, resource.Status))
 	}
 
 	// Update the resource
 	update := bson.M{"$set": resource}
 	_, err = r.collection.UpdateOne(ctx, filter, update)
 
+	return err
+}
+
+// LinkWorkflowToResource sets workflow fields on a matching resource
+func (r *ResourceRepository) LinkWorkflowToResource(ctx context.Context, userID primitive.ObjectID, clusterName, namespace, name string, resourceType models.ResourceType, workflowID primitive.ObjectID, workflowName string) error {
+	filter := bson.M{
+		"userId":      userID,
+		"clusterName": clusterName,
+		"namespace":   namespace,
+		"name":        name,
+		"type":        resourceType,
+		"deletedAt":   bson.M{"$exists": false},
+	}
+
+	update := bson.M{"$set": bson.M{
+		"workflowId":   workflowID,
+		"workflowName": workflowName,
+	}}
+
+	_, err := r.collection.UpdateOne(ctx, filter, update)
 	return err
 }
 
