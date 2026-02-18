@@ -92,6 +92,10 @@ func main() {
 	healthMonitor := services.NewClusterHealthMonitor(60 * time.Second)
 	healthMonitor.Start()
 
+	// Start alert evaluator with 60 second interval
+	alertEvaluator := services.NewAlertEvaluator(60 * time.Second)
+	alertEvaluator.Start()
+
 	// Resource sync monitor disabled - real-time watchers now handle status updates
 	// resourceSyncMonitor := services.NewResourceSyncMonitor(5 * time.Minute)
 	// resourceSyncMonitor.Start()
@@ -139,6 +143,10 @@ func main() {
 	sseBroadcaster := services.GetSSEBroadcaster()
 	sseBroadcaster.Close()
 	logrus.Info("SSE broadcaster stopped")
+
+	// Stop alert evaluator
+	alertEvaluator.Stop()
+	logrus.Info("Alert evaluator stopped")
 
 	// Stop health monitor
 	healthMonitor.Stop()

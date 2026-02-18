@@ -136,6 +136,18 @@ func (s *BuildService) ExecuteBuild(buildID primitive.ObjectID) {
 	// Set started time
 	_ = s.repo.SetStarted(ctx, buildID)
 
+	// Track build failure for notification
+	buildFailed := true
+	defer func() {
+		if buildFailed {
+			buildLink := fmt.Sprintf("/dashboard/build/%s", buildID.Hex())
+			_, _ = CreateNotification(build.UserID, models.NotificationBuildFailed,
+				"Build failed",
+				fmt.Sprintf("Image '%s:%s' build failed", build.ImageName, build.ImageTag),
+				buildLink, buildID.Hex())
+		}
+	}()
+
 	var repoPath string
 	var dockerfilePath string
 
@@ -175,6 +187,7 @@ func (s *BuildService) ExecuteBuild(buildID primitive.ObjectID) {
 	}
 
 	// Success
+	buildFailed = false
 	finalRef := imageRef
 	if digest != "" {
 		finalRef = digest // Use digest reference if available
@@ -183,6 +196,13 @@ func (s *BuildService) ExecuteBuild(buildID primitive.ObjectID) {
 	_ = s.repo.SetCompleted(ctx, buildID, finalRef, digest, 0)
 	s.publishProgress(buildID, models.BuildStatusCompleted, "Build completed", 100)
 	s.publishComplete(buildID, finalRef, digest)
+
+	// Send build success notification
+	buildLink := fmt.Sprintf("/dashboard/build/%s", buildID.Hex())
+	_, _ = CreateNotification(build.UserID, models.NotificationBuildCompleted,
+		"Build completed",
+		fmt.Sprintf("Image '%s:%s' built successfully", build.ImageName, build.ImageTag),
+		buildLink, buildID.Hex())
 
 	// Update workflow's deployment node image if this build is linked to a workflow
 	if build.WorkflowID != nil {

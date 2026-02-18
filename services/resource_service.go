@@ -924,6 +924,11 @@ func (s *ResourceService) GetResourceHistory(ctx context.Context, resourceID pri
 	return s.resourceRepo.GetHistory(ctx, resourceID, 100)
 }
 
+// LinkWorkflowToResource sets workflow fields on a matching resource in the database
+func (s *ResourceService) LinkWorkflowToResource(ctx context.Context, userID primitive.ObjectID, clusterName, namespace, name string, resourceType models.ResourceType, workflowID primitive.ObjectID, workflowName string) error {
+	return s.resourceRepo.LinkWorkflowToResource(ctx, userID, clusterName, namespace, name, resourceType, workflowID, workflowName)
+}
+
 // RecordResourceAccess records an access event for a resource
 func (s *ResourceService) RecordResourceAccess(ctx context.Context, resourceID, userID primitive.ObjectID, action string, details map[string]string) error {
 	s.resourceRepo.RecordAccess(ctx, resourceID, userID, action, details)

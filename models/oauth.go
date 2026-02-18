@@ -46,12 +46,13 @@ type OAuthExchangeCode struct {
 
 // OAuthExchangeUser holds user data stored alongside the exchange code
 type OAuthExchangeUser struct {
-	ID        string `bson:"id" json:"id"`
-	Email     string `bson:"email" json:"email"`
-	Name      string `bson:"name" json:"name"`
-	Role      string `bson:"role" json:"role"`
-	AvatarURL string `bson:"avatar_url" json:"avatarUrl"`
-	CreatedAt string `bson:"created_at" json:"createdAt"`
+	ID           string `bson:"id" json:"id"`
+	Email        string `bson:"email" json:"email"`
+	Name         string `bson:"name" json:"name"`
+	Role         string `bson:"role" json:"role"`
+	AvatarURL    string `bson:"avatar_url" json:"avatarUrl"`
+	CreatedAt    string `bson:"created_at" json:"createdAt"`
+	AuthProvider string `bson:"auth_provider" json:"authProvider"`
 }
 
 // AuthMethodsResponse is the public API response for /auth/methods

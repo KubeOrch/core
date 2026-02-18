@@ -167,6 +167,9 @@ func (m *ClusterHealthMonitor) checkClusterHealth(ctx context.Context, cluster *
 			// Log the status change
 			m.clusterService.logConnection(ctx, cluster.ID, cluster.UserID, "health_check",
 				newStatus == models.ClusterStatusConnected, nil)
+
+			// Event-driven alert evaluation for cluster status changes
+			go GetAlertEvaluator().EvaluateClusterStatusChange(cluster.UserID, cluster.Name, previousStatus, newStatus)
 		}
 	} else {
 		// Even if status didn't change, update the last_check timestamp

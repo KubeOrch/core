@@ -23,7 +23,11 @@ var (
 	WorkflowVersionColl *mongo.Collection
 	OAuthStateColl      *mongo.Collection
 	OAuthCodeColl       *mongo.Collection
-	DashboardStatsColl  *mongo.Collection
+	DashboardStatsColl      *mongo.Collection
+	AlertRuleColl           *mongo.Collection
+	AlertEventColl          *mongo.Collection
+	NotificationChannelColl *mongo.Collection
+	NotificationColl        *mongo.Collection
 )
 
 func Connect() error {
@@ -68,6 +72,10 @@ func Connect() error {
 	OAuthStateColl = Database.Collection("oauth_states")
 	OAuthCodeColl = Database.Collection("oauth_codes")
 	DashboardStatsColl = Database.Collection("dashboard_stats")
+	AlertRuleColl = Database.Collection("alert_rules")
+	AlertEventColl = Database.Collection("alert_events")
+	NotificationChannelColl = Database.Collection("notification_channels")
+	NotificationColl = Database.Collection("notifications")
 
 	logrus.Info("MongoDB connection established")
 
@@ -152,6 +160,62 @@ func createIndexes() error {
 	_, err = OAuthCodeColl.Indexes().CreateOne(ctx, codeIndex)
 	if err != nil {
 		return fmt.Errorf("failed to create oauth_codes TTL index: %v", err)
+	}
+
+	// Alert rule indexes
+	alertRuleIndex := mongo.IndexModel{
+		Keys: bson.D{{Key: "user_id", Value: 1}, {Key: "enabled", Value: 1}},
+	}
+	_, err = AlertRuleColl.Indexes().CreateOne(ctx, alertRuleIndex)
+	if err != nil {
+		logrus.Warnf("Failed to create alert_rules index: %v", err)
+	}
+
+	// Alert event indexes
+	alertEventIndexes := []mongo.IndexModel{
+		{
+			Keys: bson.D{{Key: "user_id", Value: 1}, {Key: "status", Value: 1}, {Key: "fired_at", Value: -1}},
+		},
+		{
+			Keys: bson.D{{Key: "rule_id", Value: 1}},
+		},
+		{
+			// TTL index: auto-delete events after 90 days
+			Keys:    bson.D{{Key: "fired_at", Value: 1}},
+			Options: options.Index().SetExpireAfterSeconds(90 * 24 * 60 * 60),
+		},
+	}
+	_, err = AlertEventColl.Indexes().CreateMany(ctx, alertEventIndexes)
+	if err != nil {
+		logrus.Warnf("Failed to create alert_events indexes: %v", err)
+	}
+
+	// Notification channel index
+	notifChannelIndex := mongo.IndexModel{
+		Keys: bson.D{{Key: "user_id", Value: 1}},
+	}
+	_, err = NotificationChannelColl.Indexes().CreateOne(ctx, notifChannelIndex)
+	if err != nil {
+		logrus.Warnf("Failed to create notification_channels index: %v", err)
+	}
+
+	// Notification indexes
+	notifIndexes := []mongo.IndexModel{
+		{
+			Keys: bson.D{{Key: "user_id", Value: 1}, {Key: "created_at", Value: -1}},
+		},
+		{
+			Keys: bson.D{{Key: "user_id", Value: 1}, {Key: "read", Value: 1}},
+		},
+		{
+			// TTL index: auto-delete read notifications after 7 days
+			Keys:    bson.D{{Key: "updated_at", Value: 1}},
+			Options: options.Index().SetExpireAfterSeconds(7 * 24 * 60 * 60).SetPartialFilterExpression(bson.M{"read": true}),
+		},
+	}
+	_, err = NotificationColl.Indexes().CreateMany(ctx, notifIndexes)
+	if err != nil {
+		logrus.Warnf("Failed to create notifications indexes: %v", err)
 	}
 
 	logrus.Info("Database indexes created successfully")

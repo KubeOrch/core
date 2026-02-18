@@ -761,22 +761,7 @@ func (h *ResourcesHandler) HandleTerminalSession(c *gin.Context) {
 	// Extract resource ID and parameters
 	resourceID := c.Param("id")
 	container := c.Query("container")
-	shell := c.DefaultQuery("shell", "/bin/sh") // Default to sh, can be /bin/bash
-
-	// Validate shell parameter against allowed list
-	allowedShells := []string{"/bin/sh", "/bin/bash", "sh", "bash"}
-	isAllowed := false
-	for _, s := range allowedShells {
-		if shell == s {
-			isAllowed = true
-			break
-		}
-	}
-	if !isAllowed {
-		h.logger.WithField("shell", shell).Warn("Invalid shell specified")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid shell specified"})
-		return
-	}
+	shell := "/bin/sh"
 
 	h.logger.WithFields(map[string]interface{}{
 		"resourceID": resourceID,

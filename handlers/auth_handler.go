@@ -253,12 +253,13 @@ func LoginHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"token": token,
 		"user": gin.H{
-			"id":        user.ID.Hex(),
-			"email":     user.Email,
-			"name":      user.Name,
-			"role":      user.Role,
-			"avatarUrl": utils.GetGravatarURL(user.Email, 200),
-			"createdAt": user.CreatedAt,
+			"id":           user.ID.Hex(),
+			"email":        user.Email,
+			"name":         user.Name,
+			"role":         user.Role,
+			"avatarUrl":    utils.GetGravatarURL(user.Email, 200),
+			"createdAt":    user.CreatedAt,
+			"authProvider": user.AuthProvider,
 		},
 	})
 }
@@ -324,12 +325,13 @@ func GetProfileHandler(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"user": gin.H{
-			"id":         user.ID.Hex(),
-			"email":      user.Email,
-			"name":       user.Name,
-			"role":       user.Role,
-			"createdAt":  user.CreatedAt,
-			"avatarUrl":  utils.GetGravatarURL(user.Email, 200),
+			"id":           user.ID.Hex(),
+			"email":        user.Email,
+			"name":         user.Name,
+			"role":         user.Role,
+			"createdAt":    user.CreatedAt,
+			"avatarUrl":    utils.GetGravatarURL(user.Email, 200),
+			"authProvider": user.AuthProvider,
 		},
 	})
 }
@@ -373,12 +375,13 @@ func UpdateProfileHandler(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"user": gin.H{
-			"id":         user.ID.Hex(),
-			"email":      user.Email,
-			"name":       user.Name,
-			"role":       user.Role,
-			"createdAt":  user.CreatedAt,
-			"avatarUrl":  utils.GetGravatarURL(user.Email, 200),
+			"id":           user.ID.Hex(),
+			"email":        user.Email,
+			"name":         user.Name,
+			"role":         user.Role,
+			"createdAt":    user.CreatedAt,
+			"avatarUrl":    utils.GetGravatarURL(user.Email, 200),
+			"authProvider": user.AuthProvider,
 		},
 	})
 }
@@ -431,5 +434,82 @@ func RefreshTokenHandler(c *gin.Context) {
 			"avatarUrl": utils.GetGravatarURL(user.Email, 200),
 			"createdAt": user.CreatedAt,
 		},
+	})
+}
+
+func ChangePasswordHandler(c *gin.Context) {
+	userIDStr, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "Unauthorized",
+		})
+		return
+	}
+
+	userID, err := services.ParseObjectID(userIDStr.(string))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid user ID",
+		})
+		return
+	}
+
+	var req struct {
+		CurrentPassword string `json:"currentPassword" binding:"required"`
+		NewPassword     string `json:"newPassword" binding:"required,min=6"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Current password and new password (min 6 characters) are required",
+		})
+		return
+	}
+
+	user, err := services.GetUserByID(userID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "User not found",
+		})
+		return
+	}
+
+	// Reject password change for OAuth-only users
+	if user.AuthProvider != "" && user.Password == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Password login is not available for OAuth accounts",
+		})
+		return
+	}
+
+	// Verify current password
+	if !services.CheckPasswordHash(req.CurrentPassword, user.Password) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Current password is incorrect",
+		})
+		return
+	}
+
+	// Hash new password
+	hashedPassword, err := services.HashPassword(req.NewPassword)
+	if err != nil {
+		logrus.Errorf("Error hashing password: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to update password",
+		})
+		return
+	}
+
+	// Update password in database
+	if err := services.UpdateUserPassword(userID, hashedPassword); err != nil {
+		logrus.Errorf("Error updating password: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to update password",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Password updated successfully",
 	})
 }
