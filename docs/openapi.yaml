@@ -1,0 +1,351 @@
+openapi: 3.0.3
+info:
+  title: KubeOrch Core API
+  description: REST API for the KubeOrch Kubernetes workflow orchestration platform.
+  version: 0.0.3
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+  contact:
+    name: KubeOrch Community
+    url: https://github.com/KubeOrch
+
+servers:
+  - url: http://localhost:3000/v1
+    description: Local development
+  - url: https://api.kubeorch.dev/v1
+    description: Production
+
+tags:
+  - name: Auth
+    description: Authentication and authorization
+  - name: Workflows
+    description: Workflow management and execution
+  - name: Clusters
+    description: Kubernetes cluster management
+  - name: Resources
+    description: Deployed resource tracking
+  - name: Builds
+    description: Container image builds
+  - name: Plugins
+    description: Plugin management
+  - name: Dashboard
+    description: Dashboard statistics
+
+paths:
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, name]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 6
+                name:
+                  type: string
+      responses:
+        "201":
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: Email already registered
+
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Login with email and password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: Invalid credentials
+
+  /api/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh an expired JWT token
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Token refreshed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+
+  /api/auth/methods:
+    get:
+      tags: [Auth]
+      summary: Get available authentication methods
+      responses:
+        "200":
+          description: List of enabled auth methods
+
+  /api/workflows:
+    get:
+      tags: [Workflows]
+      summary: List all workflows for the authenticated user
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Paginated list of workflows
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [Workflows]
+      summary: Create a new workflow
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        "201":
+          description: Workflow created
+
+  /api/workflows/{id}:
+    get:
+      tags: [Workflows]
+      summary: Get a specific workflow
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkflowId"
+      responses:
+        "200":
+          description: Workflow details
+        "404":
+          description: Workflow not found
+    put:
+      tags: [Workflows]
+      summary: Update workflow metadata
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkflowId"
+      responses:
+        "200":
+          description: Workflow updated
+    delete:
+      tags: [Workflows]
+      summary: Delete a workflow
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkflowId"
+      responses:
+        "200":
+          description: Workflow deleted
+
+  /api/workflows/{id}/run:
+    post:
+      tags: [Workflows]
+      summary: Execute the workflow
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkflowId"
+      responses:
+        "200":
+          description: Workflow execution started
+
+  /api/clusters:
+    get:
+      tags: [Clusters]
+      summary: List all clusters
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of clusters
+    post:
+      tags: [Clusters]
+      summary: Add a new cluster
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, server, auth_type]
+              properties:
+                name:
+                  type: string
+                server:
+                  type: string
+                  format: uri
+                auth_type:
+                  type: string
+                  enum: [bearer_token, certificate, kubeconfig, service_account, oidc]
+                token:
+                  type: string
+      responses:
+        "201":
+          description: Cluster added
+
+  /api/clusters/{name}/test:
+    post:
+      tags: [Clusters]
+      summary: Test cluster connection
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Connection test result
+
+  /api/resources:
+    get:
+      tags: [Resources]
+      summary: List tracked Kubernetes resources
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of resources
+
+  /api/builds/start:
+    post:
+      tags: [Builds]
+      summary: Start a container image build
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Build started
+
+  /api/plugins:
+    get:
+      tags: [Plugins]
+      summary: List all plugins
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of plugins
+
+  /api/dashboard/stats:
+    get:
+      tags: [Dashboard]
+      summary: Get dashboard statistics
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Dashboard stats
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    WorkflowId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+
+  schemas:
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        user:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            email:
+              type: string
+              format: email
+            role:
+              type: string
+              enum: [user, admin]
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"

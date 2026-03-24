@@ -29,6 +29,13 @@ func SetupRouter() *gin.Engine {
 	// Prometheus metrics endpoint (no auth required)
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
+	// OpenAPI spec endpoint (no auth required)
+	r.StaticFile("/v1/api-docs", "./docs/openapi.yaml")
+	r.GET("/v1/api-docs/json", func(c *gin.Context) {
+		c.Header("Content-Type", "application/x-yaml")
+		c.File("./docs/openapi.yaml")
+	})
+
 	// Apply metrics middleware to all routes
 	r.Use(middleware.MetricsMiddleware())
 
