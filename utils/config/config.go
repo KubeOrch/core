@@ -25,6 +25,7 @@ func Load() error {
 	viper.SetDefault("MONGO_URI", "mongodb://localhost:27017/kubeorch")
 	viper.SetDefault("CLUSTER_LOG_TTL_HOURS", 24)
 	viper.SetDefault("TOKEN_REFRESH_MAX_AGE_DAYS", 7)
+	viper.SetDefault("CORS_ALLOWED_ORIGINS", "http://localhost:3001")
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
