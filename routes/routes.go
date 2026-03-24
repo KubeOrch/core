@@ -8,6 +8,7 @@ import (
 	"github.com/KubeOrch/core/middleware"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/viper"
 )
 
@@ -24,6 +25,12 @@ func SetupRouter() *gin.Engine {
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}))
+
+	// Prometheus metrics endpoint (no auth required)
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
+	// Apply metrics middleware to all routes
+	r.Use(middleware.MetricsMiddleware())
 
 	v1 := r.Group("/v1")
 	{
