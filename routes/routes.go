@@ -32,6 +32,9 @@ func SetupRouter() *gin.Engine {
 	// Apply metrics middleware to all routes
 	r.Use(middleware.MetricsMiddleware())
 
+	// Rate limiting (applied to API routes)
+	r.Use(middleware.RateLimiterMiddleware())
+
 	v1 := r.Group("/v1")
 	{
 		v1.Use(middleware.LogsMiddleware())
