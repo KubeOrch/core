@@ -1,24 +1,28 @@
 package routes
 
 import (
+	"strings"
 	"time"
 
 	"github.com/KubeOrch/core/handlers"
 	"github.com/KubeOrch/core/middleware"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/spf13/viper"
 )
 
 func SetupRouter() *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
+	origins := parseAllowedOrigins(viper.GetString("CORS_ALLOWED_ORIGINS"))
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:  []string{"*"}, // TODO(naman): restrict this to specific origins
-		AllowMethods:  []string{"GET", "POST", "PUT", "DELETE", "PATCH"},
-		AllowHeaders:  []string{"Origin", "Content-Type", "Authorization", "Upgrade", "Connection", "Sec-WebSocket-Key", "Sec-WebSocket-Version", "Sec-WebSocket-Extensions"},
-		ExposeHeaders: []string{"Content-Length"},
-		MaxAge:        12 * time.Hour,
+		AllowOrigins:     origins,
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "PATCH"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "Upgrade", "Connection", "Sec-WebSocket-Key", "Sec-WebSocket-Version", "Sec-WebSocket-Extensions"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+		MaxAge:           12 * time.Hour,
 	}))
 
 	v1 := r.Group("/v1")
@@ -247,4 +251,17 @@ func SetupRouter() *gin.Engine {
 	}
 
 	return r
+}
+
+// parseAllowedOrigins splits a comma-separated string of origins.
+// Falls back to localhost if empty.
+func parseAllowedOrigins(raw string) []string {
+	if raw == "" {
+		return []string{"http://localhost:3001"}
+	}
+	origins := strings.Split(raw, ",")
+	for i := range origins {
+		origins[i] = strings.TrimSpace(origins[i])
+	}
+	return origins
 }
