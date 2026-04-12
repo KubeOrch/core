@@ -1,7 +1,7 @@
 # Multi-stage Dockerfile for KubeOrch Core
 
 # Stage 1: Builder
-FROM golang:1.22-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 # Install git and ca-certificates for fetching dependencies
 RUN apk add --no-cache git ca-certificates
@@ -39,8 +39,8 @@ WORKDIR /app
 # Copy binary from builder
 COPY --from=builder /app/kubeorch-core .
 
-# Copy config file (optional, can be mounted)
-COPY --from=builder /app/config.yaml .
+# Copy config file if it exists (optional, can be mounted or use env vars)
+COPY --from=builder /app/config.yaml* ./
 
 # Change ownership to non-root user
 RUN chown -R appuser:appuser /app
