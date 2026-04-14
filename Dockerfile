@@ -3,10 +3,6 @@
 # Stage 1: Builder
 FROM golang:1.25-alpine AS builder
 
-# Build args for multi-platform support
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
-
 # Install git and ca-certificates for fetching dependencies
 RUN apk add --no-cache git ca-certificates
 
@@ -22,8 +18,8 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the application for the target platform
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+# Build the application
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags="-w -s" \
     -o kubeorch-core \
     .
