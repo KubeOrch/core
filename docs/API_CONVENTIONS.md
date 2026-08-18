@@ -96,6 +96,11 @@ operations document why repeating the same request has the same result.
 Every operation has a unique `operationId` and one of these
 `x-stability-level` values: `draft`, `alpha`, `beta`, or `stable`.
 
+When stability metadata is first adopted for an existing unannotated operation,
+the new annotation establishes its baseline; absence of the extension did not
+implicitly promise stable status. After that baseline exists, decreasing an
+operation's explicit stability level is a breaking change.
+
 Beta compatibility permits additive operations, optional properties, optional
 parameters, and new response codes that do not invalidate an existing success
 contract. Removing an operation or field, making input required, narrowing a

@@ -95,10 +95,57 @@ func TestCompatibilityClassification(t *testing.T) {
 	})
 
 	t.Run("accepts additive operations and optional fields", func(t *testing.T) {
-		changes, err := Compare(base, "base.yaml", readFixture(t, "additive.yaml"), "additive.yaml")
+		revision := readFixture(t, "additive.yaml")
+		violations, err := Validate(revision, "additive.yaml")
+		require.NoError(t, err)
+		assert.Empty(t, violations)
+
+		changes, err := Compare(base, "base.yaml", revision, "additive.yaml")
 
 		require.NoError(t, err)
 		assert.Empty(t, changes)
+	})
+
+	t.Run("rejects a new protected legacy-user mutation", func(t *testing.T) {
+		revision := readFixture(t, "new-legacy-operation.yaml")
+		violations, err := Validate(revision, "new-legacy-operation.yaml")
+		require.NoError(t, err)
+		assert.Empty(t, violations)
+
+		changes, err := Compare(
+			readFixture(t, "empty.yaml"),
+			"empty.yaml",
+			revision,
+			"new-legacy-operation.yaml",
+		)
+
+		require.NoError(t, err)
+		assert.Contains(t, changeIDs(changes), "new-operation-uses-legacy-user-boundary")
+		assert.Contains(t, changeIDs(changes), "new-protected-mutation-missing-idempotency")
+	})
+
+	t.Run("adopts beta for a previously unannotated operation", func(t *testing.T) {
+		changes, err := Compare(
+			readFixture(t, "unannotated.yaml"),
+			"unannotated.yaml",
+			readFixture(t, "beta-adoption.yaml"),
+			"beta-adoption.yaml",
+		)
+
+		require.NoError(t, err)
+		assert.Empty(t, changes)
+	})
+
+	t.Run("rejects an explicit stability downgrade", func(t *testing.T) {
+		changes, err := Compare(
+			readFixture(t, "beta-adoption.yaml"),
+			"beta-adoption.yaml",
+			readFixture(t, "alpha-downgrade.yaml"),
+			"alpha-downgrade.yaml",
+		)
+
+		require.NoError(t, err)
+		assert.Contains(t, changeIDs(changes), "api-stability-decreased")
 	})
 }
 

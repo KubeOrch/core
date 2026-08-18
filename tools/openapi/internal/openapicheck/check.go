@@ -67,6 +67,9 @@ func Compare(baseData []byte, baseSource string, revisionData []byte, revisionSo
 		return nil, fmt.Errorf("load revised contract: %w", err)
 	}
 
+	policyChanges := validateNewOperationPolicies(base, revision)
+	normalizeAdoptedOperationStability(base, revision)
+
 	baseInfo := &load.SpecInfo{Url: baseSource, Spec: base, Version: base.Info.Version}
 	revisionInfo := &load.SpecInfo{Url: revisionSource, Spec: revision, Version: revision.Info.Version}
 	diffReport, operationSources, err := diff.GetWithOperationsSourcesMap(diff.NewConfig(), baseInfo, revisionInfo)
@@ -80,7 +83,7 @@ func Compare(baseData []byte, baseSource string, revisionData []byte, revisionSo
 		diffReport,
 		operationSources,
 	)
-	result := make([]BreakingChange, 0, len(changes))
+	result := make([]BreakingChange, 0, len(changes)+len(policyChanges))
 	for _, change := range changes {
 		result = append(result, BreakingChange{
 			Level:       change.GetLevel().String(),
@@ -90,6 +93,7 @@ func Compare(baseData []byte, baseSource string, revisionData []byte, revisionSo
 			Description: change.GetUncolorizedText(localizer),
 		})
 	}
+	result = append(result, policyChanges...)
 
 	sort.Slice(result, func(i, j int) bool {
 		left := result[i].Path + result[i].Method + result[i].ID
@@ -97,6 +101,89 @@ func Compare(baseData []byte, baseSource string, revisionData []byte, revisionSo
 		return left < right
 	})
 	return result, nil
+}
+
+func validateNewOperationPolicies(base, revision *openapi3.T) []BreakingChange {
+	var changes []BreakingChange
+	for path, revisionPathItem := range revision.Paths.Map() {
+		basePathItem := base.Paths.Value(path)
+		for method, operation := range revisionPathItem.Operations() {
+			if basePathItem != nil && basePathItem.GetOperation(method) != nil {
+				continue
+			}
+
+			boundary, _ := stringExtension(operation.Extensions, boundaryExtension)
+			protected := isProtectedOperation(revision, operation)
+			if boundary == "legacy-user" {
+				changes = append(changes, BreakingChange{
+					Level:       "ERR",
+					ID:          "new-operation-uses-legacy-user-boundary",
+					Method:      strings.ToUpper(method),
+					Path:        path,
+					Description: "legacy-user is reserved for operations already present in the base contract",
+				})
+			} else if protected && !oneOf(boundary, "identity", "workspace") {
+				changes = append(changes, BreakingChange{
+					Level:       "ERR",
+					ID:          "new-protected-operation-invalid-boundary",
+					Method:      strings.ToUpper(method),
+					Path:        path,
+					Description: "a new protected operation must use the workspace or identity boundary",
+				})
+			}
+
+			if !isMutation(method) || !protected {
+				continue
+			}
+			mode, ok := stringExtension(operation.Extensions, idempotencyExtension)
+			if !ok || !oneOf(mode, "required", "inherent", "not-applicable") {
+				changes = append(changes, BreakingChange{
+					Level:       "ERR",
+					ID:          "new-protected-mutation-missing-idempotency",
+					Method:      strings.ToUpper(method),
+					Path:        path,
+					Description: idempotencyExtension + " must be required, inherent, or not-applicable for a new protected mutation",
+				})
+			} else if mode == "required" && !hasParameter(revisionPathItem, operation, "Idempotency-Key", openapi3.ParameterInHeader) {
+				changes = append(changes, BreakingChange{
+					Level:       "ERR",
+					ID:          "new-protected-mutation-invalid-idempotency",
+					Method:      strings.ToUpper(method),
+					Path:        path,
+					Description: "required idempotency must reference the IdempotencyKey header parameter",
+				})
+			}
+		}
+	}
+	return changes
+}
+
+// Missing stability metadata predates this contract. The first explicit value
+// establishes its baseline; subsequent comparisons retain normal downgrade checks.
+func normalizeAdoptedOperationStability(base, revision *openapi3.T) {
+	for path, basePathItem := range base.Paths.Map() {
+		revisionPathItem := revision.Paths.Value(path)
+		if revisionPathItem == nil {
+			continue
+		}
+		for method, baseOperation := range basePathItem.Operations() {
+			revisionOperation := revisionPathItem.GetOperation(method)
+			if revisionOperation == nil {
+				continue
+			}
+			if _, found := stringExtension(baseOperation.Extensions, stabilityExtension); found {
+				continue
+			}
+			stability, found := stringExtension(revisionOperation.Extensions, stabilityExtension)
+			if !found {
+				continue
+			}
+			if baseOperation.Extensions == nil {
+				baseOperation.Extensions = make(map[string]any)
+			}
+			baseOperation.Extensions[stabilityExtension] = stability
+		}
+	}
 }
 
 func loadAndValidate(data []byte, source string) (*openapi3.T, error) {
@@ -175,11 +262,7 @@ func validateOperation(doc *openapi3.T, pathItem *openapi3.PathItem, path, metho
 		violations = append(violations, Violation{Location: location, Message: boundaryExtension + " must be none, identity, legacy-user, or workspace"})
 	}
 
-	security := doc.Security
-	if operation.Security != nil {
-		security = *operation.Security
-	}
-	protected := len(security) > 0
+	protected := isProtectedOperation(doc, operation)
 	if protected {
 		scopes, ok := stringSliceExtension(operation.Extensions, scopesExtension)
 		if !ok || len(scopes) == 0 {
@@ -222,6 +305,14 @@ func validateOperation(doc *openapi3.T, pathItem *openapi3.PathItem, path, metho
 	}
 
 	return violations
+}
+
+func isProtectedOperation(doc *openapi3.T, operation *openapi3.Operation) bool {
+	security := doc.Security
+	if operation.Security != nil {
+		security = *operation.Security
+	}
+	return len(security) > 0
 }
 
 func validateDeprecation(operation *openapi3.Operation, location string) []Violation {

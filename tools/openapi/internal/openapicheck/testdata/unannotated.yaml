@@ -1,0 +1,10 @@
+openapi: 3.0.3
+info:
+  title: Unannotated Fixture API
+  version: 1.0.0
+paths:
+  /api/status:
+    get:
+      responses:
+        "200":
+          description: Service status

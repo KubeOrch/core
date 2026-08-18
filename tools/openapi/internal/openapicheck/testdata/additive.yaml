@@ -83,6 +83,24 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Widget"
+    delete:
+      operationId: deleteWidget
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [widgets:write]
+      x-kubeorch-idempotency: inherent
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - name: widgetId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Widget deleted
 components:
   securitySchemes:
     bearerAuth:
