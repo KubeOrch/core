@@ -1,0 +1,38 @@
+openapi: 3.0.3
+info:
+  title: Optional Idempotency Fixture API
+  version: 1.1.0
+paths:
+  /api/workspaces/{workspaceId}/widgets:
+    post:
+      operationId: createWidget
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [widgets:write]
+      x-kubeorch-idempotency: required
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/OptionalIdempotencyKey"
+      responses:
+        "201":
+          description: Widget created
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    WorkspaceId:
+      name: workspaceId
+      in: path
+      required: true
+      schema:
+        type: string
+    OptionalIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string

@@ -124,6 +124,24 @@ func TestCompatibilityClassification(t *testing.T) {
 		assert.Contains(t, changeIDs(changes), "new-protected-mutation-missing-idempotency")
 	})
 
+	t.Run("rejects an optional required idempotency header", func(t *testing.T) {
+		revision := readFixture(t, "new-optional-idempotency.yaml")
+		violations, err := Validate(revision, "new-optional-idempotency.yaml")
+		require.NoError(t, err)
+		require.Len(t, violations, 1)
+		assert.Contains(t, violations[0].Message, "required idempotency")
+
+		changes, err := Compare(
+			readFixture(t, "empty.yaml"),
+			"empty.yaml",
+			revision,
+			"new-optional-idempotency.yaml",
+		)
+
+		require.NoError(t, err)
+		assert.Contains(t, changeIDs(changes), "new-protected-mutation-invalid-idempotency")
+	})
+
 	t.Run("adopts beta for a previously unannotated operation", func(t *testing.T) {
 		changes, err := Compare(
 			readFixture(t, "unannotated.yaml"),

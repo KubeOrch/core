@@ -144,7 +144,7 @@ func validateNewOperationPolicies(base, revision *openapi3.T) []BreakingChange {
 					Path:        path,
 					Description: idempotencyExtension + " must be required, inherent, or not-applicable for a new protected mutation",
 				})
-			} else if mode == "required" && !hasParameter(revisionPathItem, operation, "Idempotency-Key", openapi3.ParameterInHeader) {
+			} else if mode == "required" && !hasRequiredParameter(revisionPathItem, operation, "Idempotency-Key", openapi3.ParameterInHeader) {
 				changes = append(changes, BreakingChange{
 					Level:       "ERR",
 					ID:          "new-protected-mutation-invalid-idempotency",
@@ -299,7 +299,7 @@ func validateOperation(doc *openapi3.T, pathItem *openapi3.PathItem, path, metho
 		mode, ok := stringExtension(operation.Extensions, idempotencyExtension)
 		if !ok || !oneOf(mode, "required", "inherent", "not-applicable") {
 			violations = append(violations, Violation{Location: location, Message: idempotencyExtension + " must be required, inherent, or not-applicable for new protected mutations"})
-		} else if mode == "required" && !hasParameter(pathItem, operation, "Idempotency-Key", openapi3.ParameterInHeader) {
+		} else if mode == "required" && !hasRequiredParameter(pathItem, operation, "Idempotency-Key", openapi3.ParameterInHeader) {
 			violations = append(violations, Violation{Location: location, Message: "required idempotency must reference the IdempotencyKey header parameter"})
 		}
 	}
@@ -334,14 +334,23 @@ func validateDeprecation(operation *openapi3.Operation, location string) []Viola
 }
 
 func hasParameter(pathItem *openapi3.PathItem, operation *openapi3.Operation, name, in string) bool {
+	return matchingParameter(pathItem, operation, name, in) != nil
+}
+
+func hasRequiredParameter(pathItem *openapi3.PathItem, operation *openapi3.Operation, name, in string) bool {
+	parameter := matchingParameter(pathItem, operation, name, in)
+	return parameter != nil && parameter.Required
+}
+
+func matchingParameter(pathItem *openapi3.PathItem, operation *openapi3.Operation, name, in string) *openapi3.Parameter {
 	parameters := append(openapi3.Parameters{}, pathItem.Parameters...)
 	parameters = append(parameters, operation.Parameters...)
 	for _, parameterRef := range parameters {
 		if parameterRef != nil && parameterRef.Value != nil && parameterRef.Value.Name == name && parameterRef.Value.In == in {
-			return true
+			return parameterRef.Value
 		}
 	}
-	return false
+	return nil
 }
 
 func stringExtension(extensions map[string]any, name string) (string, bool) {
