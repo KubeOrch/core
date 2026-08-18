@@ -3,12 +3,17 @@ info:
   title: KubeOrch Core API
   description: REST API for the KubeOrch Kubernetes workflow orchestration platform.
   version: 0.0.3
+  x-stability-level: beta
   license:
     name: Apache 2.0
     url: https://www.apache.org/licenses/LICENSE-2.0
   contact:
     name: KubeOrch Community
     url: https://github.com/KubeOrch
+
+externalDocs:
+  description: KubeOrch Beta API conventions and compatibility policy
+  url: https://github.com/KubeOrch/core/blob/main/docs/API_CONVENTIONS.md
 
 servers:
   - url: http://localhost:3000/v1
@@ -37,6 +42,9 @@ paths:
     post:
       tags: [Auth]
       summary: Register a new user
+      operationId: registerUser
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: none
       requestBody:
         required: true
         content:
@@ -69,6 +77,9 @@ paths:
     post:
       tags: [Auth]
       summary: Login with email and password
+      operationId: loginUser
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: none
       requestBody:
         required: true
         content:
@@ -96,6 +107,10 @@ paths:
     post:
       tags: [Auth]
       summary: Refresh an expired JWT token
+      operationId: refreshAuthToken
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: legacy-user
+      x-kubeorch-required-scopes: [auth:refresh]
       security:
         - bearerAuth: []
       responses:
@@ -110,6 +125,9 @@ paths:
     get:
       tags: [Auth]
       summary: Get available authentication methods
+      operationId: listAuthMethods
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: none
       responses:
         "200":
           description: List of enabled auth methods
@@ -118,6 +136,10 @@ paths:
     get:
       tags: [Workflows]
       summary: List all workflows for the authenticated user
+      operationId: listWorkflows
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: legacy-user
+      x-kubeorch-required-scopes: [workflows:read]
       security:
         - bearerAuth: []
       parameters:
@@ -139,6 +161,10 @@ paths:
     post:
       tags: [Workflows]
       summary: Create a new workflow
+      operationId: createWorkflow
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: legacy-user
+      x-kubeorch-required-scopes: [workflows:write]
       security:
         - bearerAuth: []
       requestBody:
@@ -161,6 +187,10 @@ paths:
     get:
       tags: [Workflows]
       summary: Get a specific workflow
+      operationId: getWorkflow
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: legacy-user
+      x-kubeorch-required-scopes: [workflows:read]
       security:
         - bearerAuth: []
       parameters:
@@ -173,6 +203,10 @@ paths:
     put:
       tags: [Workflows]
       summary: Update workflow metadata
+      operationId: updateWorkflow
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: legacy-user
+      x-kubeorch-required-scopes: [workflows:write]
       security:
         - bearerAuth: []
       parameters:
@@ -183,6 +217,10 @@ paths:
     delete:
       tags: [Workflows]
       summary: Delete a workflow
+      operationId: deleteWorkflow
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: legacy-user
+      x-kubeorch-required-scopes: [workflows:write]
       security:
         - bearerAuth: []
       parameters:
@@ -195,6 +233,10 @@ paths:
     post:
       tags: [Workflows]
       summary: Execute the workflow
+      operationId: runWorkflow
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: legacy-user
+      x-kubeorch-required-scopes: [workflows:execute]
       security:
         - bearerAuth: []
       parameters:
@@ -207,6 +249,10 @@ paths:
     get:
       tags: [Clusters]
       summary: List all clusters
+      operationId: listClusters
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: legacy-user
+      x-kubeorch-required-scopes: [clusters:read]
       security:
         - bearerAuth: []
       responses:
@@ -215,6 +261,10 @@ paths:
     post:
       tags: [Clusters]
       summary: Add a new cluster
+      operationId: createCluster
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: legacy-user
+      x-kubeorch-required-scopes: [clusters:write]
       security:
         - bearerAuth: []
       requestBody:
@@ -243,6 +293,10 @@ paths:
     post:
       tags: [Clusters]
       summary: Test cluster connection
+      operationId: testClusterConnection
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: legacy-user
+      x-kubeorch-required-scopes: [clusters:read]
       security:
         - bearerAuth: []
       parameters:
@@ -259,6 +313,10 @@ paths:
     get:
       tags: [Resources]
       summary: List tracked Kubernetes resources
+      operationId: listResources
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: legacy-user
+      x-kubeorch-required-scopes: [resources:read]
       security:
         - bearerAuth: []
       responses:
@@ -269,6 +327,10 @@ paths:
     post:
       tags: [Builds]
       summary: Start a container image build
+      operationId: startBuild
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: legacy-user
+      x-kubeorch-required-scopes: [builds:write]
       security:
         - bearerAuth: []
       responses:
@@ -279,6 +341,10 @@ paths:
     get:
       tags: [Plugins]
       summary: List all plugins
+      operationId: listPlugins
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: legacy-user
+      x-kubeorch-required-scopes: [plugins:read]
       security:
         - bearerAuth: []
       responses:
@@ -289,6 +355,10 @@ paths:
     get:
       tags: [Dashboard]
       summary: Get dashboard statistics
+      operationId: getDashboardStats
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: legacy-user
+      x-kubeorch-required-scopes: [dashboard:read]
       security:
         - bearerAuth: []
       responses:
@@ -309,8 +379,119 @@ components:
       required: true
       schema:
         type: string
+    WorkspaceId:
+      name: workspaceId
+      in: path
+      required: true
+      description: Opaque workspace identifier. Clients must not infer semantics from it.
+      schema:
+        $ref: "#/components/schemas/ResourceId"
+    PageCursor:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque cursor returned by the previous page.
+      schema:
+        $ref: "#/components/schemas/Cursor"
+    PageSize:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of records to return.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Caller-generated key used to replay a mutation safely.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+        pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$"
 
   schemas:
+    ResourceId:
+      type: string
+      minLength: 1
+      maxLength: 128
+      pattern: "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+      description: Opaque resource identifier. Clients must compare it only as a string.
+
+    Timestamp:
+      type: string
+      format: date-time
+      description: UTC RFC 3339 timestamp. Writers emit a trailing `Z`.
+      example: "2026-08-18T12:00:00Z"
+
+    Cursor:
+      type: string
+      minLength: 1
+      maxLength: 1024
+      description: Opaque, endpoint-specific pagination cursor.
+
+    PageInfo:
+      type: object
+      required: [hasMore]
+      properties:
+        nextCursor:
+          allOf:
+            - $ref: "#/components/schemas/Cursor"
+          nullable: true
+        hasMore:
+          type: boolean
+      additionalProperties: false
+
+    FieldViolation:
+      type: object
+      required: [field, code, message]
+      properties:
+        field:
+          type: string
+          description: JSON Pointer to the invalid field when available.
+        code:
+          type: string
+          description: Stable machine-readable validation code.
+        message:
+          type: string
+          description: Human-readable validation message.
+      additionalProperties: false
+
+    APIError:
+      type: object
+      required: [type, title, status, code, requestId]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          description: Stable problem type URI.
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri-reference
+        code:
+          type: string
+          description: Stable KubeOrch error code suitable for programmatic handling.
+        requestId:
+          type: string
+          description: Safe correlation identifier; never contains credentials.
+        errors:
+          type: array
+          items:
+            $ref: "#/components/schemas/FieldViolation"
+      additionalProperties: false
+
     AuthResponse:
       type: object
       properties:
@@ -349,3 +530,24 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+    APIError:
+      description: Request failed using the Beta API error envelope.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/RequestId"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/APIError"
+
+  headers:
+    RequestId:
+      description: Correlation identifier for support and audit records.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    IdempotencyReplayed:
+      description: "`true` when the response was replayed from an earlier idempotent request."
+      schema:
+        type: boolean

@@ -1,7 +1,9 @@
-.PHONY: build run test test-coverage lint lint-fix docker-build docker-run clean help
+.PHONY: build run test test-coverage lint lint-fix openapi-validate openapi-compat docker-build docker-run clean help
 
 BINARY_NAME=kubeorch-core
 DOCKER_IMAGE=kubeorch/core
+OPENAPI_SPEC?=docs/openapi.yaml
+OPENAPI_BASE?=origin/main
 
 ## help: Show this help message
 help:
@@ -35,6 +37,14 @@ lint:
 ## lint-fix: Run golangci-lint with auto-fix
 lint-fix:
 	golangci-lint run --fix --timeout 5m
+
+## openapi-validate: Validate the OpenAPI document and KubeOrch API conventions
+openapi-validate:
+	go -C tools/openapi run . validate ../../$(OPENAPI_SPEC)
+
+## openapi-compat: Reject breaking OpenAPI changes compared with OPENAPI_BASE
+openapi-compat: openapi-validate
+	go -C tools/openapi run . breaking-ref $(OPENAPI_BASE) $(OPENAPI_SPEC) ../../$(OPENAPI_SPEC)
 
 ## docker-build: Build Docker image
 docker-build:

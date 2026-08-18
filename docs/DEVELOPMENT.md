@@ -46,6 +46,8 @@ make watch          # Run with hot reload (requires air)
 - `make fmt` - Format code
 - `make lint` - Run linter
 - `make tidy` - Clean up go.mod
+- `make openapi-validate` - Validate the Platform API contract and conventions
+- `make openapi-compat OPENAPI_BASE=origin/main` - Check for breaking API changes
 
 #### Build
 - `make build` - Build binary
@@ -99,6 +101,13 @@ make test-coverage
 # Run specific package tests
 go test ./handlers/...
 ```
+
+### Platform API Contract
+
+[`openapi.yaml`](openapi.yaml) is the source of truth for public Platform API
+behavior. Read [`API_CONVENTIONS.md`](API_CONVENTIONS.md) before adding an
+endpoint. Pull requests validate the document and reject breaking Beta changes
+relative to the target branch.
 
 ### Database Migrations
 

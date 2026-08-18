@@ -1,0 +1,13 @@
+openapi: 3.0.3
+info:
+  title: Downgraded Fixture API
+  version: 1.2.0
+paths:
+  /api/status:
+    get:
+      operationId: getStatus
+      x-stability-level: alpha
+      x-kubeorch-workspace-boundary: none
+      responses:
+        "200":
+          description: Service status
