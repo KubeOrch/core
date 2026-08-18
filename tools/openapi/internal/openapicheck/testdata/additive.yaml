@@ -1,0 +1,114 @@
+openapi: 3.0.3
+info:
+  title: Fixture API
+  version: 1.1.0
+paths:
+  /api/workspaces/{workspaceId}/widgets:
+    get:
+      operationId: listWidgets
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [widgets:read]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - name: filter
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Widget collection
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Widget"
+    post:
+      operationId: createWidget
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [widgets:write]
+      x-kubeorch-idempotency: required
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        "201":
+          description: Widget created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Widget"
+  /api/workspaces/{workspaceId}/widgets/{widgetId}:
+    get:
+      operationId: getWidget
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [widgets:read]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - name: widgetId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Widget details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Widget"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    WorkspaceId:
+      name: workspaceId
+      in: path
+      required: true
+      schema:
+        type: string
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+  schemas:
+    Widget:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string

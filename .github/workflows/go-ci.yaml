@@ -12,6 +12,37 @@ permissions:
   contents: read
 
 jobs:
+  openapi:
+    name: OpenAPI Contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: tools/openapi/go.sum
+
+      - name: Download dependencies
+        run: go -C tools/openapi mod download
+
+      - name: Run compatibility fixtures
+        run: go -C tools/openapi test ./...
+
+      - name: Validate OpenAPI contract
+        run: go -C tools/openapi run . validate ../../docs/openapi.yaml
+
+      - name: Reject breaking changes
+        if: github.event_name == 'pull_request'
+        env:
+          OPENAPI_BASE_REF: ${{ github.event.pull_request.base.sha }}
+        run: go -C tools/openapi run . breaking-ref "$OPENAPI_BASE_REF" docs/openapi.yaml ../../docs/openapi.yaml
+
   ci:
     name: Lint and Build
     runs-on: ubuntu-latest
