@@ -42,6 +42,11 @@ cursors are bound to their workspace and continue from the encoded keyset
 position even if the member at that position is later removed. A cursor from a
 different list or workspace is rejected as invalid.
 
+Workspace lists are ordered by the authenticated caller's membership creation
+time, newest first, with workspace ID as a deterministic tie-breaker. Joining
+an older workspace therefore moves it to the correct position in that caller's
+list without changing the workspace itself.
+
 ## Security Boundary
 
 The canonical workspace identity is always the `{workspaceId}` route

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sort"
@@ -28,10 +29,12 @@ var (
 )
 
 const (
-	workspaceCursorVersion       byte = 1
-	workspaceListCursorKind      byte = 1
-	membershipListCursorKind     byte = 2
-	workspaceCursorPayloadLength      = 26
+	workspaceCursorVersion           byte = 1
+	workspaceListCursorKind          byte = 1
+	membershipListCursorKind         byte = 2
+	workspaceCursorHeaderLength           = 14
+	membershipCursorPayloadLength         = workspaceCursorHeaderLength + 12
+	workspaceListCursorPayloadLength      = workspaceCursorHeaderLength + 8 + 12
 )
 
 type WorkspaceRepository struct {
@@ -77,32 +80,11 @@ func (r *WorkspaceRepository) GetForUser(ctx context.Context, workspaceID, userI
 }
 
 func (r *WorkspaceRepository) ListForUser(ctx context.Context, userID primitive.ObjectID, limit int, cursor string) ([]models.Workspace, string, error) {
-	filter := bson.M{
-		"memberships": bson.M{"$elemMatch": bson.M{
-			"user_id": userID,
-			"status":  models.MembershipStatusActive,
-		}},
+	pipeline, err := buildWorkspaceListPipeline(userID, limit, cursor)
+	if err != nil {
+		return nil, "", err
 	}
-	if cursor != "" {
-		cursorID, err := decodeWorkspaceCursor(cursor, workspaceListCursorKind, userID)
-		if err != nil {
-			return nil, "", err
-		}
-		filter["_id"] = bson.M{"$lt": cursorID}
-	}
-
-	findOptions := options.Find().
-		SetSort(bson.D{{Key: "_id", Value: -1}}).
-		SetLimit(int64(limit + 1)).
-		SetProjection(bson.M{
-			"name":        1,
-			"description": 1,
-			"created_at":  1,
-			"updated_at":  1,
-			"memberships": bson.M{"$elemMatch": bson.M{"user_id": userID, "status": models.MembershipStatusActive}},
-		})
-
-	cursorResult, err := r.collection.Find(ctx, filter, findOptions)
+	cursorResult, err := r.collection.Aggregate(ctx, pipeline)
 	if err != nil {
 		return nil, "", err
 	}
@@ -120,9 +102,54 @@ func (r *WorkspaceRepository) ListForUser(ctx context.Context, userID primitive.
 	nextCursor := ""
 	if len(workspaces) > limit {
 		workspaces = workspaces[:limit]
-		nextCursor = encodeWorkspaceCursor(workspaceListCursorKind, userID, workspaces[len(workspaces)-1].ID)
+		last := workspaces[len(workspaces)-1]
+		if len(last.Memberships) != 1 {
+			return nil, "", errors.New("workspace list projection omitted caller membership")
+		}
+		nextCursor = encodeWorkspaceListCursor(userID, last.Memberships[0].CreatedAt, last.ID)
 	}
 	return workspaces, nextCursor, nil
+}
+
+func buildWorkspaceListPipeline(userID primitive.ObjectID, limit int, cursor string) (mongo.Pipeline, error) {
+	activeMembership := bson.M{
+		"user_id": userID,
+		"status":  models.MembershipStatusActive,
+	}
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"memberships": bson.M{"$elemMatch": activeMembership}}}},
+		{{Key: "$unwind", Value: "$memberships"}},
+		{{Key: "$match", Value: bson.M{
+			"memberships.user_id": userID,
+			"memberships.status":  models.MembershipStatusActive,
+		}}},
+	}
+	if cursor != "" {
+		membershipCreatedAt, workspaceID, err := decodeWorkspaceListCursor(cursor, userID)
+		if err != nil {
+			return nil, err
+		}
+		pipeline = append(pipeline, bson.D{{Key: "$match", Value: bson.M{"$or": bson.A{
+			bson.M{"memberships.created_at": bson.M{"$lt": membershipCreatedAt}},
+			bson.M{"memberships.created_at": membershipCreatedAt, "_id": bson.M{"$lt": workspaceID}},
+		}}}})
+	}
+	pipeline = append(pipeline,
+		bson.D{{Key: "$sort", Value: bson.D{
+			{Key: "memberships.created_at", Value: -1},
+			{Key: "_id", Value: -1},
+		}}},
+		bson.D{{Key: "$limit", Value: int64(limit + 1)}},
+		bson.D{{Key: "$project", Value: bson.M{
+			"_id":         1,
+			"name":        1,
+			"description": 1,
+			"created_at":  1,
+			"updated_at":  1,
+			"memberships": bson.A{"$memberships"},
+		}}},
+	)
+	return pipeline, nil
 }
 
 func (r *WorkspaceRepository) UpdateMetadata(
@@ -276,7 +303,7 @@ func (r *WorkspaceRepository) ListMembershipsForUser(
 	})
 
 	if cursor != "" {
-		cursorID, err := decodeWorkspaceCursor(cursor, membershipListCursorKind, workspaceID)
+		cursorID, err := decodeMembershipCursor(cursor, workspaceID)
 		if err != nil {
 			return nil, "", err
 		}
@@ -286,7 +313,7 @@ func (r *WorkspaceRepository) ListMembershipsForUser(
 	nextCursor := ""
 	if len(memberships) > limit {
 		memberships = memberships[:limit]
-		nextCursor = encodeWorkspaceCursor(membershipListCursorKind, workspaceID, memberships[len(memberships)-1].ID)
+		nextCursor = encodeMembershipCursor(workspaceID, memberships[len(memberships)-1].ID)
 	}
 	return memberships, nextCursor, nil
 }
@@ -346,24 +373,55 @@ func membershipsAfterCursor(memberships []models.Membership, cursorID primitive.
 	return memberships[start:]
 }
 
-func encodeWorkspaceCursor(kind byte, scopeID, id primitive.ObjectID) string {
-	payload := make([]byte, workspaceCursorPayloadLength)
-	payload[0] = workspaceCursorVersion
-	payload[1] = kind
-	copy(payload[2:14], scopeID[:])
-	copy(payload[14:], id[:])
+func encodeWorkspaceListCursor(scopeID primitive.ObjectID, membershipCreatedAt time.Time, workspaceID primitive.ObjectID) string {
+	payload := make([]byte, workspaceListCursorPayloadLength)
+	writeCursorHeader(payload, workspaceListCursorKind, scopeID)
+	binary.BigEndian.PutUint64(payload[workspaceCursorHeaderLength:workspaceCursorHeaderLength+8], uint64(membershipCreatedAt.UnixMilli()))
+	copy(payload[workspaceCursorHeaderLength+8:], workspaceID[:])
 	return base64.RawURLEncoding.EncodeToString(payload)
 }
 
-func decodeWorkspaceCursor(value string, kind byte, scopeID primitive.ObjectID) (primitive.ObjectID, error) {
+func decodeWorkspaceListCursor(value string, scopeID primitive.ObjectID) (time.Time, primitive.ObjectID, error) {
+	decoded, err := decodeCursor(value, workspaceListCursorPayloadLength, workspaceListCursorKind, scopeID)
+	if err != nil {
+		return time.Time{}, primitive.NilObjectID, err
+	}
+	membershipCreatedAt := time.UnixMilli(int64(binary.BigEndian.Uint64(decoded[workspaceCursorHeaderLength : workspaceCursorHeaderLength+8]))).UTC()
+	var workspaceID primitive.ObjectID
+	copy(workspaceID[:], decoded[workspaceCursorHeaderLength+8:])
+	return membershipCreatedAt, workspaceID, nil
+}
+
+func encodeMembershipCursor(scopeID, membershipID primitive.ObjectID) string {
+	payload := make([]byte, membershipCursorPayloadLength)
+	writeCursorHeader(payload, membershipListCursorKind, scopeID)
+	copy(payload[workspaceCursorHeaderLength:], membershipID[:])
+	return base64.RawURLEncoding.EncodeToString(payload)
+}
+
+func decodeMembershipCursor(value string, scopeID primitive.ObjectID) (primitive.ObjectID, error) {
+	decoded, err := decodeCursor(value, membershipCursorPayloadLength, membershipListCursorKind, scopeID)
+	if err != nil {
+		return primitive.NilObjectID, err
+	}
+	var membershipID primitive.ObjectID
+	copy(membershipID[:], decoded[workspaceCursorHeaderLength:])
+	return membershipID, nil
+}
+
+func writeCursorHeader(payload []byte, kind byte, scopeID primitive.ObjectID) {
+	payload[0] = workspaceCursorVersion
+	payload[1] = kind
+	copy(payload[2:workspaceCursorHeaderLength], scopeID[:])
+}
+
+func decodeCursor(value string, expectedLength int, kind byte, scopeID primitive.ObjectID) ([]byte, error) {
 	decoded, err := base64.RawURLEncoding.DecodeString(value)
-	if err != nil || len(decoded) != workspaceCursorPayloadLength {
-		return primitive.NilObjectID, fmt.Errorf("%w: malformed value", ErrInvalidCursor)
+	if err != nil || len(decoded) != expectedLength {
+		return nil, fmt.Errorf("%w: malformed value", ErrInvalidCursor)
 	}
-	if decoded[0] != workspaceCursorVersion || decoded[1] != kind || !bytes.Equal(decoded[2:14], scopeID[:]) {
-		return primitive.NilObjectID, fmt.Errorf("%w: malformed value", ErrInvalidCursor)
+	if decoded[0] != workspaceCursorVersion || decoded[1] != kind || !bytes.Equal(decoded[2:workspaceCursorHeaderLength], scopeID[:]) {
+		return nil, fmt.Errorf("%w: malformed value", ErrInvalidCursor)
 	}
-	var id primitive.ObjectID
-	copy(id[:], decoded[14:])
-	return id, nil
+	return decoded, nil
 }
