@@ -24,10 +24,17 @@ func LogsMiddleware() gin.HandlerFunc {
 		start := time.Now()
 		c.Next()
 		duration := time.Since(start)
-		logrus.WithFields(logrus.Fields{
+		fields := logrus.Fields{
 			"method":   c.Request.Method,
 			"path":     c.Request.URL.Path,
 			"duration": fmt.Sprintf("%.2fms", float64(duration.Microseconds())/1000),
-		}).Info("Request processed")
+		}
+		if authorization, ok := WorkspaceAuthorizationFromContext(c.Request.Context()); ok {
+			fields["workspace_id"] = authorization.WorkspaceID().Hex()
+			fields["membership_id"] = authorization.MembershipID().Hex()
+			fields["actor_id"] = authorization.UserID().Hex()
+			fields["workspace_role"] = authorization.Role()
+		}
+		logrus.WithFields(fields).Info("Request processed")
 	}
 }

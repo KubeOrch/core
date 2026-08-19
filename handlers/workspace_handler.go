@@ -88,11 +88,11 @@ func (h *WorkspaceHandler) List(c *gin.Context) {
 }
 
 func (h *WorkspaceHandler) Get(c *gin.Context) {
-	actorID, workspaceID, ok := requestIdentities(c)
+	authorization, ok := workspaceRequestAuthorization(c)
 	if !ok {
 		return
 	}
-	response, err := h.application.GetWorkspace(c.Request.Context(), actorID, workspaceID)
+	response, err := h.application.GetWorkspace(c.Request.Context(), authorization.UserID(), authorization.WorkspaceID())
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -101,7 +101,7 @@ func (h *WorkspaceHandler) Get(c *gin.Context) {
 }
 
 func (h *WorkspaceHandler) Update(c *gin.Context) {
-	actorID, workspaceID, ok := requestIdentities(c)
+	authorization, ok := workspaceRequestAuthorization(c)
 	if !ok {
 		return
 	}
@@ -109,17 +109,17 @@ func (h *WorkspaceHandler) Update(c *gin.Context) {
 	if !decodeRequest(c, &request) {
 		return
 	}
-	response, err := h.application.UpdateWorkspace(c.Request.Context(), actorID, workspaceID, request)
+	response, err := h.application.UpdateWorkspace(c.Request.Context(), authorization.UserID(), authorization.WorkspaceID(), request)
 	if err != nil {
 		h.writeError(c, err)
 		return
 	}
-	logrus.WithFields(logrus.Fields{"workspace_id": response.ID, "actor_id": actorID.Hex()}).Info("Workspace updated")
+	logrus.WithFields(logrus.Fields{"workspace_id": response.ID, "actor_id": authorization.UserID().Hex()}).Info("Workspace updated")
 	c.JSON(http.StatusOK, response)
 }
 
 func (h *WorkspaceHandler) ListMembers(c *gin.Context) {
-	actorID, workspaceID, ok := requestIdentities(c)
+	authorization, ok := workspaceRequestAuthorization(c)
 	if !ok {
 		return
 	}
@@ -127,7 +127,7 @@ func (h *WorkspaceHandler) ListMembers(c *gin.Context) {
 	if !ok {
 		return
 	}
-	response, err := h.application.ListMemberships(c.Request.Context(), actorID, workspaceID, limit, cursor)
+	response, err := h.application.ListMemberships(c.Request.Context(), authorization.UserID(), authorization.WorkspaceID(), limit, cursor)
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -136,7 +136,7 @@ func (h *WorkspaceHandler) ListMembers(c *gin.Context) {
 }
 
 func (h *WorkspaceHandler) AddMember(c *gin.Context) {
-	actorID, workspaceID, ok := requestIdentities(c)
+	authorization, ok := workspaceRequestAuthorization(c)
 	if !ok {
 		return
 	}
@@ -150,7 +150,7 @@ func (h *WorkspaceHandler) AddMember(c *gin.Context) {
 		return
 	}
 
-	response, replayed, err := h.application.AddMembership(c.Request.Context(), actorID, workspaceID, targetUserID, request.Role)
+	response, replayed, err := h.application.AddMembership(c.Request.Context(), authorization.UserID(), authorization.WorkspaceID(), targetUserID, request.Role)
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -159,12 +159,12 @@ func (h *WorkspaceHandler) AddMember(c *gin.Context) {
 	if replayed {
 		status = http.StatusOK
 	}
-	logrus.WithFields(logrus.Fields{"workspace_id": workspaceID.Hex(), "membership_id": response.ID, "actor_id": actorID.Hex(), "replayed": replayed}).Info("Workspace membership added")
+	logrus.WithFields(logrus.Fields{"workspace_id": authorization.WorkspaceID().Hex(), "membership_id": response.ID, "actor_id": authorization.UserID().Hex(), "replayed": replayed}).Info("Workspace membership added")
 	c.JSON(status, response)
 }
 
 func (h *WorkspaceHandler) UpdateMember(c *gin.Context) {
-	actorID, workspaceID, membershipID, ok := membershipRequestIdentities(c)
+	authorization, membershipID, ok := membershipRequestAuthorization(c)
 	if !ok {
 		return
 	}
@@ -172,25 +172,25 @@ func (h *WorkspaceHandler) UpdateMember(c *gin.Context) {
 	if !decodeRequest(c, &request) {
 		return
 	}
-	response, err := h.application.UpdateMembership(c.Request.Context(), actorID, workspaceID, membershipID, request.Role)
+	response, err := h.application.UpdateMembership(c.Request.Context(), authorization.UserID(), authorization.WorkspaceID(), membershipID, request.Role)
 	if err != nil {
 		h.writeError(c, err)
 		return
 	}
-	logrus.WithFields(logrus.Fields{"workspace_id": workspaceID.Hex(), "membership_id": membershipID.Hex(), "actor_id": actorID.Hex()}).Info("Workspace membership updated")
+	logrus.WithFields(logrus.Fields{"workspace_id": authorization.WorkspaceID().Hex(), "membership_id": membershipID.Hex(), "actor_id": authorization.UserID().Hex()}).Info("Workspace membership updated")
 	c.JSON(http.StatusOK, response)
 }
 
 func (h *WorkspaceHandler) RemoveMember(c *gin.Context) {
-	actorID, workspaceID, membershipID, ok := membershipRequestIdentities(c)
+	authorization, membershipID, ok := membershipRequestAuthorization(c)
 	if !ok {
 		return
 	}
-	if err := h.application.RemoveMembership(c.Request.Context(), actorID, workspaceID, membershipID); err != nil {
+	if err := h.application.RemoveMembership(c.Request.Context(), authorization.UserID(), authorization.WorkspaceID(), membershipID); err != nil {
 		h.writeError(c, err)
 		return
 	}
-	logrus.WithFields(logrus.Fields{"workspace_id": workspaceID.Hex(), "membership_id": membershipID.Hex(), "actor_id": actorID.Hex()}).Info("Workspace membership removed")
+	logrus.WithFields(logrus.Fields{"workspace_id": authorization.WorkspaceID().Hex(), "membership_id": membershipID.Hex(), "actor_id": authorization.UserID().Hex()}).Info("Workspace membership removed")
 	c.Status(http.StatusNoContent)
 }
 
@@ -228,30 +228,26 @@ func authenticatedUserID(c *gin.Context) (primitive.ObjectID, bool) {
 	return userID, true
 }
 
-func requestIdentities(c *gin.Context) (primitive.ObjectID, primitive.ObjectID, bool) {
-	actorID, ok := authenticatedUserID(c)
+func workspaceRequestAuthorization(c *gin.Context) (middleware.WorkspaceAuthorization, bool) {
+	authorization, ok := middleware.WorkspaceAuthorizationFromContext(c.Request.Context())
 	if !ok {
-		return primitive.NilObjectID, primitive.NilObjectID, false
+		api.WriteProblem(c, http.StatusInternalServerError, "workspace_context_required", "Workspace context required", "The workspace authorization context is unavailable.")
+		return middleware.WorkspaceAuthorization{}, false
 	}
-	workspaceID, err := primitive.ObjectIDFromHex(c.Param("workspaceId"))
-	if err != nil {
-		api.WriteProblem(c, http.StatusNotFound, "resource_not_found", "Resource not found", "The requested resource was not found.")
-		return primitive.NilObjectID, primitive.NilObjectID, false
-	}
-	return actorID, workspaceID, true
+	return authorization, true
 }
 
-func membershipRequestIdentities(c *gin.Context) (primitive.ObjectID, primitive.ObjectID, primitive.ObjectID, bool) {
-	actorID, workspaceID, ok := requestIdentities(c)
+func membershipRequestAuthorization(c *gin.Context) (middleware.WorkspaceAuthorization, primitive.ObjectID, bool) {
+	authorization, ok := workspaceRequestAuthorization(c)
 	if !ok {
-		return primitive.NilObjectID, primitive.NilObjectID, primitive.NilObjectID, false
+		return middleware.WorkspaceAuthorization{}, primitive.NilObjectID, false
 	}
 	membershipID, err := primitive.ObjectIDFromHex(c.Param("memberId"))
 	if err != nil {
 		api.WriteProblem(c, http.StatusNotFound, "resource_not_found", "Resource not found", "The requested resource was not found.")
-		return primitive.NilObjectID, primitive.NilObjectID, primitive.NilObjectID, false
+		return middleware.WorkspaceAuthorization{}, primitive.NilObjectID, false
 	}
-	return actorID, workspaceID, membershipID, true
+	return authorization, membershipID, true
 }
 
 func pagination(c *gin.Context) (int, string, bool) {

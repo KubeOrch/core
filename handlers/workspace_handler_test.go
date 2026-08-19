@@ -26,6 +26,14 @@ type stubWorkspaceApplication struct {
 	removeMembership func(context.Context, primitive.ObjectID, primitive.ObjectID, primitive.ObjectID) error
 }
 
+type stubWorkspaceMembershipResolver struct {
+	find func(context.Context, primitive.ObjectID, primitive.ObjectID) (models.Membership, bool, error)
+}
+
+func (s stubWorkspaceMembershipResolver) FindMembership(ctx context.Context, workspaceID, userID primitive.ObjectID) (models.Membership, bool, error) {
+	return s.find(ctx, workspaceID, userID)
+}
+
 func (s stubWorkspaceApplication) CreateWorkspace(ctx context.Context, actorID primitive.ObjectID, request models.CreateWorkspaceRequest, key string) (models.WorkspaceResponse, bool, error) {
 	return s.create(ctx, actorID, request, key)
 }
@@ -196,9 +204,145 @@ func TestWorkspaceRemoveProtectsLastOwner(t *testing.T) {
 	assert.Equal(t, "last_owner_required", problemCode(t, response))
 }
 
+func TestWorkspaceScopedHandlersRequireValidatedMembership(t *testing.T) {
+	workspaceID := primitive.NewObjectID()
+	actorID := primitive.NewObjectID()
+	membershipID := primitive.NewObjectID()
+
+	for _, test := range []struct {
+		name       string
+		membership models.Membership
+		found      bool
+		wantStatus int
+		wantCalled bool
+	}{
+		{
+			name: "active member",
+			membership: models.Membership{
+				ID: membershipID, WorkspaceID: workspaceID, UserID: actorID,
+				Role: models.MembershipRoleMember, Status: models.MembershipStatusActive,
+			},
+			found: true, wantStatus: http.StatusOK, wantCalled: true,
+		},
+		{name: "non-member", found: false, wantStatus: http.StatusNotFound},
+		{
+			name: "disabled member",
+			membership: models.Membership{
+				ID: membershipID, WorkspaceID: workspaceID, UserID: actorID,
+				Role: models.MembershipRoleMember, Status: models.MembershipStatusDisabled,
+			},
+			found: true, wantStatus: http.StatusNotFound,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			called := false
+			application := stubWorkspaceApplication{
+				get: func(_ context.Context, gotActorID, gotWorkspaceID primitive.ObjectID) (models.WorkspaceResponse, error) {
+					called = true
+					assert.Equal(t, actorID, gotActorID)
+					assert.Equal(t, workspaceID, gotWorkspaceID)
+					return models.WorkspaceResponse{ID: gotWorkspaceID.Hex()}, nil
+				},
+			}
+			resolver := stubWorkspaceMembershipResolver{find: func(_ context.Context, gotWorkspaceID, gotUserID primitive.ObjectID) (models.Membership, bool, error) {
+				assert.Equal(t, workspaceID, gotWorkspaceID)
+				assert.Equal(t, actorID, gotUserID)
+				return test.membership, test.found, nil
+			}}
+			router := workspaceTestRouterWithResolver(NewWorkspaceHandler(application), actorID, resolver)
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, "/v1/api/workspaces/"+workspaceID.Hex(), nil)
+
+			router.ServeHTTP(response, request)
+
+			assert.Equal(t, test.wantStatus, response.Code)
+			assert.Equal(t, test.wantCalled, called)
+			if !test.wantCalled {
+				assert.Equal(t, "resource_not_found", problemCode(t, response))
+			}
+		})
+	}
+}
+
+func TestWorkspaceScopedHandlerUsesRouteIdentityInsteadOfHeader(t *testing.T) {
+	routeWorkspaceID := primitive.NewObjectID()
+	headerWorkspaceID := primitive.NewObjectID()
+	actorID := primitive.NewObjectID()
+	application := stubWorkspaceApplication{
+		get: func(_ context.Context, gotActorID, gotWorkspaceID primitive.ObjectID) (models.WorkspaceResponse, error) {
+			assert.Equal(t, actorID, gotActorID)
+			assert.Equal(t, routeWorkspaceID, gotWorkspaceID)
+			return models.WorkspaceResponse{ID: gotWorkspaceID.Hex()}, nil
+		},
+	}
+	resolver := stubWorkspaceMembershipResolver{find: func(_ context.Context, workspaceID, userID primitive.ObjectID) (models.Membership, bool, error) {
+		return models.Membership{
+			ID: primitive.NewObjectID(), WorkspaceID: workspaceID, UserID: userID,
+			Role: models.MembershipRoleMember, Status: models.MembershipStatusActive,
+		}, true, nil
+	}}
+	router := workspaceTestRouterWithResolver(NewWorkspaceHandler(application), actorID, resolver)
+	request := httptest.NewRequest(http.MethodGet, "/v1/api/workspaces/"+routeWorkspaceID.Hex(), nil)
+	request.Header.Set("X-Workspace-Id", headerWorkspaceID.Hex())
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	assert.Equal(t, http.StatusOK, response.Code)
+}
+
+func TestWorkspaceScopedHandlerCannotExecuteWithoutAuthorizationContext(t *testing.T) {
+	application := stubWorkspaceApplication{
+		get: func(context.Context, primitive.ObjectID, primitive.ObjectID) (models.WorkspaceResponse, error) {
+			return models.WorkspaceResponse{}, nil
+		},
+	}
+	router := gin.New()
+	registerWorkspaceScopedTestRoutes(router.Group("/v1/api/workspaces/:workspaceId"), NewWorkspaceHandler(application))
+
+	workspaceID := primitive.NewObjectID().Hex()
+	membershipID := primitive.NewObjectID().Hex()
+	for _, test := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{method: http.MethodGet, path: "/v1/api/workspaces/" + workspaceID},
+		{method: http.MethodPatch, path: "/v1/api/workspaces/" + workspaceID, body: `{}`},
+		{method: http.MethodGet, path: "/v1/api/workspaces/" + workspaceID + "/members"},
+		{method: http.MethodPost, path: "/v1/api/workspaces/" + workspaceID + "/members", body: `{}`},
+		{method: http.MethodPatch, path: "/v1/api/workspaces/" + workspaceID + "/members/" + membershipID, body: `{}`},
+		{method: http.MethodDelete, path: "/v1/api/workspaces/" + workspaceID + "/members/" + membershipID},
+	} {
+		t.Run(test.method+" "+test.path, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
+
+			router.ServeHTTP(response, request)
+
+			assert.Equal(t, http.StatusInternalServerError, response.Code)
+			assert.Equal(t, "workspace_context_required", problemCode(t, response))
+		})
+	}
+}
+
 func workspaceTestRouter(handler *WorkspaceHandler) (*gin.Engine, primitive.ObjectID) {
 	gin.SetMode(gin.TestMode)
 	actorID := primitive.NewObjectID()
+	resolver := stubWorkspaceMembershipResolver{find: func(_ context.Context, workspaceID, userID primitive.ObjectID) (models.Membership, bool, error) {
+		return models.Membership{
+			ID:          primitive.NewObjectID(),
+			WorkspaceID: workspaceID,
+			UserID:      userID,
+			Role:        models.MembershipRoleOwner,
+			Status:      models.MembershipStatusActive,
+		}, true, nil
+	}}
+	return workspaceTestRouterWithResolver(handler, actorID, resolver), actorID
+}
+
+func workspaceTestRouterWithResolver(handler *WorkspaceHandler, actorID primitive.ObjectID, resolver middleware.WorkspaceMembershipResolver) *gin.Engine {
+	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(middleware.RequestIDMiddleware())
 	router.Use(func(c *gin.Context) {
@@ -206,10 +350,19 @@ func workspaceTestRouter(handler *WorkspaceHandler) (*gin.Engine, primitive.Obje
 		c.Next()
 	})
 	router.POST("/v1/api/workspaces", handler.Create)
-	router.GET("/v1/api/workspaces/:workspaceId", handler.Get)
-	router.PATCH("/v1/api/workspaces/:workspaceId", handler.Update)
-	router.DELETE("/v1/api/workspaces/:workspaceId/members/:memberId", handler.RemoveMember)
-	return router, actorID
+	workspaceScoped := router.Group("/v1/api/workspaces/:workspaceId")
+	workspaceScoped.Use(middleware.WorkspaceAuthorizationMiddleware(resolver))
+	registerWorkspaceScopedTestRoutes(workspaceScoped, handler)
+	return router
+}
+
+func registerWorkspaceScopedTestRoutes(workspaceScoped *gin.RouterGroup, handler *WorkspaceHandler) {
+	workspaceScoped.GET("", handler.Get)
+	workspaceScoped.PATCH("", handler.Update)
+	workspaceScoped.GET("/members", handler.ListMembers)
+	workspaceScoped.POST("/members", handler.AddMember)
+	workspaceScoped.PATCH("/members/:memberId", handler.UpdateMember)
+	workspaceScoped.DELETE("/members/:memberId", handler.RemoveMember)
 }
 
 func problemCode(t *testing.T, response *httptest.ResponseRecorder) string {

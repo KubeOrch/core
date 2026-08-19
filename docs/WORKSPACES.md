@@ -52,6 +52,20 @@ list without changing the workspace itself.
 The canonical workspace identity is always the `{workspaceId}` route
 parameter. Workspace reads return the same non-enumerating `resource_not_found`
 response for an unknown workspace and a workspace the caller cannot access.
+Workspace-scoped route groups must install `WorkspaceAuthorizationMiddleware`
+after authentication. The middleware resolves the caller's active membership
+from the route identity and attaches an immutable `WorkspaceAuthorization` to
+the standard request context. Handlers and services read it only through
+`middleware.WorkspaceAuthorizationFromContext`; caller-supplied headers, query
+parameters, and request bodies are never workspace identity sources.
+
+Missing or malformed workspace IDs, absent or disabled memberships, membership
+identity mismatches, and invalid roles all return the same `resource_not_found`
+problem. Internal denial metrics use the bounded `reason` label on
+`workspace_authorization_denials_total`; request logs may correlate workspace,
+membership, and actor IDs plus normalized base roles but never include
+credentials or request bodies.
+
 New handlers emit `application/problem+json` errors with a safe
 `X-Request-Id`. Structured logs contain resource IDs and roles only; they do
 not include user email addresses, credentials, or request bodies.
