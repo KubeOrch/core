@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -209,8 +210,18 @@ func TestLogsMiddlewareIncludesSafeWorkspaceCorrelation(t *testing.T) {
 
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/workspaces/"+workspaceID.Hex(), nil))
 
+	decoder := json.NewDecoder(bytes.NewReader(output.Bytes()))
 	var entry map[string]any
-	require.NoError(t, json.Unmarshal(output.Bytes(), &entry))
+	for {
+		var current map[string]any
+		err := decoder.Decode(&current)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		entry = current
+	}
+	require.NotNil(t, entry)
 	assert.Equal(t, workspaceID.Hex(), entry["workspace_id"])
 	assert.Equal(t, membershipID.Hex(), entry["membership_id"])
 	assert.Equal(t, userID.Hex(), entry["actor_id"])

@@ -292,23 +292,38 @@ func TestWorkspaceScopedHandlerUsesRouteIdentityInsteadOfHeader(t *testing.T) {
 }
 
 func TestWorkspaceScopedHandlerCannotExecuteWithoutAuthorizationContext(t *testing.T) {
-	called := false
 	application := stubWorkspaceApplication{
 		get: func(context.Context, primitive.ObjectID, primitive.ObjectID) (models.WorkspaceResponse, error) {
-			called = true
 			return models.WorkspaceResponse{}, nil
 		},
 	}
 	router := gin.New()
-	router.GET("/v1/api/workspaces/:workspaceId", NewWorkspaceHandler(application).Get)
-	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/v1/api/workspaces/"+primitive.NewObjectID().Hex(), nil)
+	registerWorkspaceScopedTestRoutes(router.Group("/v1/api/workspaces/:workspaceId"), NewWorkspaceHandler(application))
 
-	router.ServeHTTP(response, request)
+	workspaceID := primitive.NewObjectID().Hex()
+	membershipID := primitive.NewObjectID().Hex()
+	for _, test := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{method: http.MethodGet, path: "/v1/api/workspaces/" + workspaceID},
+		{method: http.MethodPatch, path: "/v1/api/workspaces/" + workspaceID, body: `{}`},
+		{method: http.MethodGet, path: "/v1/api/workspaces/" + workspaceID + "/members"},
+		{method: http.MethodPost, path: "/v1/api/workspaces/" + workspaceID + "/members", body: `{}`},
+		{method: http.MethodPatch, path: "/v1/api/workspaces/" + workspaceID + "/members/" + membershipID, body: `{}`},
+		{method: http.MethodDelete, path: "/v1/api/workspaces/" + workspaceID + "/members/" + membershipID},
+	} {
+		t.Run(test.method+" "+test.path, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
 
-	assert.False(t, called)
-	assert.Equal(t, http.StatusInternalServerError, response.Code)
-	assert.Equal(t, "workspace_context_required", problemCode(t, response))
+			router.ServeHTTP(response, request)
+
+			assert.Equal(t, http.StatusInternalServerError, response.Code)
+			assert.Equal(t, "workspace_context_required", problemCode(t, response))
+		})
+	}
 }
 
 func workspaceTestRouter(handler *WorkspaceHandler) (*gin.Engine, primitive.ObjectID) {
@@ -337,10 +352,17 @@ func workspaceTestRouterWithResolver(handler *WorkspaceHandler, actorID primitiv
 	router.POST("/v1/api/workspaces", handler.Create)
 	workspaceScoped := router.Group("/v1/api/workspaces/:workspaceId")
 	workspaceScoped.Use(middleware.WorkspaceAuthorizationMiddleware(resolver))
+	registerWorkspaceScopedTestRoutes(workspaceScoped, handler)
+	return router
+}
+
+func registerWorkspaceScopedTestRoutes(workspaceScoped *gin.RouterGroup, handler *WorkspaceHandler) {
 	workspaceScoped.GET("", handler.Get)
 	workspaceScoped.PATCH("", handler.Update)
+	workspaceScoped.GET("/members", handler.ListMembers)
+	workspaceScoped.POST("/members", handler.AddMember)
+	workspaceScoped.PATCH("/members/:memberId", handler.UpdateMember)
 	workspaceScoped.DELETE("/members/:memberId", handler.RemoveMember)
-	return router
 }
 
 func problemCode(t *testing.T, response *httptest.ResponseRecorder) string {

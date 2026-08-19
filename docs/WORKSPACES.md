@@ -59,12 +59,12 @@ the standard request context. Handlers and services read it only through
 `middleware.WorkspaceAuthorizationFromContext`; caller-supplied headers, query
 parameters, and request bodies are never workspace identity sources.
 
-Missing or malformed workspace IDs, absent memberships, disabled memberships,
-and membership identity mismatches all return the same `resource_not_found`
+Missing or malformed workspace IDs, absent or disabled memberships, membership
+identity mismatches, and invalid roles all return the same `resource_not_found`
 problem. Internal denial metrics use the bounded `reason` label on
 `workspace_authorization_denials_total`; request logs may correlate workspace,
-membership, actor, and normalized base-role IDs but never include credentials
-or request bodies.
+membership, and actor IDs plus normalized base roles but never include
+credentials or request bodies.
 
 New handlers emit `application/problem+json` errors with a safe
 `X-Request-Id`. Structured logs contain resource IDs and roles only; they do
