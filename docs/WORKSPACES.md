@@ -31,6 +31,17 @@ membership. Adding the same user with a different role returns
 `membership_exists`; callers must use the membership role endpoint for that
 change.
 
+## Request Validation
+
+Workspace and membership JSON mutation bodies are limited to 32 KiB. Larger
+bodies return `request_too_large` with HTTP 413. Workspace name and description
+limits count Unicode code points after surrounding whitespace is removed.
+
+Workspace-list cursors are bound to the authenticated identity. Membership-list
+cursors are bound to their workspace and continue from the encoded keyset
+position even if the member at that position is later removed. A cursor from a
+different list or workspace is rejected as invalid.
+
 ## Security Boundary
 
 The canonical workspace identity is always the `{workspaceId}` route

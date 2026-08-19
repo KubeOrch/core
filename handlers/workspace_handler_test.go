@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/KubeOrch/core/middleware"
@@ -100,6 +101,43 @@ func TestWorkspaceCreateReplaysOriginalResponse(t *testing.T) {
 
 	assert.Equal(t, http.StatusCreated, response.Code)
 	assert.Equal(t, "true", response.Header().Get("Idempotency-Replayed"))
+	var workspace models.WorkspaceResponse
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &workspace))
+	assert.Equal(t, workspaceID.Hex(), workspace.ID)
+	assert.Equal(t, "Platform", workspace.Name)
+	assert.Equal(t, models.MembershipRoleOwner, workspace.Role)
+}
+
+func TestWorkspaceCreateLimitsRequestBody(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body string
+	}{
+		{name: "oversized object", body: `{"name":"` + strings.Repeat("x", int(maxWorkspaceRequestBodyBytes)) + `"}`},
+		{name: "oversized trailing content", body: `{"name":"Platform"}` + strings.Repeat(" ", int(maxWorkspaceRequestBodyBytes))},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			called := false
+			application := stubWorkspaceApplication{
+				create: func(context.Context, primitive.ObjectID, models.CreateWorkspaceRequest, string) (models.WorkspaceResponse, bool, error) {
+					called = true
+					return models.WorkspaceResponse{}, false, nil
+				},
+			}
+			router, _ := workspaceTestRouter(NewWorkspaceHandler(application))
+			request := httptest.NewRequest(http.MethodPost, "/v1/api/workspaces", strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Idempotency-Key", "create-platform")
+			response := httptest.NewRecorder()
+
+			router.ServeHTTP(response, request)
+
+			assert.False(t, called)
+			assert.Equal(t, http.StatusRequestEntityTooLarge, response.Code)
+			assert.Equal(t, "application/problem+json", response.Header().Get("Content-Type"))
+			assert.Equal(t, "request_too_large", problemCode(t, response))
+		})
+	}
 }
 
 func TestWorkspaceGetUsesSameNotFoundResponseForInaccessibleResources(t *testing.T) {

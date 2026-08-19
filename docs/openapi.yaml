@@ -198,6 +198,8 @@ paths:
           $ref: "#/components/responses/APIError"
         "409":
           $ref: "#/components/responses/APIError"
+        "413":
+          $ref: "#/components/responses/APIError"
 
   /api/workspaces/{workspaceId}:
     parameters:
@@ -259,6 +261,8 @@ paths:
         "403":
           $ref: "#/components/responses/APIError"
         "404":
+          $ref: "#/components/responses/APIError"
+        "413":
           $ref: "#/components/responses/APIError"
 
   /api/workspaces/{workspaceId}/members:
@@ -332,6 +336,8 @@ paths:
           $ref: "#/components/responses/APIError"
         "409":
           $ref: "#/components/responses/APIError"
+        "413":
+          $ref: "#/components/responses/APIError"
 
   /api/workspaces/{workspaceId}/members/{memberId}:
     parameters:
@@ -370,6 +376,8 @@ paths:
         "404":
           $ref: "#/components/responses/APIError"
         "409":
+          $ref: "#/components/responses/APIError"
+        "413":
           $ref: "#/components/responses/APIError"
     delete:
       tags: [Workspaces]

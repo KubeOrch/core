@@ -27,6 +27,13 @@ var (
 	ErrInvalidCursor        = errors.New("invalid cursor")
 )
 
+const (
+	workspaceCursorVersion       byte = 1
+	workspaceListCursorKind      byte = 1
+	membershipListCursorKind     byte = 2
+	workspaceCursorPayloadLength      = 26
+)
+
 type WorkspaceRepository struct {
 	collection *mongo.Collection
 }
@@ -77,7 +84,7 @@ func (r *WorkspaceRepository) ListForUser(ctx context.Context, userID primitive.
 		}},
 	}
 	if cursor != "" {
-		cursorID, err := decodeWorkspaceCursor(cursor)
+		cursorID, err := decodeWorkspaceCursor(cursor, workspaceListCursorKind, userID)
 		if err != nil {
 			return nil, "", err
 		}
@@ -113,7 +120,7 @@ func (r *WorkspaceRepository) ListForUser(ctx context.Context, userID primitive.
 	nextCursor := ""
 	if len(workspaces) > limit {
 		workspaces = workspaces[:limit]
-		nextCursor = encodeWorkspaceCursor(workspaces[len(workspaces)-1].ID)
+		nextCursor = encodeWorkspaceCursor(workspaceListCursorKind, userID, workspaces[len(workspaces)-1].ID)
 	}
 	return workspaces, nextCursor, nil
 }
@@ -195,9 +202,9 @@ func (r *WorkspaceRepository) UpdateMembershipRole(
 		"memberships.$[member].updated_at": now,
 		"updated_at":                       now,
 	}}
-	ownerDelta := ownerDelta(currentRole, newRole)
-	if ownerDelta != 0 {
-		update["$inc"] = bson.M{"owner_count": ownerDelta}
+	delta := ownerDelta(currentRole, newRole)
+	if delta != 0 {
+		update["$inc"] = bson.M{"owner_count": delta}
 	}
 
 	var workspace models.Workspace
@@ -269,27 +276,17 @@ func (r *WorkspaceRepository) ListMembershipsForUser(
 	})
 
 	if cursor != "" {
-		cursorID, err := decodeWorkspaceCursor(cursor)
+		cursorID, err := decodeWorkspaceCursor(cursor, membershipListCursorKind, workspaceID)
 		if err != nil {
 			return nil, "", err
 		}
-		start := -1
-		for index := range memberships {
-			if memberships[index].ID == cursorID {
-				start = index
-				break
-			}
-		}
-		if start < 0 {
-			return nil, "", ErrInvalidCursor
-		}
-		memberships = memberships[start+1:]
+		memberships = membershipsAfterCursor(memberships, cursorID)
 	}
 
 	nextCursor := ""
 	if len(memberships) > limit {
 		memberships = memberships[:limit]
-		nextCursor = encodeWorkspaceCursor(memberships[len(memberships)-1].ID)
+		nextCursor = encodeWorkspaceCursor(membershipListCursorKind, workspaceID, memberships[len(memberships)-1].ID)
 	}
 	return memberships, nextCursor, nil
 }
@@ -342,16 +339,31 @@ func ownerDelta(currentRole, newRole models.MembershipRole) int {
 	return 0
 }
 
-func encodeWorkspaceCursor(id primitive.ObjectID) string {
-	return base64.RawURLEncoding.EncodeToString(id[:])
+func membershipsAfterCursor(memberships []models.Membership, cursorID primitive.ObjectID) []models.Membership {
+	start := sort.Search(len(memberships), func(index int) bool {
+		return bytes.Compare(memberships[index].ID[:], cursorID[:]) < 0
+	})
+	return memberships[start:]
 }
 
-func decodeWorkspaceCursor(value string) (primitive.ObjectID, error) {
+func encodeWorkspaceCursor(kind byte, scopeID, id primitive.ObjectID) string {
+	payload := make([]byte, workspaceCursorPayloadLength)
+	payload[0] = workspaceCursorVersion
+	payload[1] = kind
+	copy(payload[2:14], scopeID[:])
+	copy(payload[14:], id[:])
+	return base64.RawURLEncoding.EncodeToString(payload)
+}
+
+func decodeWorkspaceCursor(value string, kind byte, scopeID primitive.ObjectID) (primitive.ObjectID, error) {
 	decoded, err := base64.RawURLEncoding.DecodeString(value)
-	if err != nil || len(decoded) != 12 {
+	if err != nil || len(decoded) != workspaceCursorPayloadLength {
+		return primitive.NilObjectID, fmt.Errorf("%w: malformed value", ErrInvalidCursor)
+	}
+	if decoded[0] != workspaceCursorVersion || decoded[1] != kind || !bytes.Equal(decoded[2:14], scopeID[:]) {
 		return primitive.NilObjectID, fmt.Errorf("%w: malformed value", ErrInvalidCursor)
 	}
 	var id primitive.ObjectID
-	copy(id[:], decoded)
+	copy(id[:], decoded[14:])
 	return id, nil
 }

@@ -3,6 +3,7 @@ package repositories
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/KubeOrch/core/models"
 	"github.com/stretchr/testify/assert"
@@ -12,20 +13,44 @@ import (
 )
 
 func TestWorkspaceCursorRoundTrip(t *testing.T) {
+	scopeID := primitive.NewObjectID()
 	id := primitive.NewObjectID()
-	cursor := encodeWorkspaceCursor(id)
+	cursor := encodeWorkspaceCursor(workspaceListCursorKind, scopeID, id)
 
-	decoded, err := decodeWorkspaceCursor(cursor)
+	decoded, err := decodeWorkspaceCursor(cursor, workspaceListCursorKind, scopeID)
 
 	require.NoError(t, err)
 	assert.Equal(t, id, decoded)
 }
 
 func TestWorkspaceCursorRejectsMalformedValues(t *testing.T) {
+	scopeID := primitive.NewObjectID()
 	for _, value := range []string{"", "not-base64!", "c2hvcnQ"} {
-		_, err := decodeWorkspaceCursor(value)
+		_, err := decodeWorkspaceCursor(value, workspaceListCursorKind, scopeID)
 		assert.ErrorIs(t, err, ErrInvalidCursor)
 	}
+}
+
+func TestWorkspaceCursorRejectsWrongKindAndScope(t *testing.T) {
+	scopeID := primitive.NewObjectID()
+	cursor := encodeWorkspaceCursor(workspaceListCursorKind, scopeID, primitive.NewObjectID())
+
+	_, err := decodeWorkspaceCursor(cursor, membershipListCursorKind, scopeID)
+	assert.ErrorIs(t, err, ErrInvalidCursor)
+	_, err = decodeWorkspaceCursor(cursor, workspaceListCursorKind, primitive.NewObjectID())
+	assert.ErrorIs(t, err, ErrInvalidCursor)
+}
+
+func TestMembershipCursorSurvivesRemovalOfCursorMember(t *testing.T) {
+	newest := primitive.NewObjectIDFromTimestamp(time.Unix(300, 0))
+	removedCursorMember := primitive.NewObjectIDFromTimestamp(time.Unix(200, 0))
+	oldest := primitive.NewObjectIDFromTimestamp(time.Unix(100, 0))
+	memberships := []models.Membership{{ID: newest}, {ID: oldest}}
+
+	remaining := membershipsAfterCursor(memberships, removedCursorMember)
+
+	require.Len(t, remaining, 1)
+	assert.Equal(t, oldest, remaining[0].ID)
 }
 
 func TestOwnerDelta(t *testing.T) {

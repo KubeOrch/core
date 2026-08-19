@@ -22,6 +22,8 @@ import (
 
 var idempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$`)
 
+const maxWorkspaceRequestBodyBytes int64 = 32 << 10
+
 type WorkspaceApplication interface {
 	CreateWorkspace(context.Context, primitive.ObjectID, models.CreateWorkspaceRequest, string) (models.WorkspaceResponse, bool, error)
 	ListWorkspaces(context.Context, primitive.ObjectID, int, string) (models.WorkspaceListResponse, error)
@@ -271,16 +273,32 @@ func pagination(c *gin.Context) (int, string, bool) {
 }
 
 func decodeRequest(c *gin.Context, destination any) bool {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxWorkspaceRequestBodyBytes)
 	decoder := json.NewDecoder(c.Request.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
+		if writeRequestTooLarge(c, err) {
+			return false
+		}
 		api.WriteProblem(c, http.StatusBadRequest, "invalid_request", "Invalid request", safeJSONError(err))
 		return false
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if writeRequestTooLarge(c, err) {
+			return false
+		}
 		api.WriteProblem(c, http.StatusBadRequest, "invalid_request", "Invalid request", "The request body must contain one JSON object.")
 		return false
 	}
+	return true
+}
+
+func writeRequestTooLarge(c *gin.Context, err error) bool {
+	var maxBytesError *http.MaxBytesError
+	if !errors.As(err, &maxBytesError) {
+		return false
+	}
+	api.WriteProblem(c, http.StatusRequestEntityTooLarge, "request_too_large", "Request too large", "The request body must not exceed 32 KiB.")
 	return true
 }
 

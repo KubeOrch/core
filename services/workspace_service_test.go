@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,7 +17,9 @@ import (
 )
 
 type memoryWorkspaceStore struct {
-	workspaces map[primitive.ObjectID]*models.Workspace
+	workspaces      map[primitive.ObjectID]*models.Workspace
+	listForUser     func(context.Context, primitive.ObjectID, int, string) ([]models.Workspace, string, error)
+	listMemberships func(context.Context, primitive.ObjectID, primitive.ObjectID, int, string) ([]models.Membership, string, error)
 }
 
 func newMemoryWorkspaceStore() *memoryWorkspaceStore {
@@ -53,7 +56,10 @@ func (s *memoryWorkspaceStore) GetForUser(_ context.Context, workspaceID, userID
 	return cloneWorkspace(workspace), nil
 }
 
-func (s *memoryWorkspaceStore) ListForUser(_ context.Context, userID primitive.ObjectID, limit int, _ string) ([]models.Workspace, string, error) {
+func (s *memoryWorkspaceStore) ListForUser(ctx context.Context, userID primitive.ObjectID, limit int, cursor string) ([]models.Workspace, string, error) {
+	if s.listForUser != nil {
+		return s.listForUser(ctx, userID, limit, cursor)
+	}
 	var result []models.Workspace
 	for _, workspace := range s.workspaces {
 		if membership, ok := findMembershipByUser(workspace.Memberships, userID); ok {
@@ -172,8 +178,11 @@ func (s *memoryWorkspaceStore) ListMembershipsForUser(
 	ctx context.Context,
 	workspaceID, userID primitive.ObjectID,
 	limit int,
-	_ string,
+	cursor string,
 ) ([]models.Membership, string, error) {
+	if s.listMemberships != nil {
+		return s.listMemberships(ctx, workspaceID, userID, limit, cursor)
+	}
 	workspace, err := s.GetForUser(ctx, workspaceID, userID)
 	if err != nil {
 		return nil, "", err
@@ -255,6 +264,31 @@ func TestCreateWorkspaceReplaysAndProtectsIdempotencyKey(t *testing.T) {
 
 	_, _, err = service.CreateWorkspace(context.Background(), actorID, models.CreateWorkspaceRequest{Name: "Different"}, "create-platform")
 	assert.ErrorIs(t, err, ErrIdempotencyConflict)
+}
+
+func TestWorkspaceValidationCountsUnicodeCodePoints(t *testing.T) {
+	store := newMemoryWorkspaceStore()
+	actorID := primitive.NewObjectID()
+	service := newTestWorkspaceService(store, actorID)
+
+	created, _, err := service.CreateWorkspace(context.Background(), actorID, models.CreateWorkspaceRequest{
+		Name:        strings.Repeat("界", 100),
+		Description: strings.Repeat("😀", 1000),
+	}, "unicode-workspace")
+	require.NoError(t, err)
+	workspaceID, err := primitive.ObjectIDFromHex(created.ID)
+	require.NoError(t, err)
+
+	updatedName := strings.Repeat("界", 100)
+	updated, err := service.UpdateWorkspace(context.Background(), actorID, workspaceID, models.UpdateWorkspaceRequest{Name: &updatedName})
+	require.NoError(t, err)
+	assert.Equal(t, updatedName, updated.Name)
+
+	_, _, err = service.CreateWorkspace(context.Background(), actorID, models.CreateWorkspaceRequest{Name: strings.Repeat("界", 101)}, "long-name")
+	assert.ErrorIs(t, err, ErrInvalidWorkspaceData)
+	tooLongDescription := strings.Repeat("😀", 1001)
+	_, err = service.UpdateWorkspace(context.Background(), actorID, workspaceID, models.UpdateWorkspaceRequest{Description: &tooLongDescription})
+	assert.ErrorIs(t, err, ErrInvalidWorkspaceData)
 }
 
 func TestWorkspaceReadIsNonEnumeratingForNonMember(t *testing.T) {
@@ -362,6 +396,56 @@ func TestConcurrentIdenticalRoleUpdateIsIdempotent(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, models.MembershipRoleAdmin, updated.Role)
+}
+
+func TestWorkspacePaginationForwardsCursorsAndMapsPageInfo(t *testing.T) {
+	store := newMemoryWorkspaceStore()
+	actorID := primitive.NewObjectID()
+	workspaceID := primitive.NewObjectID()
+	store.listForUser = func(_ context.Context, gotActorID primitive.ObjectID, limit int, cursor string) ([]models.Workspace, string, error) {
+		assert.Equal(t, actorID, gotActorID)
+		assert.Equal(t, 2, limit)
+		assert.Equal(t, "workspace-cursor", cursor)
+		return []models.Workspace{{ID: workspaceID}}, "next-workspace-cursor", nil
+	}
+	store.listMemberships = func(_ context.Context, gotWorkspaceID, gotActorID primitive.ObjectID, limit int, cursor string) ([]models.Membership, string, error) {
+		assert.Equal(t, workspaceID, gotWorkspaceID)
+		assert.Equal(t, actorID, gotActorID)
+		assert.Equal(t, 3, limit)
+		assert.Equal(t, "membership-cursor", cursor)
+		return []models.Membership{{ID: primitive.NewObjectID(), WorkspaceID: workspaceID, UserID: actorID}}, "next-membership-cursor", nil
+	}
+	service := newTestWorkspaceService(store, actorID)
+
+	workspaces, err := service.ListWorkspaces(context.Background(), actorID, 2, "workspace-cursor")
+	require.NoError(t, err)
+	require.NotNil(t, workspaces.PageInfo.NextCursor)
+	assert.Equal(t, "next-workspace-cursor", *workspaces.PageInfo.NextCursor)
+	assert.True(t, workspaces.PageInfo.HasMore)
+
+	memberships, err := service.ListMemberships(context.Background(), actorID, workspaceID, 3, "membership-cursor")
+	require.NoError(t, err)
+	require.NotNil(t, memberships.PageInfo.NextCursor)
+	assert.Equal(t, "next-membership-cursor", *memberships.PageInfo.NextCursor)
+	assert.True(t, memberships.PageInfo.HasMore)
+}
+
+func TestWorkspacePaginationMapsInvalidCursorErrors(t *testing.T) {
+	store := newMemoryWorkspaceStore()
+	actorID := primitive.NewObjectID()
+	workspaceID := primitive.NewObjectID()
+	store.listForUser = func(context.Context, primitive.ObjectID, int, string) ([]models.Workspace, string, error) {
+		return nil, "", repositories.ErrInvalidCursor
+	}
+	store.listMemberships = func(context.Context, primitive.ObjectID, primitive.ObjectID, int, string) ([]models.Membership, string, error) {
+		return nil, "", repositories.ErrInvalidCursor
+	}
+	service := newTestWorkspaceService(store, actorID)
+
+	_, err := service.ListWorkspaces(context.Background(), actorID, 20, "invalid")
+	assert.ErrorIs(t, err, ErrInvalidWorkspaceData)
+	_, err = service.ListMemberships(context.Background(), actorID, workspaceID, 20, "invalid")
+	assert.ErrorIs(t, err, ErrInvalidWorkspaceData)
 }
 
 func newTestWorkspaceService(store *memoryWorkspaceStore, userIDs ...primitive.ObjectID) *WorkspaceService {

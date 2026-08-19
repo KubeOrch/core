@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/KubeOrch/core/models"
 	"github.com/KubeOrch/core/repositories"
@@ -158,16 +159,16 @@ func (s *WorkspaceService) UpdateWorkspace(
 
 	updates := bson.M{}
 	if request.Name != nil {
-		name := strings.TrimSpace(*request.Name)
-		if len(name) < 1 || len(name) > 100 {
-			return models.WorkspaceResponse{}, fmt.Errorf("%w: name must contain 1 to 100 characters", ErrInvalidWorkspaceData)
+		name, err := validateWorkspaceName(*request.Name)
+		if err != nil {
+			return models.WorkspaceResponse{}, err
 		}
 		updates["name"] = name
 	}
 	if request.Description != nil {
-		description := strings.TrimSpace(*request.Description)
-		if len(description) > 1000 {
-			return models.WorkspaceResponse{}, fmt.Errorf("%w: description must contain at most 1000 characters", ErrInvalidWorkspaceData)
+		description, err := validateWorkspaceDescription(*request.Description)
+		if err != nil {
+			return models.WorkspaceResponse{}, err
 		}
 		updates["description"] = description
 	}
@@ -379,15 +380,32 @@ func (s *WorkspaceService) authorizedManager(
 }
 
 func validateWorkspaceFields(name, description string) (string, string, error) {
-	name = strings.TrimSpace(name)
-	description = strings.TrimSpace(description)
-	if len(name) < 1 || len(name) > 100 {
-		return "", "", fmt.Errorf("%w: name must contain 1 to 100 characters", ErrInvalidWorkspaceData)
+	name, err := validateWorkspaceName(name)
+	if err != nil {
+		return "", "", err
 	}
-	if len(description) > 1000 {
-		return "", "", fmt.Errorf("%w: description must contain at most 1000 characters", ErrInvalidWorkspaceData)
+	description, err = validateWorkspaceDescription(description)
+	if err != nil {
+		return "", "", err
 	}
 	return name, description, nil
+}
+
+func validateWorkspaceName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	length := utf8.RuneCountInString(name)
+	if !utf8.ValidString(name) || length < 1 || length > 100 {
+		return "", fmt.Errorf("%w: name must contain 1 to 100 characters", ErrInvalidWorkspaceData)
+	}
+	return name, nil
+}
+
+func validateWorkspaceDescription(description string) (string, error) {
+	description = strings.TrimSpace(description)
+	if !utf8.ValidString(description) || utf8.RuneCountInString(description) > 1000 {
+		return "", fmt.Errorf("%w: description must contain at most 1000 characters", ErrInvalidWorkspaceData)
+	}
+	return description, nil
 }
 
 func workspaceRequestHash(name, description string) string {
