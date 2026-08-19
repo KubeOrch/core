@@ -16,7 +16,10 @@ const (
 
 type MembershipStatus string
 
-const MembershipStatusActive MembershipStatus = "active"
+const (
+	MembershipStatusActive   MembershipStatus = "active"
+	MembershipStatusDisabled MembershipStatus = "disabled"
+)
 
 type Membership struct {
 	ID          primitive.ObjectID `bson:"_id" json:"-"`

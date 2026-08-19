@@ -95,12 +95,17 @@ func SetupRouter() *gin.Engine {
 		{
 			workspaces.POST("", workspaceHandler.Create)
 			workspaces.GET("", workspaceHandler.List)
-			workspaces.GET("/:workspaceId", workspaceHandler.Get)
-			workspaces.PATCH("/:workspaceId", workspaceHandler.Update)
-			workspaces.GET("/:workspaceId/members", workspaceHandler.ListMembers)
-			workspaces.POST("/:workspaceId/members", workspaceHandler.AddMember)
-			workspaces.PATCH("/:workspaceId/members/:memberId", workspaceHandler.UpdateMember)
-			workspaces.DELETE("/:workspaceId/members/:memberId", workspaceHandler.RemoveMember)
+
+			workspaceScoped := workspaces.Group("/:workspaceId")
+			workspaceScoped.Use(middleware.WorkspaceAuthorizationMiddleware(workspaceRepository))
+			{
+				workspaceScoped.GET("", workspaceHandler.Get)
+				workspaceScoped.PATCH("", workspaceHandler.Update)
+				workspaceScoped.GET("/members", workspaceHandler.ListMembers)
+				workspaceScoped.POST("/members", workspaceHandler.AddMember)
+				workspaceScoped.PATCH("/members/:memberId", workspaceHandler.UpdateMember)
+				workspaceScoped.DELETE("/members/:memberId", workspaceHandler.RemoveMember)
+			}
 		}
 
 		// Dashboard routes

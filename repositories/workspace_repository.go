@@ -79,6 +79,37 @@ func (r *WorkspaceRepository) GetForUser(ctx context.Context, workspaceID, userI
 	return &workspace, err
 }
 
+// FindMembership returns the caller's membership regardless of status so the
+// authorization boundary can distinguish an inactive membership internally
+// without exposing workspace existence to the caller.
+func (r *WorkspaceRepository) FindMembership(
+	ctx context.Context,
+	workspaceID, userID primitive.ObjectID,
+) (models.Membership, bool, error) {
+	filter := bson.M{
+		"_id":                 workspaceID,
+		"memberships.user_id": userID,
+	}
+	projection := bson.M{
+		"memberships": bson.M{"$elemMatch": bson.M{"user_id": userID}},
+	}
+
+	var workspace struct {
+		Memberships []models.Membership `bson:"memberships"`
+	}
+	err := r.collection.FindOne(ctx, filter, options.FindOne().SetProjection(projection)).Decode(&workspace)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return models.Membership{}, false, nil
+	}
+	if err != nil {
+		return models.Membership{}, false, err
+	}
+	if len(workspace.Memberships) != 1 {
+		return models.Membership{}, false, nil
+	}
+	return workspace.Memberships[0], true, nil
+}
+
 func (r *WorkspaceRepository) ListForUser(ctx context.Context, userID primitive.ObjectID, limit int, cursor string) ([]models.Workspace, string, error) {
 	pipeline, err := buildWorkspaceListPipeline(userID, limit, cursor)
 	if err != nil {
