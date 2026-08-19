@@ -15,19 +15,20 @@ import (
 )
 
 var (
-	Client              *mongo.Client
-	Database            *mongo.Database
-	UserColl            *mongo.Collection
-	WorkflowColl        *mongo.Collection
-	WorkflowRunColl     *mongo.Collection
-	WorkflowVersionColl *mongo.Collection
-	OAuthStateColl      *mongo.Collection
-	OAuthCodeColl       *mongo.Collection
+	Client                  *mongo.Client
+	Database                *mongo.Database
+	UserColl                *mongo.Collection
+	WorkflowColl            *mongo.Collection
+	WorkflowRunColl         *mongo.Collection
+	WorkflowVersionColl     *mongo.Collection
+	OAuthStateColl          *mongo.Collection
+	OAuthCodeColl           *mongo.Collection
 	DashboardStatsColl      *mongo.Collection
 	AlertRuleColl           *mongo.Collection
 	AlertEventColl          *mongo.Collection
 	NotificationChannelColl *mongo.Collection
 	NotificationColl        *mongo.Collection
+	WorkspaceColl           *mongo.Collection
 )
 
 func Connect() error {
@@ -76,6 +77,7 @@ func Connect() error {
 	AlertEventColl = Database.Collection("alert_events")
 	NotificationChannelColl = Database.Collection("notification_channels")
 	NotificationColl = Database.Collection("notifications")
+	WorkspaceColl = Database.Collection("workspaces")
 
 	logrus.Info("MongoDB connection established")
 
@@ -216,6 +218,20 @@ func createIndexes() error {
 	_, err = NotificationColl.Indexes().CreateMany(ctx, notifIndexes)
 	if err != nil {
 		logrus.Warnf("Failed to create notifications indexes: %v", err)
+	}
+
+	workspaceIndexes := []mongo.IndexModel{
+		{
+			Keys: bson.D{{Key: "memberships.user_id", Value: 1}, {Key: "_id", Value: -1}},
+		},
+		{
+			Keys:    bson.D{{Key: "created_by", Value: 1}, {Key: "creation_key", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		},
+	}
+	_, err = WorkspaceColl.Indexes().CreateMany(ctx, workspaceIndexes)
+	if err != nil {
+		return fmt.Errorf("failed to create workspace indexes: %v", err)
 	}
 
 	logrus.Info("Database indexes created successfully")

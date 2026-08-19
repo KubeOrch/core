@@ -30,6 +30,9 @@ They reference the reusable `WorkspaceId` path parameter and declare
 `x-kubeorch-workspace-boundary: workspace`. A header, query parameter, token
 claim, or request body must not override the route workspace.
 
+Workspace bootstrap, base-role behavior, and owner invariants are documented in
+[`WORKSPACES.md`](WORKSPACES.md).
+
 Every operation declares one of these boundaries:
 
 - `workspace`: a Membership and workspace authorization context are required.
