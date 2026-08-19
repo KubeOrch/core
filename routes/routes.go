@@ -6,6 +6,8 @@ import (
 
 	"github.com/KubeOrch/core/handlers"
 	"github.com/KubeOrch/core/middleware"
+	"github.com/KubeOrch/core/repositories"
+	"github.com/KubeOrch/core/services"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -15,13 +17,14 @@ import (
 func SetupRouter() *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
+	r.Use(middleware.RequestIDMiddleware())
 
 	origins := parseAllowedOrigins(viper.GetString("CORS_ALLOWED_ORIGINS"))
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     origins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "PATCH"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "Upgrade", "Connection", "Sec-WebSocket-Key", "Sec-WebSocket-Version", "Sec-WebSocket-Extensions"},
-		ExposeHeaders:    []string{"Content-Length"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "Idempotency-Key", "X-Request-Id", "Upgrade", "Connection", "Sec-WebSocket-Key", "Sec-WebSocket-Version", "Sec-WebSocket-Extensions"},
+		ExposeHeaders:    []string{"Content-Length", "X-Request-Id", "Idempotency-Replayed"},
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}))
@@ -84,6 +87,21 @@ func SetupRouter() *gin.Engine {
 			}
 		}
 
+		workspaceRepository := repositories.NewWorkspaceRepository()
+		workspaceService := services.NewWorkspaceService(workspaceRepository, repositories.NewMongoUserDirectory())
+		workspaceHandler := handlers.NewWorkspaceHandler(workspaceService)
+		workspaces := v1.Group("/api/workspaces")
+		workspaces.Use(middleware.BetaAuthMiddleware())
+		{
+			workspaces.POST("", workspaceHandler.Create)
+			workspaces.GET("", workspaceHandler.List)
+			workspaces.GET("/:workspaceId", workspaceHandler.Get)
+			workspaces.PATCH("/:workspaceId", workspaceHandler.Update)
+			workspaces.GET("/:workspaceId/members", workspaceHandler.ListMembers)
+			workspaces.POST("/:workspaceId/members", workspaceHandler.AddMember)
+			workspaces.PATCH("/:workspaceId/members/:memberId", workspaceHandler.UpdateMember)
+			workspaces.DELETE("/:workspaceId/members/:memberId", workspaceHandler.RemoveMember)
+		}
 
 		// Dashboard routes
 		protected.GET("/dashboard/recent-workflows", handlers.RecentWorkflowsHandler)

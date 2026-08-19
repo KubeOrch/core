@@ -24,6 +24,8 @@ servers:
 tags:
   - name: Auth
     description: Authentication and authorization
+  - name: Workspaces
+    description: Workspace tenancy and base membership management
   - name: Workflows
     description: Workflow management and execution
   - name: Clusters
@@ -131,6 +133,266 @@ paths:
       responses:
         "200":
           description: List of enabled auth methods
+
+  /api/workspaces:
+    get:
+      tags: [Workspaces]
+      summary: List workspaces for the authenticated identity
+      operationId: listWorkspaces
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: identity
+      x-kubeorch-required-scopes: [workspaces:read]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PageCursor"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Workspaces ordered by newest membership first
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceList"
+        "400":
+          $ref: "#/components/responses/APIError"
+        "401":
+          $ref: "#/components/responses/APIError"
+    post:
+      tags: [Workspaces]
+      summary: Create a workspace and bootstrap its first owner
+      description: The workspace and creator membership are persisted atomically. Replaying the same idempotency key and normalized request returns the original result.
+      operationId: createWorkspace
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: identity
+      x-kubeorch-required-scopes: [workspaces:write]
+      x-kubeorch-idempotency: required
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWorkspaceRequest"
+      responses:
+        "201":
+          description: Workspace created, or the original creation response replayed
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workspace"
+        "400":
+          $ref: "#/components/responses/APIError"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "409":
+          $ref: "#/components/responses/APIError"
+
+  /api/workspaces/{workspaceId}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+    get:
+      tags: [Workspaces]
+      summary: Get workspace metadata
+      operationId: getWorkspace
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [workspaces:read]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Workspace metadata and the caller's base role
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workspace"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+    patch:
+      tags: [Workspaces]
+      summary: Update workspace metadata
+      description: Repeating the same field values is inherently idempotent. Only owners and admins can update metadata.
+      operationId: updateWorkspace
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [workspaces:write]
+      x-kubeorch-idempotency: inherent
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateWorkspaceRequest"
+      responses:
+        "200":
+          description: Updated workspace
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workspace"
+        "400":
+          $ref: "#/components/responses/APIError"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "403":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+
+  /api/workspaces/{workspaceId}/members:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+    get:
+      tags: [Workspaces]
+      summary: List active workspace memberships
+      operationId: listWorkspaceMemberships
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [memberships:read]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PageCursor"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Memberships ordered newest first
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MembershipList"
+        "400":
+          $ref: "#/components/responses/APIError"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+    post:
+      tags: [Workspaces]
+      summary: Add a workspace member
+      description: User identity is the natural idempotency key. Repeating an existing user and role returns the current membership; a different role returns a documented conflict.
+      operationId: addWorkspaceMembership
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [memberships:write]
+      x-kubeorch-idempotency: inherent
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddMembershipRequest"
+      responses:
+        "200":
+          description: Existing membership returned for an idempotent replay
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Membership"
+        "201":
+          description: Membership created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Membership"
+        "400":
+          $ref: "#/components/responses/APIError"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "403":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+        "409":
+          $ref: "#/components/responses/APIError"
+
+  /api/workspaces/{workspaceId}/members/{memberId}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+      - $ref: "#/components/parameters/MemberId"
+    patch:
+      tags: [Workspaces]
+      summary: Change a workspace member's base role
+      description: Repeating the current role is inherently idempotent. Only an owner can grant or change an owner role.
+      operationId: updateWorkspaceMembership
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [memberships:write]
+      x-kubeorch-idempotency: inherent
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMembershipRequest"
+      responses:
+        "200":
+          description: Membership updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Membership"
+        "400":
+          $ref: "#/components/responses/APIError"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "403":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+        "409":
+          $ref: "#/components/responses/APIError"
+    delete:
+      tags: [Workspaces]
+      summary: Remove a workspace membership
+      description: Membership removal is inherently idempotent at the persistence boundary. The final owner cannot be removed.
+      operationId: removeWorkspaceMembership
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [memberships:write]
+      x-kubeorch-idempotency: inherent
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Membership removed
+        "401":
+          $ref: "#/components/responses/APIError"
+        "403":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+        "409":
+          $ref: "#/components/responses/APIError"
 
   /api/workflows:
     get:
@@ -386,6 +648,13 @@ components:
       description: Opaque workspace identifier. Clients must not infer semantics from it.
       schema:
         $ref: "#/components/schemas/ResourceId"
+    MemberId:
+      name: memberId
+      in: path
+      required: true
+      description: Opaque membership identifier.
+      schema:
+        $ref: "#/components/schemas/ResourceId"
     PageCursor:
       name: cursor
       in: query
@@ -444,6 +713,121 @@ components:
           nullable: true
         hasMore:
           type: boolean
+      additionalProperties: false
+
+    MembershipRole:
+      type: string
+      enum: [owner, admin, member]
+      description: Fixed base role. Custom roles are not part of the Beta workspace contract.
+
+    Workspace:
+      type: object
+      required: [id, name, role, createdAt, updatedAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/ResourceId"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 1000
+        role:
+          $ref: "#/components/schemas/MembershipRole"
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+        updatedAt:
+          $ref: "#/components/schemas/Timestamp"
+      additionalProperties: false
+
+    Membership:
+      type: object
+      required: [id, workspaceId, userId, role, status, createdAt, updatedAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/ResourceId"
+        workspaceId:
+          $ref: "#/components/schemas/ResourceId"
+        userId:
+          $ref: "#/components/schemas/ResourceId"
+        role:
+          $ref: "#/components/schemas/MembershipRole"
+        status:
+          type: string
+          enum: [active]
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+        updatedAt:
+          $ref: "#/components/schemas/Timestamp"
+      additionalProperties: false
+
+    CreateWorkspaceRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 1000
+      additionalProperties: false
+
+    UpdateWorkspaceRequest:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 1000
+      additionalProperties: false
+
+    AddMembershipRequest:
+      type: object
+      required: [userId, role]
+      properties:
+        userId:
+          $ref: "#/components/schemas/ResourceId"
+        role:
+          $ref: "#/components/schemas/MembershipRole"
+      additionalProperties: false
+
+    UpdateMembershipRequest:
+      type: object
+      required: [role]
+      properties:
+        role:
+          $ref: "#/components/schemas/MembershipRole"
+      additionalProperties: false
+
+    WorkspaceList:
+      type: object
+      required: [items, pageInfo]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Workspace"
+        pageInfo:
+          $ref: "#/components/schemas/PageInfo"
+      additionalProperties: false
+
+    MembershipList:
+      type: object
+      required: [items, pageInfo]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Membership"
+        pageInfo:
+          $ref: "#/components/schemas/PageInfo"
       additionalProperties: false
 
     FieldViolation:
