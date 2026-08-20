@@ -42,3 +42,14 @@ func TestApplicationRequestsRejectNullDesiredState(t *testing.T) {
 	err = json.Unmarshal([]byte(`{"name":"checkout","desiredState":null}`), &updateRequest)
 	assert.EqualError(t, err, "desiredState must be a JSON object")
 }
+
+func TestUpdateApplicationRequestTracksDesiredStatePresence(t *testing.T) {
+	var absent UpdateApplicationRequest
+	require.NoError(t, json.Unmarshal([]byte(`{"name":"checkout"}`), &absent))
+	assert.False(t, absent.DesiredState.Set)
+
+	var empty UpdateApplicationRequest
+	require.NoError(t, json.Unmarshal([]byte(`{"desiredState":{}}`), &empty))
+	assert.True(t, empty.DesiredState.Set)
+	assert.Empty(t, empty.DesiredState.Value)
+}

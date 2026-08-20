@@ -18,9 +18,11 @@ import (
 )
 
 type stubEnvironmentApplication struct {
-	createApplication func(context.Context, primitive.ObjectID, primitive.ObjectID, primitive.ObjectID, models.CreateApplicationRequest, string) (models.ApplicationResponse, bool, error)
-	listApplications  func(context.Context, primitive.ObjectID, *primitive.ObjectID, bool, int, string) (models.ApplicationListResponse, error)
-	getEnvironment    func(context.Context, primitive.ObjectID, primitive.ObjectID) (models.EnvironmentResponse, error)
+	createApplication  func(context.Context, primitive.ObjectID, primitive.ObjectID, primitive.ObjectID, models.CreateApplicationRequest, string) (models.ApplicationResponse, bool, error)
+	listApplications   func(context.Context, primitive.ObjectID, *primitive.ObjectID, bool, int, string) (models.ApplicationListResponse, error)
+	getEnvironment     func(context.Context, primitive.ObjectID, primitive.ObjectID) (models.EnvironmentResponse, error)
+	updateApplication  func(context.Context, primitive.ObjectID, primitive.ObjectID, models.UpdateApplicationRequest) (models.ApplicationResponse, error)
+	archiveApplication func(context.Context, primitive.ObjectID, primitive.ObjectID) (models.ApplicationResponse, error)
 }
 
 func (s stubEnvironmentApplication) CreateEnvironment(context.Context, primitive.ObjectID, primitive.ObjectID, models.CreateEnvironmentRequest, string) (models.EnvironmentResponse, bool, error) {
@@ -54,11 +56,17 @@ func (s stubEnvironmentApplication) GetApplication(context.Context, primitive.Ob
 	return models.ApplicationResponse{}, nil
 }
 
-func (s stubEnvironmentApplication) UpdateApplication(context.Context, primitive.ObjectID, primitive.ObjectID, models.UpdateApplicationRequest) (models.ApplicationResponse, error) {
+func (s stubEnvironmentApplication) UpdateApplication(ctx context.Context, workspaceID, applicationID primitive.ObjectID, request models.UpdateApplicationRequest) (models.ApplicationResponse, error) {
+	if s.updateApplication != nil {
+		return s.updateApplication(ctx, workspaceID, applicationID, request)
+	}
 	return models.ApplicationResponse{}, nil
 }
 
-func (s stubEnvironmentApplication) ArchiveApplication(context.Context, primitive.ObjectID, primitive.ObjectID) (models.ApplicationResponse, error) {
+func (s stubEnvironmentApplication) ArchiveApplication(ctx context.Context, workspaceID, applicationID primitive.ObjectID) (models.ApplicationResponse, error) {
+	if s.archiveApplication != nil {
+		return s.archiveApplication(ctx, workspaceID, applicationID)
+	}
 	return models.ApplicationResponse{}, nil
 }
 
@@ -122,6 +130,98 @@ func TestApplicationCreateRejectsUnknownTopLevelFields(t *testing.T) {
 	assert.Equal(t, "invalid_request", problemCode(t, response))
 }
 
+func TestApplicationCreateRequiresIdempotencyKey(t *testing.T) {
+	called := false
+	application := stubEnvironmentApplication{
+		createApplication: func(context.Context, primitive.ObjectID, primitive.ObjectID, primitive.ObjectID, models.CreateApplicationRequest, string) (models.ApplicationResponse, bool, error) {
+			called = true
+			return models.ApplicationResponse{}, false, nil
+		},
+	}
+	router, workspaceID := environmentApplicationTestRouter(NewEnvironmentApplicationHandler(application))
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/api/workspaces/"+workspaceID.Hex()+"/applications",
+		bytes.NewBufferString(`{"environmentId":"`+primitive.NewObjectID().Hex()+`","name":"checkout"}`),
+	)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	assert.False(t, called)
+	assert.Equal(t, http.StatusBadRequest, response.Code)
+	assert.Equal(t, "invalid_idempotency_key", problemCode(t, response))
+}
+
+func TestApplicationCreateSetsReplayHeader(t *testing.T) {
+	environmentID := primitive.NewObjectID()
+	application := stubEnvironmentApplication{
+		createApplication: func(_ context.Context, _, workspaceID, _ primitive.ObjectID, request models.CreateApplicationRequest, _ string) (models.ApplicationResponse, bool, error) {
+			return models.ApplicationResponse{
+				ID:            primitive.NewObjectID().Hex(),
+				WorkspaceID:   workspaceID.Hex(),
+				EnvironmentID: environmentID.Hex(),
+				Name:          request.Name,
+				DesiredState:  map[string]any{},
+				Status:        models.ApplicationStatusDraft,
+			}, true, nil
+		},
+	}
+	router, workspaceID := environmentApplicationTestRouter(NewEnvironmentApplicationHandler(application))
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/api/workspaces/"+workspaceID.Hex()+"/applications",
+		bytes.NewBufferString(`{"environmentId":"`+environmentID.Hex()+`","name":"checkout"}`),
+	)
+	request.Header.Set("Idempotency-Key", "create-checkout")
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	assert.Equal(t, http.StatusCreated, response.Code)
+	assert.Equal(t, "true", response.Header().Get("Idempotency-Replayed"))
+}
+
+func TestApplicationUpdateAndArchiveHandlers(t *testing.T) {
+	applicationID := primitive.NewObjectID()
+	updatedCalled := false
+	archivedCalled := false
+	application := stubEnvironmentApplication{
+		updateApplication: func(_ context.Context, _, gotApplicationID primitive.ObjectID, request models.UpdateApplicationRequest) (models.ApplicationResponse, error) {
+			updatedCalled = true
+			assert.Equal(t, applicationID, gotApplicationID)
+			require.NotNil(t, request.Name)
+			assert.Equal(t, "payments", *request.Name)
+			return models.ApplicationResponse{ID: applicationID.Hex(), Name: *request.Name, DesiredState: map[string]any{}}, nil
+		},
+		archiveApplication: func(_ context.Context, _, gotApplicationID primitive.ObjectID) (models.ApplicationResponse, error) {
+			archivedCalled = true
+			assert.Equal(t, applicationID, gotApplicationID)
+			return models.ApplicationResponse{ID: applicationID.Hex(), DesiredState: map[string]any{}, Status: models.ApplicationStatusArchived}, nil
+		},
+	}
+	router, workspaceID := environmentApplicationTestRouter(NewEnvironmentApplicationHandler(application))
+
+	update := httptest.NewRequest(
+		http.MethodPatch,
+		"/v1/api/workspaces/"+workspaceID.Hex()+"/applications/"+applicationID.Hex(),
+		bytes.NewBufferString(`{"name":"payments"}`),
+	)
+	updateResponse := httptest.NewRecorder()
+	router.ServeHTTP(updateResponse, update)
+	assert.Equal(t, http.StatusOK, updateResponse.Code)
+	assert.True(t, updatedCalled)
+
+	archiveResponse := httptest.NewRecorder()
+	router.ServeHTTP(archiveResponse, httptest.NewRequest(
+		http.MethodDelete,
+		"/v1/api/workspaces/"+workspaceID.Hex()+"/applications/"+applicationID.Hex(),
+		nil,
+	))
+	assert.Equal(t, http.StatusOK, archiveResponse.Code)
+	assert.True(t, archivedCalled)
+}
+
 func TestApplicationListDefaultsToActiveAndValidatesFilters(t *testing.T) {
 	application := stubEnvironmentApplication{
 		listApplications: func(_ context.Context, _ primitive.ObjectID, environmentID *primitive.ObjectID, includeArchived bool, limit int, cursor string) (models.ApplicationListResponse, error) {
@@ -182,6 +282,8 @@ func environmentApplicationTestRouter(handler *EnvironmentApplicationHandler) (*
 	workspaceScoped.Use(middleware.WorkspaceAuthorizationMiddleware(resolver))
 	workspaceScoped.POST("/applications", handler.CreateApplication)
 	workspaceScoped.GET("/applications", handler.ListApplications)
+	workspaceScoped.PATCH("/applications/:applicationId", handler.UpdateApplication)
+	workspaceScoped.DELETE("/applications/:applicationId", handler.ArchiveApplication)
 	workspaceScoped.GET("/environments/:environmentId", handler.GetEnvironment)
 	return router, workspaceID
 }

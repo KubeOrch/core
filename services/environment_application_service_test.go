@@ -16,8 +16,10 @@ import (
 )
 
 type memoryEnvironmentApplicationStore struct {
-	environments map[primitive.ObjectID]*models.Environment
-	applications map[primitive.ObjectID]*models.Application
+	environments           map[primitive.ObjectID]*models.Environment
+	applications           map[primitive.ObjectID]*models.Application
+	environmentUpdateCalls int
+	applicationUpdateCalls int
 }
 
 func newMemoryEnvironmentApplicationStore() *memoryEnvironmentApplicationStore {
@@ -85,6 +87,7 @@ func (s *memoryEnvironmentApplicationStore) UpdateEnvironment(
 	workspaceID, environmentID primitive.ObjectID,
 	updates bson.M,
 ) (*models.Environment, error) {
+	s.environmentUpdateCalls++
 	environment, ok := s.environments[environmentID]
 	if !ok || environment.WorkspaceID != workspaceID {
 		return nil, repositories.ErrEnvironmentNotFound
@@ -166,6 +169,7 @@ func (s *memoryEnvironmentApplicationStore) UpdateApplication(
 	workspaceID, applicationID primitive.ObjectID,
 	updates bson.M,
 ) (*models.Application, error) {
+	s.applicationUpdateCalls++
 	application, ok := s.applications[applicationID]
 	if !ok || application.WorkspaceID != workspaceID {
 		return nil, repositories.ErrApplicationNotFound
@@ -244,6 +248,26 @@ func TestEnvironmentCreationReplaysMatchingIdempotencyKeyAndRejectsDifferentPayl
 	assert.Len(t, store.environments, 1)
 }
 
+func TestEnvironmentUpdateDoesNotWriteIdenticalValues(t *testing.T) {
+	store, service, _, workspaceID, environmentID := testEnvironmentApplicationService(t)
+	name := "Development"
+
+	unchanged, err := service.UpdateEnvironment(context.Background(), workspaceID, environmentID, models.UpdateEnvironmentRequest{
+		Name: &name,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, store.environmentUpdateCalls)
+	assert.Equal(t, "Development", unchanged.Name)
+
+	description := "Developer workloads"
+	updated, err := service.UpdateEnvironment(context.Background(), workspaceID, environmentID, models.UpdateEnvironmentRequest{
+		Description: &description,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, store.environmentUpdateCalls)
+	assert.Equal(t, description, updated.Description)
+}
+
 func TestApplicationDraftPreservesExtensibleDesiredStateWithoutClusterAccess(t *testing.T) {
 	store, service, actorID, workspaceID, environmentID := testEnvironmentApplicationService(t)
 	desiredState := map[string]any{
@@ -302,6 +326,61 @@ func TestApplicationResponsesDeepCopyDesiredState(t *testing.T) {
 	fetched, err := service.GetApplication(context.Background(), workspaceID, applicationID)
 	require.NoError(t, err)
 	assert.Equal(t, "abc123", fetched.DesiredState["sourceRef"].(map[string]any)["revision"])
+}
+
+func TestApplicationUpdateDoesNotWriteIdenticalValues(t *testing.T) {
+	store, service, actorID, workspaceID, environmentID := testEnvironmentApplicationService(t)
+	desiredState := models.DesiredState{"sourceRef": map[string]any{"revision": "abc123"}}
+	created, _, err := service.CreateApplication(context.Background(), actorID, workspaceID, environmentID, models.CreateApplicationRequest{
+		Name:         "checkout",
+		DesiredState: desiredState,
+	}, "create-checkout")
+	require.NoError(t, err)
+	applicationID, err := primitive.ObjectIDFromHex(created.ID)
+	require.NoError(t, err)
+	name := "checkout"
+
+	unchanged, err := service.UpdateApplication(context.Background(), workspaceID, applicationID, models.UpdateApplicationRequest{
+		Name:         &name,
+		DesiredState: models.OptionalDesiredState{Value: desiredState, Set: true},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, store.applicationUpdateCalls)
+	assert.Equal(t, created.UpdatedAt, unchanged.UpdatedAt)
+
+	description := "Checkout service"
+	updated, err := service.UpdateApplication(context.Background(), workspaceID, applicationID, models.UpdateApplicationRequest{
+		Description: &description,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, store.applicationUpdateCalls)
+	assert.Equal(t, description, updated.Description)
+}
+
+func TestApplicationResponseNormalizesMongoDesiredStateContainers(t *testing.T) {
+	application := models.Application{
+		ID:            primitive.NewObjectID(),
+		WorkspaceID:   primitive.NewObjectID(),
+		EnvironmentID: primitive.NewObjectID(),
+		Name:          "checkout",
+		DesiredState: map[string]any{
+			"futureField": primitive.D{{
+				Key: "steps",
+				Value: primitive.A{
+					primitive.D{{Key: "enabled", Value: true}},
+				},
+			}},
+		},
+	}
+
+	response, err := applicationResponse(application)
+	require.NoError(t, err)
+	futureField, ok := response.DesiredState["futureField"].(map[string]any)
+	require.True(t, ok)
+	steps, ok := futureField["steps"].([]any)
+	require.True(t, ok)
+	require.Len(t, steps, 1)
+	assert.Equal(t, map[string]any{"enabled": true}, steps[0])
 }
 
 func TestApplicationRejectsCrossWorkspaceEnvironmentReference(t *testing.T) {
@@ -424,7 +503,22 @@ func cloneApplication(application *models.Application) *models.Application {
 func cloneDesiredStateForTest(value map[string]any) map[string]any {
 	copy := make(map[string]any, len(value))
 	for key, child := range value {
-		copy[key] = child
+		copy[key] = cloneDesiredValueForTest(child)
 	}
 	return copy
+}
+
+func cloneDesiredValueForTest(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneDesiredStateForTest(typed)
+	case []any:
+		copy := make([]any, len(typed))
+		for index, child := range typed {
+			copy[index] = cloneDesiredValueForTest(child)
+		}
+		return copy
+	default:
+		return typed
+	}
 }

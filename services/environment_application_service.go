@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -148,6 +149,22 @@ func (s *EnvironmentApplicationService) UpdateEnvironment(
 	if len(updates) == 0 {
 		return models.EnvironmentResponse{}, fmt.Errorf("%w: at least one field must be provided", ErrInvalidEnvironmentData)
 	}
+	existing, err := s.store.GetEnvironment(ctx, workspaceID, environmentID)
+	if err != nil {
+		return models.EnvironmentResponse{}, mapDomainRepositoryError(err)
+	}
+	if name, ok := updates["name"].(string); ok && existing.Name == name {
+		if normalizedName, normalized := updates["normalized_name"].(string); normalized && existing.NormalizedName == normalizedName {
+			delete(updates, "name")
+			delete(updates, "normalized_name")
+		}
+	}
+	if description, ok := updates["description"].(string); ok && existing.Description == description {
+		delete(updates, "description")
+	}
+	if len(updates) == 0 {
+		return environmentResponse(*existing), nil
+	}
 	environment, err := s.store.UpdateEnvironment(ctx, workspaceID, environmentID, updates)
 	if err != nil {
 		return models.EnvironmentResponse{}, mapDomainRepositoryError(err)
@@ -198,9 +215,11 @@ func (s *EnvironmentApplicationService) CreateApplication(
 		if existing.CreationHash != requestHash {
 			return models.ApplicationResponse{}, false, ErrDomainIdempotencyConflict
 		}
-		return applicationResponse(*existing), true, nil
+		response, responseErr := applicationResponse(*existing)
+		return response, true, responseErr
 	}
-	return applicationResponse(*application), false, nil
+	response, responseErr := applicationResponse(*application)
+	return response, false, responseErr
 }
 
 func (s *EnvironmentApplicationService) ListApplications(
@@ -222,7 +241,11 @@ func (s *EnvironmentApplicationService) ListApplications(
 	}
 	items := make([]models.ApplicationResponse, 0, len(applications))
 	for _, application := range applications {
-		items = append(items, applicationResponse(application))
+		response, responseErr := applicationResponse(application)
+		if responseErr != nil {
+			return models.ApplicationListResponse{}, responseErr
+		}
+		items = append(items, response)
 	}
 	return models.ApplicationListResponse{Items: items, PageInfo: pageInfo(nextCursor)}, nil
 }
@@ -235,7 +258,7 @@ func (s *EnvironmentApplicationService) GetApplication(
 	if err != nil {
 		return models.ApplicationResponse{}, mapDomainRepositoryError(err)
 	}
-	return applicationResponse(*application), nil
+	return applicationResponse(*application)
 }
 
 func (s *EnvironmentApplicationService) UpdateApplication(
@@ -268,11 +291,30 @@ func (s *EnvironmentApplicationService) UpdateApplication(
 	if len(updates) == 0 {
 		return models.ApplicationResponse{}, fmt.Errorf("%w: at least one field must be provided", ErrInvalidApplicationData)
 	}
+	existing, err := s.store.GetApplication(ctx, workspaceID, applicationID)
+	if err != nil {
+		return models.ApplicationResponse{}, mapDomainRepositoryError(err)
+	}
+	if name, ok := updates["name"].(string); ok && existing.Name == name {
+		delete(updates, "name")
+	}
+	if description, ok := updates["description"].(string); ok && existing.Description == description {
+		delete(updates, "description")
+	}
+	if desiredState, ok := updates["desired_state"].(map[string]any); ok {
+		existingDesiredState, normalizeErr := validateDesiredState(existing.DesiredState)
+		if normalizeErr == nil && reflect.DeepEqual(existingDesiredState, desiredState) {
+			delete(updates, "desired_state")
+		}
+	}
+	if len(updates) == 0 {
+		return applicationResponse(*existing)
+	}
 	application, err := s.store.UpdateApplication(ctx, workspaceID, applicationID, updates)
 	if err != nil {
 		return models.ApplicationResponse{}, mapDomainRepositoryError(err)
 	}
-	return applicationResponse(*application), nil
+	return applicationResponse(*application)
 }
 
 func (s *EnvironmentApplicationService) ArchiveApplication(
@@ -283,7 +325,7 @@ func (s *EnvironmentApplicationService) ArchiveApplication(
 	if err != nil {
 		return models.ApplicationResponse{}, mapDomainRepositoryError(err)
 	}
-	return applicationResponse(*application), nil
+	return applicationResponse(*application)
 }
 
 func validateEnvironmentFields(name, description string) (string, string, string, error) {
@@ -355,6 +397,19 @@ func cloneDesiredValue(value any, depth int, path string) (any, error) {
 		return nil, fmt.Errorf("%w: desiredState must not exceed 20 nested levels", ErrInvalidApplicationData)
 	}
 	switch typed := value.(type) {
+	case primitive.D:
+		document := make(map[string]any, len(typed))
+		for _, element := range typed {
+			if _, exists := document[element.Key]; exists {
+				return nil, fmt.Errorf("%w: %s contains a duplicate field", ErrInvalidApplicationData, path)
+			}
+			document[element.Key] = element.Value
+		}
+		return cloneDesiredValue(document, depth, path)
+	case primitive.M:
+		return cloneDesiredValue(map[string]any(typed), depth, path)
+	case primitive.A:
+		return cloneDesiredValue([]any(typed), depth, path)
 	case map[string]any:
 		result := make(map[string]any, len(typed))
 		for key, child := range typed {
@@ -445,17 +500,14 @@ func environmentResponse(environment models.Environment) models.EnvironmentRespo
 	}
 }
 
-func applicationResponse(application models.Application) models.ApplicationResponse {
+func applicationResponse(application models.Application) (models.ApplicationResponse, error) {
 	status := models.ApplicationStatusDraft
 	if application.ArchivedAt != nil {
 		status = models.ApplicationStatusArchived
 	}
 	desiredState, err := validateDesiredState(application.DesiredState)
 	if err != nil {
-		desiredState = application.DesiredState
-	}
-	if desiredState == nil {
-		desiredState = map[string]any{}
+		return models.ApplicationResponse{}, fmt.Errorf("normalize persisted desired state: %v", err)
 	}
 	return models.ApplicationResponse{
 		ID:            application.ID.Hex(),
@@ -468,7 +520,7 @@ func applicationResponse(application models.Application) models.ApplicationRespo
 		ArchivedAt:    application.ArchivedAt,
 		CreatedAt:     application.CreatedAt,
 		UpdatedAt:     application.UpdatedAt,
-	}
+	}, nil
 }
 
 func mapDomainRepositoryError(err error) error {

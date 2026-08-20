@@ -267,6 +267,12 @@ func createIndexes() error {
 		{
 			Keys: bson.D{{Key: "workspace_id", Value: 1}, {Key: "environment_id", Value: 1}, {Key: "archived_at", Value: 1}, {Key: "created_at", Value: -1}, {Key: "_id", Value: -1}},
 		},
+		{
+			Keys: bson.D{{Key: "workspace_id", Value: 1}, {Key: "created_at", Value: -1}, {Key: "_id", Value: -1}},
+		},
+		{
+			Keys: bson.D{{Key: "workspace_id", Value: 1}, {Key: "environment_id", Value: 1}, {Key: "created_at", Value: -1}, {Key: "_id", Value: -1}},
+		},
 	}
 	_, err = ApplicationColl.Indexes().CreateMany(ctx, applicationIndexes)
 	if err != nil {
