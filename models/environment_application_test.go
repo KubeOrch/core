@@ -51,5 +51,6 @@ func TestUpdateApplicationRequestTracksDesiredStatePresence(t *testing.T) {
 	var empty UpdateApplicationRequest
 	require.NoError(t, json.Unmarshal([]byte(`{"desiredState":{}}`), &empty))
 	assert.True(t, empty.DesiredState.Set)
+	assert.NotNil(t, empty.DesiredState.Value)
 	assert.Empty(t, empty.DesiredState.Value)
 }

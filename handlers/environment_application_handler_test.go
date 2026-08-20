@@ -220,6 +220,9 @@ func TestApplicationUpdateAndArchiveHandlers(t *testing.T) {
 	))
 	assert.Equal(t, http.StatusOK, archiveResponse.Code)
 	assert.True(t, archivedCalled)
+	var archived models.ApplicationResponse
+	require.NoError(t, json.Unmarshal(archiveResponse.Body.Bytes(), &archived))
+	assert.Equal(t, models.ApplicationStatusArchived, archived.Status)
 }
 
 func TestApplicationListDefaultsToActiveAndValidatesFilters(t *testing.T) {
