@@ -90,6 +90,9 @@ func SetupRouter() *gin.Engine {
 		workspaceRepository := repositories.NewWorkspaceRepository()
 		workspaceService := services.NewWorkspaceService(workspaceRepository, repositories.NewMongoUserDirectory())
 		workspaceHandler := handlers.NewWorkspaceHandler(workspaceService)
+		environmentApplicationRepository := repositories.NewEnvironmentApplicationRepository()
+		environmentApplicationService := services.NewEnvironmentApplicationService(environmentApplicationRepository)
+		environmentApplicationHandler := handlers.NewEnvironmentApplicationHandler(environmentApplicationService)
 		workspaces := v1.Group("/api/workspaces")
 		workspaces.Use(middleware.BetaAuthMiddleware())
 		{
@@ -105,6 +108,15 @@ func SetupRouter() *gin.Engine {
 				workspaceScoped.POST("/members", workspaceHandler.AddMember)
 				workspaceScoped.PATCH("/members/:memberId", workspaceHandler.UpdateMember)
 				workspaceScoped.DELETE("/members/:memberId", workspaceHandler.RemoveMember)
+				workspaceScoped.GET("/environments", environmentApplicationHandler.ListEnvironments)
+				workspaceScoped.POST("/environments", environmentApplicationHandler.CreateEnvironment)
+				workspaceScoped.GET("/environments/:environmentId", environmentApplicationHandler.GetEnvironment)
+				workspaceScoped.PATCH("/environments/:environmentId", environmentApplicationHandler.UpdateEnvironment)
+				workspaceScoped.GET("/applications", environmentApplicationHandler.ListApplications)
+				workspaceScoped.POST("/applications", environmentApplicationHandler.CreateApplication)
+				workspaceScoped.GET("/applications/:applicationId", environmentApplicationHandler.GetApplication)
+				workspaceScoped.PATCH("/applications/:applicationId", environmentApplicationHandler.UpdateApplication)
+				workspaceScoped.DELETE("/applications/:applicationId", environmentApplicationHandler.ArchiveApplication)
 			}
 		}
 
