@@ -29,6 +29,8 @@ var (
 	NotificationChannelColl *mongo.Collection
 	NotificationColl        *mongo.Collection
 	WorkspaceColl           *mongo.Collection
+	EnvironmentColl         *mongo.Collection
+	ApplicationColl         *mongo.Collection
 )
 
 func Connect() error {
@@ -78,6 +80,8 @@ func Connect() error {
 	NotificationChannelColl = Database.Collection("notification_channels")
 	NotificationColl = Database.Collection("notifications")
 	WorkspaceColl = Database.Collection("workspaces")
+	EnvironmentColl = Database.Collection("environments")
+	ApplicationColl = Database.Collection("applications")
 
 	logrus.Info("MongoDB connection established")
 
@@ -232,6 +236,47 @@ func createIndexes() error {
 	_, err = WorkspaceColl.Indexes().CreateMany(ctx, workspaceIndexes)
 	if err != nil {
 		return fmt.Errorf("failed to create workspace indexes: %v", err)
+	}
+
+	environmentIndexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "workspace_id", Value: 1}, {Key: "normalized_name", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: "workspace_id", Value: 1}, {Key: "created_by", Value: 1}, {Key: "creation_key", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		},
+		{
+			Keys: bson.D{{Key: "workspace_id", Value: 1}, {Key: "created_at", Value: -1}, {Key: "_id", Value: -1}},
+		},
+	}
+	_, err = EnvironmentColl.Indexes().CreateMany(ctx, environmentIndexes)
+	if err != nil {
+		return fmt.Errorf("failed to create environment indexes: %v", err)
+	}
+
+	applicationIndexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "workspace_id", Value: 1}, {Key: "created_by", Value: 1}, {Key: "creation_key", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		},
+		{
+			Keys: bson.D{{Key: "workspace_id", Value: 1}, {Key: "archived_at", Value: 1}, {Key: "created_at", Value: -1}, {Key: "_id", Value: -1}},
+		},
+		{
+			Keys: bson.D{{Key: "workspace_id", Value: 1}, {Key: "environment_id", Value: 1}, {Key: "archived_at", Value: 1}, {Key: "created_at", Value: -1}, {Key: "_id", Value: -1}},
+		},
+		{
+			Keys: bson.D{{Key: "workspace_id", Value: 1}, {Key: "created_at", Value: -1}, {Key: "_id", Value: -1}},
+		},
+		{
+			Keys: bson.D{{Key: "workspace_id", Value: 1}, {Key: "environment_id", Value: 1}, {Key: "created_at", Value: -1}, {Key: "_id", Value: -1}},
+		},
+	}
+	_, err = ApplicationColl.Indexes().CreateMany(ctx, applicationIndexes)
+	if err != nil {
+		return fmt.Errorf("failed to create application indexes: %v", err)
 	}
 
 	logrus.Info("Database indexes created successfully")

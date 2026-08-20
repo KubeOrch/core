@@ -26,6 +26,10 @@ tags:
     description: Authentication and authorization
   - name: Workspaces
     description: Workspace tenancy and base membership management
+  - name: Environments
+    description: Workspace-scoped deployment environment identities
+  - name: Applications
+    description: Environment-scoped desired application identities
   - name: Workflows
     description: Workflow management and execution
   - name: Clusters
@@ -402,6 +406,321 @@ paths:
         "409":
           $ref: "#/components/responses/APIError"
 
+  /api/workspaces/{workspaceId}/environments:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+    get:
+      tags: [Environments]
+      summary: List environments in a workspace
+      description: Environments are ordered by creation time and opaque identifier, newest first.
+      operationId: listEnvironments
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [environments:read]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PageCursor"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Workspace environments
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvironmentList"
+        "400":
+          $ref: "#/components/responses/APIError"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+    post:
+      tags: [Environments]
+      summary: Create an environment identity
+      description: Names are unique per workspace after trimming outer whitespace, collapsing internal Unicode whitespace, and Unicode lowercase normalization. No cluster connection is required.
+      operationId: createEnvironment
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [environments:write]
+      x-kubeorch-idempotency: required
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEnvironmentRequest"
+      responses:
+        "201":
+          description: Environment created, or the original creation response replayed
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Environment"
+        "400":
+          $ref: "#/components/responses/APIError"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+        "409":
+          $ref: "#/components/responses/APIError"
+        "413":
+          $ref: "#/components/responses/APIError"
+
+  /api/workspaces/{workspaceId}/environments/{environmentId}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+      - $ref: "#/components/parameters/EnvironmentId"
+    get:
+      tags: [Environments]
+      summary: Get an environment
+      operationId: getEnvironment
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [environments:read]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Environment identity and metadata
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Environment"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+    patch:
+      tags: [Environments]
+      summary: Update environment metadata
+      description: Repeating the same field values is inherently idempotent. Renamed environments remain subject to normalized workspace uniqueness.
+      operationId: updateEnvironment
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [environments:write]
+      x-kubeorch-idempotency: inherent
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateEnvironmentRequest"
+      responses:
+        "200":
+          description: Environment updated
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Environment"
+        "400":
+          $ref: "#/components/responses/APIError"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+        "409":
+          $ref: "#/components/responses/APIError"
+        "413":
+          $ref: "#/components/responses/APIError"
+
+  /api/workspaces/{workspaceId}/applications:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+    get:
+      tags: [Applications]
+      summary: List applications in a workspace
+      description: Applications are ordered newest first. Archived applications are excluded unless includeArchived is true. Cursors are bound to the selected filters.
+      operationId: listApplications
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [applications:read]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PageCursor"
+        - $ref: "#/components/parameters/PageSize"
+        - name: environmentId
+          in: query
+          required: false
+          description: Return only applications belonging to this environment in the route workspace.
+          schema:
+            $ref: "#/components/schemas/ResourceId"
+        - name: includeArchived
+          in: query
+          required: false
+          description: Include non-destructively archived applications.
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Workspace applications matching the filters
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicationList"
+        "400":
+          $ref: "#/components/responses/APIError"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+    post:
+      tags: [Applications]
+      summary: Create a draft application
+      description: Creates desired application identity and metadata without contacting a cluster. The environment must belong to the route workspace.
+      operationId: createApplication
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [applications:write]
+      x-kubeorch-idempotency: required
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateApplicationRequest"
+      responses:
+        "201":
+          description: Draft application created, or the original creation response replayed
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Application"
+        "400":
+          $ref: "#/components/responses/APIError"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+        "409":
+          $ref: "#/components/responses/APIError"
+        "413":
+          $ref: "#/components/responses/APIError"
+
+  /api/workspaces/{workspaceId}/applications/{applicationId}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+      - $ref: "#/components/parameters/ApplicationId"
+    get:
+      tags: [Applications]
+      summary: Get an application
+      description: Archived applications remain directly retrievable by identifier.
+      operationId: getApplication
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [applications:read]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Application identity and desired metadata
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Application"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+    patch:
+      tags: [Applications]
+      summary: Update application desired metadata
+      description: Repeating the same field values is inherently idempotent. This operation stores desired metadata only and does not contact a cluster.
+      operationId: updateApplication
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [applications:write]
+      x-kubeorch-idempotency: inherent
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateApplicationRequest"
+      responses:
+        "200":
+          description: Application updated
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Application"
+        "400":
+          $ref: "#/components/responses/APIError"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+        "413":
+          $ref: "#/components/responses/APIError"
+    delete:
+      tags: [Applications]
+      summary: Archive an application
+      description: Archive is non-destructive and inherently idempotent. Repeated requests return the original archive timestamp.
+      operationId: archiveApplication
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [applications:write]
+      x-kubeorch-idempotency: inherent
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Archived application
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Application"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+
   /api/workflows:
     get:
       tags: [Workflows]
@@ -663,6 +982,20 @@ components:
       description: Opaque membership identifier.
       schema:
         $ref: "#/components/schemas/ResourceId"
+    EnvironmentId:
+      name: environmentId
+      in: path
+      required: true
+      description: Opaque environment identifier.
+      schema:
+        $ref: "#/components/schemas/ResourceId"
+    ApplicationId:
+      name: applicationId
+      in: path
+      required: true
+      description: Opaque application identifier.
+      schema:
+        $ref: "#/components/schemas/ResourceId"
     PageCursor:
       name: cursor
       in: query
@@ -834,6 +1167,149 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Membership"
+        pageInfo:
+          $ref: "#/components/schemas/PageInfo"
+      additionalProperties: false
+
+    Environment:
+      type: object
+      required: [id, workspaceId, name, createdAt, updatedAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/ResourceId"
+        workspaceId:
+          $ref: "#/components/schemas/ResourceId"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 1000
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+        updatedAt:
+          $ref: "#/components/schemas/Timestamp"
+      additionalProperties: false
+
+    CreateEnvironmentRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 1000
+      additionalProperties: false
+
+    UpdateEnvironmentRequest:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 1000
+      additionalProperties: false
+
+    EnvironmentList:
+      type: object
+      required: [items, pageInfo]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Environment"
+        pageInfo:
+          $ref: "#/components/schemas/PageInfo"
+      additionalProperties: false
+
+    DesiredState:
+      type: object
+      description: Extensible desired application metadata and non-secret references. Unknown nested fields are preserved. Credentials, tokens, kubeconfigs, and Secret values are rejected; use reference fields instead.
+      additionalProperties: true
+
+    ApplicationStatus:
+      type: string
+      enum: [draft, archived]
+
+    Application:
+      type: object
+      required: [id, workspaceId, environmentId, name, desiredState, status, createdAt, updatedAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/ResourceId"
+        workspaceId:
+          $ref: "#/components/schemas/ResourceId"
+        environmentId:
+          $ref: "#/components/schemas/ResourceId"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 1000
+        desiredState:
+          $ref: "#/components/schemas/DesiredState"
+        status:
+          $ref: "#/components/schemas/ApplicationStatus"
+        archivedAt:
+          allOf:
+            - $ref: "#/components/schemas/Timestamp"
+          nullable: true
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+        updatedAt:
+          $ref: "#/components/schemas/Timestamp"
+      additionalProperties: false
+
+    CreateApplicationRequest:
+      type: object
+      required: [environmentId, name]
+      properties:
+        environmentId:
+          $ref: "#/components/schemas/ResourceId"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 1000
+        desiredState:
+          $ref: "#/components/schemas/DesiredState"
+      additionalProperties: false
+
+    UpdateApplicationRequest:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 1000
+        desiredState:
+          $ref: "#/components/schemas/DesiredState"
+      additionalProperties: false
+
+    ApplicationList:
+      type: object
+      required: [items, pageInfo]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Application"
         pageInfo:
           $ref: "#/components/schemas/PageInfo"
       additionalProperties: false
