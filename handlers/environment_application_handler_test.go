@@ -270,6 +270,9 @@ func environmentApplicationTestRouter(handler *EnvironmentApplicationHandler) (*
 	actorID := primitive.NewObjectID()
 	workspaceID := primitive.NewObjectID()
 	resolver := stubWorkspaceMembershipResolver{find: func(_ context.Context, gotWorkspaceID, gotUserID primitive.ObjectID) (models.Membership, bool, error) {
+		if gotWorkspaceID != workspaceID || gotUserID != actorID {
+			return models.Membership{}, false, nil
+		}
 		return models.Membership{
 			ID: primitive.NewObjectID(), WorkspaceID: gotWorkspaceID, UserID: gotUserID,
 			Role: models.MembershipRoleMember, Status: models.MembershipStatusActive,
