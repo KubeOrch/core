@@ -93,6 +93,9 @@ func SetupRouter() *gin.Engine {
 		environmentApplicationRepository := repositories.NewEnvironmentApplicationRepository()
 		environmentApplicationService := services.NewEnvironmentApplicationService(environmentApplicationRepository)
 		environmentApplicationHandler := handlers.NewEnvironmentApplicationHandler(environmentApplicationService)
+		artifactReleaseRepository := repositories.NewArtifactReleaseRepository()
+		artifactReleaseService := services.NewArtifactReleaseService(artifactReleaseRepository)
+		artifactReleaseHandler := handlers.NewArtifactReleaseHandler(artifactReleaseService)
 		workspaces := v1.Group("/api/workspaces")
 		workspaces.Use(middleware.BetaAuthMiddleware())
 		{
@@ -117,6 +120,12 @@ func SetupRouter() *gin.Engine {
 				workspaceScoped.GET("/applications/:applicationId", environmentApplicationHandler.GetApplication)
 				workspaceScoped.PATCH("/applications/:applicationId", environmentApplicationHandler.UpdateApplication)
 				workspaceScoped.DELETE("/applications/:applicationId", environmentApplicationHandler.ArchiveApplication)
+				workspaceScoped.GET("/artifacts", artifactReleaseHandler.ListArtifacts)
+				workspaceScoped.POST("/artifacts", artifactReleaseHandler.CreateArtifact)
+				workspaceScoped.GET("/artifacts/:artifactId", artifactReleaseHandler.GetArtifact)
+				workspaceScoped.GET("/applications/:applicationId/releases", artifactReleaseHandler.ListReleases)
+				workspaceScoped.POST("/applications/:applicationId/releases", artifactReleaseHandler.CreateRelease)
+				workspaceScoped.GET("/applications/:applicationId/releases/:releaseId", artifactReleaseHandler.GetRelease)
 			}
 		}
 

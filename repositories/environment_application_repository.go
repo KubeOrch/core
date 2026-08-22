@@ -313,12 +313,16 @@ func encodeDomainCursor(
 	createdAt time.Time,
 	resourceID primitive.ObjectID,
 ) string {
+	timestampMillis := createdAt.UnixMilli()
+	if timestampMillis < 0 {
+		return ""
+	}
 	payload := make([]byte, domainCursorPayloadLength)
 	payload[0] = domainCursorVersion
 	payload[1] = kind
 	copy(payload[2:14], workspaceID[:])
 	copy(payload[14:domainCursorHeaderLength], queryHash[:])
-	binary.BigEndian.PutUint64(payload[domainCursorHeaderLength:domainCursorHeaderLength+8], uint64(createdAt.UnixMilli()))
+	binary.BigEndian.PutUint64(payload[domainCursorHeaderLength:domainCursorHeaderLength+8], uint64(timestampMillis))
 	copy(payload[domainCursorHeaderLength+8:], resourceID[:])
 	return base64.RawURLEncoding.EncodeToString(payload)
 }
