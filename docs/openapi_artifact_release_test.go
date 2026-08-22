@@ -54,7 +54,8 @@ func TestArtifactReleaseCreatesRequireIdempotencyAndRejectUnknownFields(t *testi
 	} {
 		operation := mustMap(t, mustMap(t, paths[path])["post"])
 		assert.Equal(t, "required", operation["x-kubeorch-idempotency"])
-		parameters := operation["parameters"].([]any)
+		parameters, ok := operation["parameters"].([]any)
+		require.True(t, ok, "%s post must declare parameters", path)
 		assert.Contains(t, parameters, map[string]any{"$ref": "#/components/parameters/IdempotencyKey"})
 		assert.NotEmpty(t, mustMap(t, operation["responses"])["413"])
 		created := mustMap(t, mustMap(t, operation["responses"])["201"])
@@ -64,6 +65,7 @@ func TestArtifactReleaseCreatesRequireIdempotencyAndRejectUnknownFields(t *testi
 
 	assert.Equal(t, false, mustMap(t, schemas["CreateArtifactRequest"])["additionalProperties"])
 	assert.Equal(t, false, mustMap(t, schemas["CreateReleaseRequest"])["additionalProperties"])
+	assert.Len(t, mustMap(t, schemas["CreateReleaseRequest"])["oneOf"], 2)
 	artifactIDs := mustMap(t, mustMap(t, schemas["CreateReleaseRequest"])["properties"])["artifactIds"]
 	assert.Equal(t, true, mustMap(t, artifactIDs)["uniqueItems"])
 }
@@ -78,5 +80,6 @@ func TestArtifactContractRequiresDigestPinnedImages(t *testing.T) {
 	image := mustMap(t, properties["image"])
 
 	assert.Contains(t, image["pattern"], "@sha256:")
+	assert.NotContains(t, image["pattern"], "A-F")
 	assert.Equal(t, []any{"image", "source"}, mustMap(t, schemas["CreateArtifactRequest"])["required"])
 }

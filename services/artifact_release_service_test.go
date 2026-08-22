@@ -189,6 +189,11 @@ func TestArtifactRegistrationRequiresImmutableDigestAndSafeEvidence(t *testing.T
 	}, "register-core-image")
 	assert.ErrorIs(t, err, ErrInvalidArtifactData)
 
+	uppercaseDigest := testArtifactRequest()
+	uppercaseDigest.Image = "ghcr.io/kubeorch/core@sha256:" + strings.Repeat("A", 64)
+	_, _, err = service.CreateArtifact(context.Background(), actorID, workspaceID, uppercaseDigest, "register-uppercase-image")
+	assert.ErrorIs(t, err, ErrInvalidArtifactData)
+
 	request := testArtifactRequest()
 	request.Evidence.SBOM = "https://evidence.example/sbom.json?token=secret"
 	_, _, err = service.CreateArtifact(context.Background(), actorID, workspaceID, request, "register-core-image")
@@ -299,7 +304,15 @@ func TestReleaseValidationRejectsMissingEvidenceAndDuplicateArtifacts(t *testing
 		ApplicationRevision: "revision-1",
 		ArtifactIDs:         []string{artifactIDs[0].Hex(), artifactIDs[0].Hex()},
 		Source:              models.ReleaseSourceExternalCI,
+		SourceReference:     "https://github.com/kubeorch/core/actions/runs/123",
 	}, "release-core-0001")
+	assert.ErrorIs(t, err, ErrInvalidReleaseData)
+
+	_, _, err = service.CreateRelease(context.Background(), actorID, workspaceID, applicationID, models.CreateReleaseRequest{
+		ApplicationRevision: "revision-1",
+		ArtifactIDs:         []string{artifactIDs[0].Hex()},
+		Source:              models.ReleaseSourceExternalCI,
+	}, "release-core-0002")
 	assert.ErrorIs(t, err, ErrInvalidReleaseData)
 }
 

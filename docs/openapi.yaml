@@ -1612,7 +1612,7 @@ components:
         image:
           type: string
           maxLength: 512
-          pattern: "^.+@sha256:[a-fA-F0-9]{64}$"
+          pattern: "^.+@sha256:[a-f0-9]{64}$"
           description: OCI image reference pinned by digest. A tag without a digest is rejected.
         source:
           $ref: "#/components/schemas/ArtifactSource"
@@ -1639,6 +1639,14 @@ components:
     Release:
       type: object
       required: [id, workspaceId, applicationId, applicationRevision, artifactIds, source, createdBy, createdAt]
+      oneOf:
+        - properties:
+            source:
+              enum: [external-ci]
+          required: [sourceReference]
+        - properties:
+            source:
+              enum: [manual]
       properties:
         id:
           $ref: "#/components/schemas/ResourceId"
@@ -1674,6 +1682,14 @@ components:
     CreateReleaseRequest:
       type: object
       required: [applicationRevision, artifactIds, source]
+      oneOf:
+        - properties:
+            source:
+              enum: [external-ci]
+          required: [sourceReference]
+        - properties:
+            source:
+              enum: [manual]
       properties:
         applicationRevision:
           type: string
