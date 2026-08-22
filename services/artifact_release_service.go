@@ -350,7 +350,7 @@ func validateSafeHTTPSReference(value, field string, required bool, sentinel err
 		return "", fmt.Errorf("%w: %s must be a valid HTTPS URL", sentinel, field)
 	}
 	parsed, err := url.ParseRequestURI(value)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.ForceQuery || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", fmt.Errorf("%w: %s must be an HTTPS URL without credentials, query parameters, or fragments", sentinel, field)
 	}
 	return parsed.String(), nil

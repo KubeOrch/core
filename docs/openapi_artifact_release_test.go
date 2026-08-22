@@ -2,6 +2,8 @@ package docs_test
 
 import (
 	"os"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -65,7 +67,14 @@ func TestArtifactReleaseCreatesRequireIdempotencyAndRejectUnknownFields(t *testi
 
 	assert.Equal(t, false, mustMap(t, schemas["CreateArtifactRequest"])["additionalProperties"])
 	assert.Equal(t, false, mustMap(t, schemas["CreateReleaseRequest"])["additionalProperties"])
-	assert.Len(t, mustMap(t, schemas["CreateReleaseRequest"])["oneOf"], 2)
+	oneOf, ok := mustMap(t, schemas["CreateReleaseRequest"])["oneOf"].([]any)
+	require.True(t, ok)
+	require.Len(t, oneOf, 2)
+	externalCI := mustMap(t, oneOf[0])
+	assert.Equal(t, []any{"sourceReference"}, externalCI["required"])
+	assert.Equal(t, []any{"external-ci"}, mustMap(t, mustMap(t, externalCI["properties"])["source"])["enum"])
+	manual := mustMap(t, oneOf[1])
+	assert.Equal(t, []any{"manual"}, mustMap(t, mustMap(t, manual["properties"])["source"])["enum"])
 	artifactIDs := mustMap(t, mustMap(t, schemas["CreateReleaseRequest"])["properties"])["artifactIds"]
 	assert.Equal(t, true, mustMap(t, artifactIDs)["uniqueItems"])
 }
@@ -79,7 +88,30 @@ func TestArtifactContractRequiresDigestPinnedImages(t *testing.T) {
 	properties := mustMap(t, mustMap(t, schemas["CreateArtifactRequest"])["properties"])
 	image := mustMap(t, properties["image"])
 
-	assert.Contains(t, image["pattern"], "@sha256:")
-	assert.NotContains(t, image["pattern"], "A-F")
+	pattern, ok := image["pattern"].(string)
+	require.True(t, ok)
+	matcher, err := regexp.Compile(pattern)
+	require.NoError(t, err)
+	assert.True(t, matcher.MatchString("ghcr.io/kubeorch/core@sha256:"+strings.Repeat("a", 64)))
+	assert.False(t, matcher.MatchString("ghcr.io/kubeorch/core@sha256:"+strings.Repeat("A", 64)))
 	assert.Equal(t, []any{"image", "source"}, mustMap(t, schemas["CreateArtifactRequest"])["required"])
+}
+
+func TestArtifactReleaseReferencesEncodeHTTPSCredentialSafety(t *testing.T) {
+	data, err := os.ReadFile("openapi.yaml")
+	require.NoError(t, err)
+	var document map[string]any
+	require.NoError(t, yaml.Unmarshal(data, &document))
+	schemas := mustMap(t, mustMap(t, document["components"])["schemas"])
+	safeReference := mustMap(t, schemas["SafeHTTPSReference"])
+	pattern, ok := safeReference["pattern"].(string)
+	require.True(t, ok)
+	matcher, err := regexp.Compile(pattern)
+	require.NoError(t, err)
+
+	assert.True(t, matcher.MatchString("https://evidence.example/builds/123/sbom.json"))
+	assert.False(t, matcher.MatchString("http://evidence.example/sbom.json"))
+	assert.False(t, matcher.MatchString("https://user:password@evidence.example/sbom.json"))
+	assert.False(t, matcher.MatchString("https://evidence.example/sbom.json?token=secret"))
+	assert.False(t, matcher.MatchString("https://evidence.example/sbom.json#fragment"))
 }

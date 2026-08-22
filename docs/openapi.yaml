@@ -1543,9 +1543,8 @@ components:
       required: [repository, ref, sha]
       properties:
         repository:
-          type: string
-          format: uri
-          maxLength: 2048
+          allOf:
+            - $ref: "#/components/schemas/SafeHTTPSReference"
           description: HTTPS source repository URL without embedded credentials or query parameters.
         ref:
           type: string
@@ -1561,21 +1560,13 @@ components:
       type: object
       properties:
         sbom:
-          type: string
-          format: uri
-          maxLength: 2048
+          $ref: "#/components/schemas/SafeHTTPSReference"
         provenance:
-          type: string
-          format: uri
-          maxLength: 2048
+          $ref: "#/components/schemas/SafeHTTPSReference"
         scan:
-          type: string
-          format: uri
-          maxLength: 2048
+          $ref: "#/components/schemas/SafeHTTPSReference"
         ciRun:
-          type: string
-          format: uri
-          maxLength: 2048
+          $ref: "#/components/schemas/SafeHTTPSReference"
       additionalProperties: false
       description: Safe HTTPS metadata references. KubeOrch stores but does not fetch these URLs during registration.
 
@@ -1669,9 +1660,8 @@ components:
         source:
           $ref: "#/components/schemas/ReleaseSource"
         sourceReference:
-          type: string
-          format: uri
-          maxLength: 2048
+          allOf:
+            - $ref: "#/components/schemas/SafeHTTPSReference"
           description: Required HTTPS CI-run reference when source is external-ci.
         createdBy:
           $ref: "#/components/schemas/ResourceId"
@@ -1707,11 +1697,17 @@ components:
         source:
           $ref: "#/components/schemas/ReleaseSource"
         sourceReference:
-          type: string
-          format: uri
-          maxLength: 2048
+          allOf:
+            - $ref: "#/components/schemas/SafeHTTPSReference"
           description: Required HTTPS CI-run reference when source is external-ci.
       additionalProperties: false
+
+    SafeHTTPSReference:
+      type: string
+      format: uri
+      maxLength: 2048
+      pattern: "^https://[^/?#@]+(/[^?#]*)?$"
+      description: HTTPS URL without embedded credentials, query parameters, or fragments.
 
     ReleaseList:
       type: object
