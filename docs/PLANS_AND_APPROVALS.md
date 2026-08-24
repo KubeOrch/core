@@ -38,9 +38,11 @@ Any active workspace member may create a Plan or request its approval. Only a
 workspace owner or administrator may approve or reject it. A required decision
 reason is stored with the actor, timestamp, and stable audit correlation ID.
 
-When `policy.selfApprovalForbidden` is true, the Plan creator cannot approve
-their own proposal. They may still reject it. Once approved or rejected, a Plan
-is terminal; only an exact idempotent replay of the original decision succeeds.
+The Beta API always sets `policy.selfApprovalForbidden` to true from trusted
+server policy; a caller-provided value cannot relax it. The Plan creator cannot
+approve their own proposal, but may still reject it. Once approved or rejected,
+a Plan is terminal; only an exact idempotent replay of the original decision
+succeeds.
 
 ## Observability
 

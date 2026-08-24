@@ -30,6 +30,10 @@ tags:
     description: Workspace-scoped deployment environment identities
   - name: Applications
     description: Environment-scoped desired application identities
+  - name: Artifacts
+    description: Immutable workspace build evidence registered by external CI or manual onboarding
+  - name: Releases
+    description: Immutable application revision and artifact bindings that do not deploy
   - name: Plans
     description: Immutable proposed changes, approval requests, and terminal decisions
   - name: Workflows
@@ -723,6 +727,212 @@ paths:
         "404":
           $ref: "#/components/responses/APIError"
 
+  /api/workspaces/{workspaceId}/artifacts:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+    get:
+      tags: [Artifacts]
+      summary: List registered artifacts
+      description: Returns immutable artifact evidence in descending creation order without fetching evidence references.
+      operationId: listArtifacts
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [artifacts:read]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PageCursor"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Workspace artifacts
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactList"
+        "400":
+          $ref: "#/components/responses/APIError"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+    post:
+      tags: [Artifacts]
+      summary: Register immutable artifact evidence
+      description: Registers a digest-pinned OCI image and metadata. This operation never fetches evidence, builds source, or deploys to a cluster.
+      operationId: createArtifact
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [artifacts:write]
+      x-kubeorch-idempotency: required
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateArtifactRequest"
+      responses:
+        "201":
+          description: Artifact registered, or an existing identical artifact replayed
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Artifact"
+        "400":
+          $ref: "#/components/responses/APIError"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+        "409":
+          $ref: "#/components/responses/APIError"
+        "413":
+          $ref: "#/components/responses/APIError"
+
+  /api/workspaces/{workspaceId}/artifacts/{artifactId}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+      - $ref: "#/components/parameters/ArtifactId"
+    get:
+      tags: [Artifacts]
+      summary: Get registered artifact evidence
+      operationId: getArtifact
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [artifacts:read]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Immutable artifact evidence
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Artifact"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+
+  /api/workspaces/{workspaceId}/applications/{applicationId}/releases:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+      - $ref: "#/components/parameters/ApplicationId"
+    get:
+      tags: [Releases]
+      summary: List application releases
+      description: Returns immutable releases in descending creation order. Listing does not inspect a cluster.
+      operationId: listReleases
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [releases:read]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PageCursor"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Releases for the route application
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReleaseList"
+        "400":
+          $ref: "#/components/responses/APIError"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+    post:
+      tags: [Releases]
+      summary: Create an immutable application release
+      description: Binds one application revision to registered workspace artifacts. It records a handoff only and never mutates workflows or clusters.
+      operationId: createRelease
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [releases:write]
+      x-kubeorch-idempotency: required
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReleaseRequest"
+      responses:
+        "201":
+          description: Release created, or the original creation response replayed
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Release"
+        "400":
+          $ref: "#/components/responses/APIError"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+        "409":
+          $ref: "#/components/responses/APIError"
+        "413":
+          $ref: "#/components/responses/APIError"
+
+  /api/workspaces/{workspaceId}/applications/{applicationId}/releases/{releaseId}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+      - $ref: "#/components/parameters/ApplicationId"
+      - $ref: "#/components/parameters/ReleaseId"
+    get:
+      tags: [Releases]
+      summary: Get an application release
+      operationId: getRelease
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [releases:read]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Immutable application release
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Release"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+
   /api/workspaces/{workspaceId}/plans:
     parameters:
       - $ref: "#/components/parameters/WorkspaceId"
@@ -1194,6 +1404,20 @@ components:
       description: Opaque application identifier.
       schema:
         $ref: "#/components/schemas/ResourceId"
+    ArtifactId:
+      name: artifactId
+      in: path
+      required: true
+      description: Opaque artifact identifier.
+      schema:
+        $ref: "#/components/schemas/ResourceId"
+    ReleaseId:
+      name: releaseId
+      in: path
+      required: true
+      description: Opaque release identifier.
+      schema:
+        $ref: "#/components/schemas/ResourceId"
     PlanId:
       name: planId
       in: path
@@ -1519,6 +1743,189 @@ components:
           $ref: "#/components/schemas/PageInfo"
       additionalProperties: false
 
+    ArtifactSource:
+      type: object
+      required: [repository, ref, sha]
+      properties:
+        repository:
+          allOf:
+            - $ref: "#/components/schemas/SafeHTTPSReference"
+          description: HTTPS source repository URL without embedded credentials or query parameters.
+        ref:
+          type: string
+          minLength: 1
+          maxLength: 512
+        sha:
+          type: string
+          pattern: "^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$"
+          description: Full immutable source commit identifier.
+      additionalProperties: false
+
+    ArtifactEvidence:
+      type: object
+      properties:
+        sbom:
+          $ref: "#/components/schemas/SafeHTTPSReference"
+        provenance:
+          $ref: "#/components/schemas/SafeHTTPSReference"
+        scan:
+          $ref: "#/components/schemas/SafeHTTPSReference"
+        ciRun:
+          $ref: "#/components/schemas/SafeHTTPSReference"
+      additionalProperties: false
+      description: Safe HTTPS metadata references. KubeOrch stores but does not fetch these URLs during registration.
+
+    Artifact:
+      type: object
+      required: [id, workspaceId, image, digest, source, evidence, createdBy, createdAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/ResourceId"
+        workspaceId:
+          $ref: "#/components/schemas/ResourceId"
+        image:
+          type: string
+          maxLength: 512
+          pattern: "^.+@sha256:[a-f0-9]{64}$"
+          description: Canonical OCI repository and immutable digest. Mutable tags are not retained as identity.
+        digest:
+          type: string
+          pattern: "^sha256:[a-f0-9]{64}$"
+        source:
+          $ref: "#/components/schemas/ArtifactSource"
+        evidence:
+          $ref: "#/components/schemas/ArtifactEvidence"
+        createdBy:
+          $ref: "#/components/schemas/ResourceId"
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+      additionalProperties: false
+
+    CreateArtifactRequest:
+      type: object
+      required: [image, source]
+      properties:
+        image:
+          type: string
+          maxLength: 512
+          pattern: "^.+@sha256:[a-f0-9]{64}$"
+          description: OCI image reference pinned by digest. A tag without a digest is rejected.
+        source:
+          $ref: "#/components/schemas/ArtifactSource"
+        evidence:
+          $ref: "#/components/schemas/ArtifactEvidence"
+      additionalProperties: false
+
+    ArtifactList:
+      type: object
+      required: [items, pageInfo]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Artifact"
+        pageInfo:
+          $ref: "#/components/schemas/PageInfo"
+      additionalProperties: false
+
+    ReleaseSource:
+      type: string
+      enum: [external-ci, manual]
+
+    Release:
+      type: object
+      required: [id, workspaceId, applicationId, applicationRevision, artifactIds, source, createdBy, createdAt]
+      oneOf:
+        - properties:
+            source:
+              enum: [external-ci]
+          required: [sourceReference]
+        - properties:
+            source:
+              enum: [manual]
+      properties:
+        id:
+          $ref: "#/components/schemas/ResourceId"
+        workspaceId:
+          $ref: "#/components/schemas/ResourceId"
+        applicationId:
+          $ref: "#/components/schemas/ResourceId"
+        applicationRevision:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]{0,127}$"
+        artifactIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/ResourceId"
+        source:
+          $ref: "#/components/schemas/ReleaseSource"
+        sourceReference:
+          allOf:
+            - $ref: "#/components/schemas/SafeHTTPSReference"
+          description: Required HTTPS CI-run reference when source is external-ci.
+        createdBy:
+          $ref: "#/components/schemas/ResourceId"
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+      additionalProperties: false
+
+    CreateReleaseRequest:
+      type: object
+      required: [applicationRevision, artifactIds, source]
+      oneOf:
+        - properties:
+            source:
+              enum: [external-ci]
+          required: [sourceReference]
+        - properties:
+            source:
+              enum: [manual]
+      properties:
+        applicationRevision:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]{0,127}$"
+          description: Immutable desired-state or canvas revision supplied by the caller.
+        artifactIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/ResourceId"
+        source:
+          $ref: "#/components/schemas/ReleaseSource"
+        sourceReference:
+          allOf:
+            - $ref: "#/components/schemas/SafeHTTPSReference"
+          description: Required HTTPS CI-run reference when source is external-ci.
+      additionalProperties: false
+
+    SafeHTTPSReference:
+      type: string
+      format: uri
+      maxLength: 2048
+      pattern: "^https://[^/?#@]+(/[^?#]*)?$"
+      description: HTTPS URL without embedded credentials, query parameters, or fragments.
+
+    ReleaseList:
+      type: object
+      required: [items, pageInfo]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Release"
+        pageInfo:
+          $ref: "#/components/schemas/PageInfo"
+      additionalProperties: false
+
     AuditCorrelationId:
       type: string
       format: uuid
@@ -1575,7 +1982,7 @@ components:
 
     PlanPolicyResult:
       type: object
-      required: [status]
+      required: [status, selfApprovalForbidden]
       properties:
         status:
           $ref: "#/components/schemas/PlanCheckStatus"
@@ -1586,8 +1993,9 @@ components:
           $ref: "#/components/schemas/PlanEvidenceReference"
         selfApprovalForbidden:
           type: boolean
-          description: When true, the Plan creator cannot record an approve decision.
-          default: false
+          description: Server-enforced Beta policy. Plan creators cannot approve their own Plans, and request values cannot relax this rule.
+          default: true
+          readOnly: true
       additionalProperties: false
 
     PlanApprovalRequest:

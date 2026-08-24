@@ -31,6 +31,8 @@ var (
 	WorkspaceColl           *mongo.Collection
 	EnvironmentColl         *mongo.Collection
 	ApplicationColl         *mongo.Collection
+	ArtifactColl            *mongo.Collection
+	ReleaseColl             *mongo.Collection
 	PlanColl                *mongo.Collection
 )
 
@@ -83,6 +85,8 @@ func Connect() error {
 	WorkspaceColl = Database.Collection("workspaces")
 	EnvironmentColl = Database.Collection("environments")
 	ApplicationColl = Database.Collection("applications")
+	ArtifactColl = Database.Collection("artifacts")
+	ReleaseColl = Database.Collection("releases")
 	PlanColl = Database.Collection("plans")
 
 	logrus.Info("MongoDB connection established")
@@ -279,6 +283,38 @@ func createIndexes() error {
 	_, err = ApplicationColl.Indexes().CreateMany(ctx, applicationIndexes)
 	if err != nil {
 		return fmt.Errorf("failed to create application indexes: %v", err)
+	}
+
+	artifactIndexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "workspace_id", Value: 1}, {Key: "identity_hash", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: "workspace_id", Value: 1}, {Key: "created_by", Value: 1}, {Key: "creation_key", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		},
+		{
+			Keys: bson.D{{Key: "workspace_id", Value: 1}, {Key: "created_at", Value: -1}, {Key: "_id", Value: -1}},
+		},
+	}
+	_, err = ArtifactColl.Indexes().CreateMany(ctx, artifactIndexes)
+	if err != nil {
+		return fmt.Errorf("failed to create artifact indexes: %v", err)
+	}
+
+	releaseIndexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "workspace_id", Value: 1}, {Key: "created_by", Value: 1}, {Key: "creation_key", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		},
+		{
+			Keys: bson.D{{Key: "workspace_id", Value: 1}, {Key: "application_id", Value: 1}, {Key: "created_at", Value: -1}, {Key: "_id", Value: -1}},
+		},
+	}
+	_, err = ReleaseColl.Indexes().CreateMany(ctx, releaseIndexes)
+	if err != nil {
+		return fmt.Errorf("failed to create release indexes: %v", err)
 	}
 
 	planIndexes := []mongo.IndexModel{

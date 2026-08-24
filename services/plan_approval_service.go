@@ -246,7 +246,7 @@ func (s *PlanApprovalService) DecidePlan(
 	if existing.Status != models.PlanStatusApprovalRequested {
 		return models.PlanResponse{}, false, ErrPlanStateConflict
 	}
-	if decision == models.PlanDecisionApprove && existing.Policy.SelfApprovalForbidden && existing.CreatedBy == actorID {
+	if decision == models.PlanDecisionApprove && existing.CreatedBy == actorID {
 		return models.PlanResponse{}, false, ErrPlanSelfApprovalForbidden
 	}
 
@@ -345,6 +345,7 @@ func validatePlanPolicyResult(result models.PlanPolicyResult) (models.PlanPolicy
 	result.Status = validated.Status
 	result.Summary = validated.Summary
 	result.Reference = validated.Reference
+	result.SelfApprovalForbidden = true
 	return result, nil
 }
 
@@ -400,6 +401,7 @@ func hashPlanPayload(value any) (string, error) {
 }
 
 func planResponse(plan models.Plan) models.PlanResponse {
+	plan.Policy.SelfApprovalForbidden = true
 	response := models.PlanResponse{
 		ID:                 plan.ID.Hex(),
 		WorkspaceID:        plan.WorkspaceID.Hex(),
