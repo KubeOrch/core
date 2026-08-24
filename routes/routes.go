@@ -93,6 +93,9 @@ func SetupRouter() *gin.Engine {
 		environmentApplicationRepository := repositories.NewEnvironmentApplicationRepository()
 		environmentApplicationService := services.NewEnvironmentApplicationService(environmentApplicationRepository)
 		environmentApplicationHandler := handlers.NewEnvironmentApplicationHandler(environmentApplicationService)
+		planApprovalRepository := repositories.NewPlanApprovalRepository()
+		planApprovalService := services.NewPlanApprovalService(planApprovalRepository)
+		planApprovalHandler := handlers.NewPlanApprovalHandler(planApprovalService)
 		workspaces := v1.Group("/api/workspaces")
 		workspaces.Use(middleware.BetaAuthMiddleware())
 		{
@@ -117,6 +120,11 @@ func SetupRouter() *gin.Engine {
 				workspaceScoped.GET("/applications/:applicationId", environmentApplicationHandler.GetApplication)
 				workspaceScoped.PATCH("/applications/:applicationId", environmentApplicationHandler.UpdateApplication)
 				workspaceScoped.DELETE("/applications/:applicationId", environmentApplicationHandler.ArchiveApplication)
+				workspaceScoped.GET("/plans", planApprovalHandler.ListPlans)
+				workspaceScoped.POST("/plans", planApprovalHandler.CreatePlan)
+				workspaceScoped.GET("/plans/:planId", planApprovalHandler.GetPlan)
+				workspaceScoped.POST("/plans/:planId/approval-requests", planApprovalHandler.RequestApproval)
+				workspaceScoped.POST("/plans/:planId/decisions", planApprovalHandler.DecidePlan)
 			}
 		}
 

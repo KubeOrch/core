@@ -31,6 +31,7 @@ var (
 	WorkspaceColl           *mongo.Collection
 	EnvironmentColl         *mongo.Collection
 	ApplicationColl         *mongo.Collection
+	PlanColl                *mongo.Collection
 )
 
 func Connect() error {
@@ -82,6 +83,7 @@ func Connect() error {
 	WorkspaceColl = Database.Collection("workspaces")
 	EnvironmentColl = Database.Collection("environments")
 	ApplicationColl = Database.Collection("applications")
+	PlanColl = Database.Collection("plans")
 
 	logrus.Info("MongoDB connection established")
 
@@ -277,6 +279,26 @@ func createIndexes() error {
 	_, err = ApplicationColl.Indexes().CreateMany(ctx, applicationIndexes)
 	if err != nil {
 		return fmt.Errorf("failed to create application indexes: %v", err)
+	}
+
+	planIndexes := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "workspace_id", Value: 1}, {Key: "created_by", Value: 1}, {Key: "creation_key", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		},
+		{
+			Keys: bson.D{{Key: "workspace_id", Value: 1}, {Key: "created_at", Value: -1}, {Key: "_id", Value: -1}},
+		},
+		{
+			Keys: bson.D{{Key: "workspace_id", Value: 1}, {Key: "application_id", Value: 1}, {Key: "created_at", Value: -1}},
+		},
+		{
+			Keys: bson.D{{Key: "workspace_id", Value: 1}, {Key: "environment_id", Value: 1}, {Key: "status", Value: 1}},
+		},
+	}
+	_, err = PlanColl.Indexes().CreateMany(ctx, planIndexes)
+	if err != nil {
+		return fmt.Errorf("failed to create plan indexes: %v", err)
 	}
 
 	logrus.Info("Database indexes created successfully")
