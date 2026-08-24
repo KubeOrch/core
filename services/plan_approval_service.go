@@ -147,6 +147,9 @@ func (s *PlanApprovalService) ListPlans(
 		if errors.Is(err, repositories.ErrInvalidCursor) {
 			return models.PlanListResponse{}, fmt.Errorf("%w: invalid pagination cursor", ErrInvalidPlanData)
 		}
+		if errors.Is(err, repositories.ErrInvalidPlanPageSize) {
+			return models.PlanListResponse{}, fmt.Errorf("%w: limit must be between 1 and 100", ErrInvalidPlanData)
+		}
 		return models.PlanListResponse{}, mapPlanRepositoryError(err)
 	}
 	items := make([]models.PlanResponse, 0, len(plans))

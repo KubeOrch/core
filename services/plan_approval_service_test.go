@@ -356,6 +356,18 @@ func TestListPlansMapsWorkspaceBoundCursorErrors(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidPlanData)
 }
 
+func TestListPlansMapsInvalidRepositoryPageSize(t *testing.T) {
+	fixture := newPlanServiceFixture(t)
+	fixture.store.listPlans = func(context.Context, primitive.ObjectID, int, string) ([]models.Plan, string, error) {
+		return nil, "", repositories.ErrInvalidPlanPageSize
+	}
+
+	_, err := fixture.service.ListPlans(context.Background(), fixture.workspaceID, 0, "")
+
+	assert.ErrorIs(t, err, ErrInvalidPlanData)
+	assert.Contains(t, err.Error(), "limit must be between 1 and 100")
+}
+
 type planServiceFixture struct {
 	service       *PlanApprovalService
 	store         *stubPlanApprovalStore

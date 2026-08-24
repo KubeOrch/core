@@ -26,6 +26,16 @@ func TestPlanCursorRoundTripAndWorkspaceBinding(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidCursor)
 }
 
+func TestListPlansRejectsInvalidPageSizeBeforeQueryingMongoDB(t *testing.T) {
+	repository := &PlanApprovalRepository{}
+	for _, limit := range []int{-1, 0, 101} {
+		plans, cursor, err := repository.ListPlans(t.Context(), primitive.NewObjectID(), limit, "")
+		assert.ErrorIs(t, err, ErrInvalidPlanPageSize)
+		assert.Nil(t, plans)
+		assert.Empty(t, cursor)
+	}
+}
+
 func TestPlanTransitionFiltersEnforceWorkspaceAndExpectedState(t *testing.T) {
 	workspaceID := primitive.NewObjectID()
 	planID := primitive.NewObjectID()

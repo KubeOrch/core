@@ -20,6 +20,7 @@ var (
 	ErrPlanApprovalRequired         = errors.New("plan approval request required")
 	ErrPlanDecisionTerminal         = errors.New("plan decision is terminal")
 	ErrPlanStateConflict            = errors.New("plan state conflict")
+	ErrInvalidPlanPageSize          = errors.New("invalid plan page size")
 )
 
 const planCursorKind byte = 3
@@ -69,6 +70,9 @@ func (r *PlanApprovalRepository) ListPlans(
 	limit int,
 	cursor string,
 ) ([]models.Plan, string, error) {
+	if limit < 1 || limit > 100 {
+		return nil, "", ErrInvalidPlanPageSize
+	}
 	filter := bson.M{"workspace_id": workspaceID}
 	if cursor != "" {
 		createdAt, planID, err := decodeDomainCursor(cursor, planCursorKind, workspaceID, [8]byte{})
