@@ -34,6 +34,8 @@ tags:
     description: Immutable workspace build evidence registered by external CI or manual onboarding
   - name: Releases
     description: Immutable application revision and artifact bindings that do not deploy
+  - name: Plans
+    description: Immutable proposed changes, approval requests, and terminal decisions
   - name: Workflows
     description: Workflow management and execution
   - name: Clusters
@@ -931,6 +933,202 @@ paths:
         "404":
           $ref: "#/components/responses/APIError"
 
+  /api/workspaces/{workspaceId}/plans:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+    get:
+      tags: [Plans]
+      summary: List proposed Plans in a workspace
+      description: Plans are immutable and ordered by creation time and opaque identifier, newest first.
+      operationId: listPlans
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [plans:read]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PageCursor"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Workspace Plans
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlanList"
+        "400":
+          $ref: "#/components/responses/APIError"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+    post:
+      tags: [Plans]
+      summary: Create an immutable proposed Plan
+      description: Records proposed change evidence for review. Creation does not apply the Plan, contact a cluster, or open a Git pull request.
+      operationId: createPlan
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [plans:write]
+      x-kubeorch-idempotency: required
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePlanRequest"
+      responses:
+        "201":
+          description: Proposed Plan created, or the original creation response replayed
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "400":
+          $ref: "#/components/responses/APIError"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+        "409":
+          $ref: "#/components/responses/APIError"
+        "413":
+          $ref: "#/components/responses/APIError"
+
+  /api/workspaces/{workspaceId}/plans/{planId}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+      - $ref: "#/components/parameters/PlanId"
+    get:
+      tags: [Plans]
+      summary: Get an immutable Plan and its approval state
+      operationId: getPlan
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [plans:read]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Plan evidence and approval state
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+
+  /api/workspaces/{workspaceId}/plans/{planId}/approval-requests:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+      - $ref: "#/components/parameters/PlanId"
+    post:
+      tags: [Plans]
+      summary: Request approval for a proposed Plan
+      description: Moves a proposed Plan to approval-requested exactly once. This operation does not apply the Plan.
+      operationId: requestPlanApproval
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [plans:write]
+      x-kubeorch-idempotency: required
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePlanApprovalRequest"
+      responses:
+        "201":
+          description: Approval requested, or the original transition response replayed
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "400":
+          $ref: "#/components/responses/APIError"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+        "409":
+          $ref: "#/components/responses/APIError"
+        "413":
+          $ref: "#/components/responses/APIError"
+
+  /api/workspaces/{workspaceId}/plans/{planId}/decisions:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+      - $ref: "#/components/parameters/PlanId"
+    post:
+      tags: [Plans]
+      summary: Approve or reject a Plan
+      description: Records one terminal owner or administrator decision. Approval may be denied when policy forbids self-approval. This operation does not apply the Plan.
+      operationId: decidePlan
+      x-stability-level: beta
+      x-kubeorch-workspace-boundary: workspace
+      x-kubeorch-required-scopes: [plans:approve]
+      x-kubeorch-idempotency: required
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePlanDecisionRequest"
+      responses:
+        "201":
+          description: Terminal decision recorded, or the original decision response replayed
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "400":
+          $ref: "#/components/responses/APIError"
+        "401":
+          $ref: "#/components/responses/APIError"
+        "403":
+          $ref: "#/components/responses/APIError"
+        "404":
+          $ref: "#/components/responses/APIError"
+        "409":
+          $ref: "#/components/responses/APIError"
+        "413":
+          $ref: "#/components/responses/APIError"
+
   /api/workflows:
     get:
       tags: [Workflows]
@@ -1218,6 +1416,13 @@ components:
       in: path
       required: true
       description: Opaque release identifier.
+      schema:
+        $ref: "#/components/schemas/ResourceId"
+    PlanId:
+      name: planId
+      in: path
+      required: true
+      description: Opaque Plan identifier.
       schema:
         $ref: "#/components/schemas/ResourceId"
     PageCursor:
@@ -1717,6 +1922,222 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Release"
+        pageInfo:
+          $ref: "#/components/schemas/PageInfo"
+      additionalProperties: false
+
+    AuditCorrelationId:
+      type: string
+      format: uuid
+      description: Stable correlation identifier for the later append-only audit event.
+
+    PlanSource:
+      type: string
+      enum: [manual, external-ci, ai, managed-build]
+
+    PlanStatus:
+      type: string
+      enum: [proposed, approval-requested, approved, rejected]
+
+    PlanCheckStatus:
+      type: string
+      enum: [unknown, passed, warning, failed]
+
+    PlanCostStatus:
+      type: string
+      enum: [unknown, available, unavailable]
+
+    PlanEvidenceReference:
+      type: string
+      format: uri
+      maxLength: 2048
+      pattern: '^https://[^/?#@]+(?:/[^?#]*)?$'
+      description: Credential-free HTTPS reference without a query string or fragment. KubeOrch stores but does not fetch it during Plan creation.
+
+    PlanResultReference:
+      type: object
+      required: [status]
+      properties:
+        status:
+          $ref: "#/components/schemas/PlanCheckStatus"
+        summary:
+          type: string
+          maxLength: 1000
+        reference:
+          $ref: "#/components/schemas/PlanEvidenceReference"
+      additionalProperties: false
+
+    PlanCostReference:
+      type: object
+      required: [status]
+      properties:
+        status:
+          $ref: "#/components/schemas/PlanCostStatus"
+        summary:
+          type: string
+          maxLength: 1000
+        reference:
+          $ref: "#/components/schemas/PlanEvidenceReference"
+      additionalProperties: false
+
+    PlanPolicyResult:
+      type: object
+      required: [status]
+      properties:
+        status:
+          $ref: "#/components/schemas/PlanCheckStatus"
+        summary:
+          type: string
+          maxLength: 1000
+        reference:
+          $ref: "#/components/schemas/PlanEvidenceReference"
+        selfApprovalForbidden:
+          type: boolean
+          description: When true, the Plan creator cannot record an approve decision.
+          default: false
+      additionalProperties: false
+
+    PlanApprovalRequest:
+      type: object
+      required: [requestedBy, auditCorrelationId, requestedAt]
+      properties:
+        requestedBy:
+          $ref: "#/components/schemas/ResourceId"
+        reason:
+          type: string
+          maxLength: 1000
+        auditCorrelationId:
+          $ref: "#/components/schemas/AuditCorrelationId"
+        requestedAt:
+          $ref: "#/components/schemas/Timestamp"
+      additionalProperties: false
+
+    PlanDecision:
+      type: object
+      required: [decision, reason, decidedBy, auditCorrelationId, decidedAt]
+      properties:
+        decision:
+          type: string
+          enum: [approve, reject]
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        decidedBy:
+          $ref: "#/components/schemas/ResourceId"
+        auditCorrelationId:
+          $ref: "#/components/schemas/AuditCorrelationId"
+        decidedAt:
+          $ref: "#/components/schemas/Timestamp"
+      additionalProperties: false
+
+    Plan:
+      type: object
+      required: [id, workspaceId, applicationId, environmentId, desiredRevision, source, diffSummary, validation, cost, policy, status, createdBy, auditCorrelationId, createdAt, updatedAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/ResourceId"
+        workspaceId:
+          $ref: "#/components/schemas/ResourceId"
+        applicationId:
+          $ref: "#/components/schemas/ResourceId"
+        environmentId:
+          $ref: "#/components/schemas/ResourceId"
+        desiredRevision:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:/@+\-]{0,127}$'
+        source:
+          $ref: "#/components/schemas/PlanSource"
+        diffSummary:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        evidenceSummary:
+          type: string
+          maxLength: 2000
+        validation:
+          $ref: "#/components/schemas/PlanResultReference"
+        cost:
+          $ref: "#/components/schemas/PlanCostReference"
+        policy:
+          $ref: "#/components/schemas/PlanPolicyResult"
+        status:
+          $ref: "#/components/schemas/PlanStatus"
+        createdBy:
+          $ref: "#/components/schemas/ResourceId"
+        auditCorrelationId:
+          $ref: "#/components/schemas/AuditCorrelationId"
+        approvalRequest:
+          $ref: "#/components/schemas/PlanApprovalRequest"
+        decision:
+          $ref: "#/components/schemas/PlanDecision"
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+        updatedAt:
+          $ref: "#/components/schemas/Timestamp"
+      additionalProperties: false
+
+    CreatePlanRequest:
+      type: object
+      required: [applicationId, environmentId, desiredRevision, source, diffSummary, validation, cost, policy]
+      properties:
+        applicationId:
+          $ref: "#/components/schemas/ResourceId"
+        environmentId:
+          $ref: "#/components/schemas/ResourceId"
+        desiredRevision:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:/@+\-]{0,127}$'
+        source:
+          $ref: "#/components/schemas/PlanSource"
+        diffSummary:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        evidenceSummary:
+          type: string
+          maxLength: 2000
+        validation:
+          $ref: "#/components/schemas/PlanResultReference"
+        cost:
+          $ref: "#/components/schemas/PlanCostReference"
+        policy:
+          $ref: "#/components/schemas/PlanPolicyResult"
+      additionalProperties: false
+
+    CreatePlanApprovalRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          maxLength: 1000
+      additionalProperties: false
+
+    CreatePlanDecisionRequest:
+      type: object
+      required: [decision, reason]
+      properties:
+        decision:
+          type: string
+          enum: [approve, reject]
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1000
+      additionalProperties: false
+
+    PlanList:
+      type: object
+      required: [items, pageInfo]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Plan"
         pageInfo:
           $ref: "#/components/schemas/PageInfo"
       additionalProperties: false
