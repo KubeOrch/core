@@ -64,9 +64,11 @@ func TestCreatePlanPersistsImmutableScopedProposal(t *testing.T) {
 		return nil
 	}
 
+	request := validCreatePlanRequest(fixture.applicationID, fixture.environmentID)
+	request.Policy.SelfApprovalForbidden = false
 	response, replayed, err := fixture.service.CreatePlan(
 		context.Background(), fixture.actorID, fixture.workspaceID, fixture.applicationID, fixture.environmentID,
-		validCreatePlanRequest(fixture.applicationID, fixture.environmentID), "create-plan-1",
+		request, "create-plan-1",
 	)
 
 	require.NoError(t, err)
@@ -77,11 +79,13 @@ func TestCreatePlanPersistsImmutableScopedProposal(t *testing.T) {
 	assert.Equal(t, fixture.applicationID, captured.ApplicationID)
 	assert.Equal(t, fixture.environmentID, captured.EnvironmentID)
 	assert.Equal(t, "plan-correlation", captured.AuditCorrelationID)
+	assert.True(t, captured.Policy.SelfApprovalForbidden)
 	assert.NotEmpty(t, captured.CreationHash)
 	assert.Nil(t, captured.ApprovalRequest)
 	assert.Nil(t, captured.Decision)
 	assert.Equal(t, captured.ID.Hex(), response.ID)
 	assert.Equal(t, "plan-correlation", response.AuditCorrelationID)
+	assert.True(t, response.Policy.SelfApprovalForbidden)
 	assert.Equal(t, fixture.now, response.CreatedAt)
 }
 
@@ -261,7 +265,7 @@ func TestDecidePlanEnforcesRoleApprovalRequestAndSelfApprovalPolicy(t *testing.T
 
 	approvalPlan.Status = models.PlanStatusApprovalRequested
 	approvalPlan.ApprovalRequest = &models.PlanApprovalRequest{RequestedBy: fixture.actorID}
-	approvalPlan.Policy.SelfApprovalForbidden = true
+	approvalPlan.Policy.SelfApprovalForbidden = false
 	_, _, err = fixture.service.DecidePlan(
 		context.Background(), fixture.actorID, models.MembershipRoleOwner, fixture.workspaceID, fixture.planID,
 		models.CreatePlanDecisionRequest{Decision: models.PlanDecisionApprove, Reason: "looks good"}, "decision-1",

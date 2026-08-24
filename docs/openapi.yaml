@@ -1993,8 +1993,9 @@ components:
           $ref: "#/components/schemas/PlanEvidenceReference"
         selfApprovalForbidden:
           type: boolean
-          description: When true, the Plan creator cannot record an approve decision.
-          default: false
+          description: Server-enforced Beta policy. Plan creators cannot approve their own Plans, and request values cannot relax this rule.
+          default: true
+          readOnly: true
       additionalProperties: false
 
     PlanApprovalRequest:
