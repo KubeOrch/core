@@ -83,6 +83,7 @@ func TestPlanSchemaIsImmutableBoundedAndAuditCorrelated(t *testing.T) {
 	assert.Contains(t, reference["pattern"], "https://")
 	assert.Equal(t, 2048, reference["maxLength"])
 	selfApprovalForbidden := mustMap(t, mustMap(t, schemas["PlanPolicyResult"])["properties"])["selfApprovalForbidden"].(map[string]any)
+	assert.Contains(t, mustMap(t, schemas["PlanPolicyResult"])["required"], "selfApprovalForbidden")
 	assert.Equal(t, true, selfApprovalForbidden["default"])
 	assert.Equal(t, true, selfApprovalForbidden["readOnly"])
 }
