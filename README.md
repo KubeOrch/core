@@ -76,6 +76,9 @@ core/
 
 We welcome contributions! See the [contributing guide](https://github.com/KubeOrch/.github/blob/main/CONTRIBUTING.md).
 
+Core container release platforms, immutable digest verification, and
+attestation checks are documented in [docs/RELEASE.md](docs/RELEASE.md).
+
 ## 📄 License
 
 Apache License 2.0 - see [LICENSE](LICENSE) file for details.

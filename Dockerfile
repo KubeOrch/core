@@ -1,7 +1,12 @@
+# syntax=docker/dockerfile:1.7
+
 # Multi-stage Dockerfile for KubeOrch Core
 
 # Stage 1: Builder
-FROM golang:1.25-alpine AS builder
+FROM --platform=${BUILDPLATFORM} golang:1.25-alpine AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 # Install git and ca-certificates for fetching dependencies
 RUN apk add --no-cache git ca-certificates
@@ -18,8 +23,10 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the application
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+# Build the application for the requested target while the compiler runs on the
+# native build platform.
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+    -trimpath \
     -ldflags="-w -s" \
     -o kubeorch-core \
     .
