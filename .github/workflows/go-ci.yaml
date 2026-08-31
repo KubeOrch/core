@@ -70,3 +70,41 @@ jobs:
 
       - name: Build
         run: go build -v .
+
+  container:
+    name: Container (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+          - platform: linux/arm64
+            arch: arm64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build platform image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          platforms: ${{ matrix.platform }}
+          tags: kubeorch/core:smoke-${{ matrix.arch }}
+          cache-from: type=gha,scope=core-container-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=core-container-${{ matrix.arch }}
+          provenance: false
+          sbom: false
+
+      - name: Smoke-test platform image
+        run: .github/scripts/smoke-container.sh "kubeorch/core:smoke-${{ matrix.arch }}" "${{ matrix.arch }}"
