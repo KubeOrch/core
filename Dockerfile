@@ -2,13 +2,13 @@
 
 # Multi-stage Dockerfile for KubeOrch Core
 
-ARG BUILDPLATFORM=linux/amd64
+ARG BUILDPLATFORM
 
 # Stage 1: Builder
 FROM --platform=${BUILDPLATFORM} golang:1.25-alpine AS builder
 
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 
 # Install git and ca-certificates for fetching dependencies
 RUN apk add --no-cache git ca-certificates

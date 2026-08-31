@@ -9,6 +9,7 @@ fi
 
 image="$1"
 expected_arch="$2"
+mongo_image="mongo:8.0.29@sha256:02a0cc7939f5ed38f30f9bc714ef5f682d49baf9350c54acf302ce833087fe8a"
 
 case "$expected_arch" in
   amd64 | arm64) ;;
@@ -84,7 +85,7 @@ docker network create "$network" >/dev/null
 docker run --detach \
   --name "$mongo_container" \
   --network "$network" \
-  mongo:8.0 >/dev/null
+  "$mongo_image" >/dev/null
 
 mongo_ready=false
 for _ in $(seq 1 45); do
