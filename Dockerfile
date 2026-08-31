@@ -2,8 +2,6 @@
 
 # Multi-stage Dockerfile for KubeOrch Core
 
-ARG BUILDPLATFORM
-
 # Stage 1: Builder
 FROM --platform=${BUILDPLATFORM} golang:1.25-alpine AS builder
 

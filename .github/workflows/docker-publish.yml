@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
 
+concurrency:
+  group: core-release
+  cancel-in-progress: false
+  queue: max
+
 permissions:
   contents: write
   packages: write

@@ -11,6 +11,9 @@ It builds and smoke-tests both platform images before publishing the versioned
 image. Each smoke test verifies the image architecture, the non-root runtime,
 MongoDB-backed startup, and the `/v1` endpoint.
 
+Release runs share a non-cancelling concurrency queue so versioned publication
+and promotion of `latest` cannot overlap.
+
 ## Published Evidence
 
 The versioned image index includes BuildKit-generated SPDX SBOM and SLSA
