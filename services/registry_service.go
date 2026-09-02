@@ -20,15 +20,22 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
+// httpClient defines the narrow HTTP dependency used by registry connection checks.
+type httpClient interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
 type RegistryService struct {
-	repo   *repositories.RegistryRepository
-	logger *logrus.Logger
+	repo       *repositories.RegistryRepository
+	logger     *logrus.Logger
+	httpClient httpClient
 }
 
 func NewRegistryService() *RegistryService {
 	return &RegistryService{
-		repo:   repositories.NewRegistryRepository(),
-		logger: logrus.New(),
+		repo:       repositories.NewRegistryRepository(),
+		logger:     logrus.New(),
+		httpClient: &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
@@ -275,8 +282,7 @@ func (s *RegistryService) testDockerHubConnection(ctx context.Context, registry 
 	auth := base64.StdEncoding.EncodeToString([]byte(registry.Credentials.Username + ":" + registry.Credentials.Password))
 	req.Header.Set("Authorization", "Basic "+auth)
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("connection failed: %w", err)
 	}
@@ -303,8 +309,7 @@ func (s *RegistryService) testGHCRConnection(ctx context.Context, registry *mode
 	auth := base64.StdEncoding.EncodeToString([]byte(registry.Credentials.Username + ":" + registry.Credentials.Password))
 	req.Header.Set("Authorization", "Basic "+auth)
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("connection failed: %w", err)
 	}
@@ -369,8 +374,7 @@ func (s *RegistryService) testACRConnection(ctx context.Context, registry *model
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("connection failed: %w", err)
 	}
@@ -399,8 +403,7 @@ func (s *RegistryService) testCustomRegistryConnection(ctx context.Context, regi
 		req.Header.Set("Authorization", "Basic "+auth)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("connection failed: %w", err)
 	}
