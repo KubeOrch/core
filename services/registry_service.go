@@ -398,22 +398,41 @@ func (s *RegistryService) testCustomRegistryConnection(ctx context.Context, regi
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	if registry.Credentials.Username != "" && registry.Credentials.Password != "" {
+	credentialsConfigured := registry.Credentials.Username != "" && registry.Credentials.Password != ""
+	if credentialsConfigured {
 		auth := base64.StdEncoding.EncodeToString([]byte(registry.Credentials.Username + ":" + registry.Credentials.Password))
 		req.Header.Set("Authorization", "Basic "+auth)
 	}
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("connection failed: %w", err)
+		return fmt.Errorf("connection failed: unable to reach registry %q: %w", customRegistryLabel(registry), err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode == 200 || resp.StatusCode == 401 {
+	// Success requires an authenticated 2xx when credentials are configured.
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
 	}
 
-	return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	if credentialsConfigured && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+		return fmt.Errorf("authentication failed: registry %q rejected credentials with HTTP %d", customRegistryLabel(registry), resp.StatusCode)
+	}
+
+	// Without credentials, 401 indicates the /v2/ endpoint is reachable (auth challenge).
+	if !credentialsConfigured && resp.StatusCode == http.StatusUnauthorized {
+		return nil
+	}
+
+	return fmt.Errorf("unexpected status: registry %q returned HTTP %d", customRegistryLabel(registry), resp.StatusCode)
+}
+
+// customRegistryLabel identifies a registry in errors without credential material.
+func customRegistryLabel(registry *models.Registry) string {
+	if registry.Name != "" {
+		return registry.Name
+	}
+	return registry.RegistryURL
 }
 
 // getECRAuthToken retrieves a temporary auth token from AWS ECR

@@ -307,6 +307,102 @@ func TestNewRegistryService_HasDefaultClient(t *testing.T) {
 	require.NotNil(t, svc.httpClient)
 }
 
+// --- Custom registry credential validation (issue #131) ---
+
+func TestTestCustomRegistryConnection_CredentialValidation(t *testing.T) {
+	const (
+		dummyUser = "dummy-user"
+		dummyPass = "dummy-secret-password"
+		regURL    = "https://registry.example.com"
+		regName   = "my-custom-registry"
+	)
+
+	tests := []struct {
+		name       string
+		registry   *models.Registry
+		status     int
+		transport  bool
+		wantErr    bool
+		errContain string
+		checkAuth  bool
+	}{
+		{
+			name:      "2xx success with credentials",
+			registry:  &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: regURL, Credentials: models.RegistryCredentials{Username: dummyUser, Password: dummyPass}},
+			status:    200,
+			wantErr:   false,
+			checkAuth: true,
+		},
+		{
+			name:      "204 success with credentials",
+			registry:  &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: regURL, Credentials: models.RegistryCredentials{Username: dummyUser, Password: dummyPass}},
+			status:    204,
+			wantErr:   false,
+			checkAuth: true,
+		},
+		{
+			name:       "401 auth failure when credentials configured",
+			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: regURL, Credentials: models.RegistryCredentials{Username: dummyUser, Password: dummyPass}},
+			status:     401,
+			wantErr:    true,
+			errContain: "authentication failed",
+			checkAuth:  true,
+		},
+		{
+			name:       "403 auth failure when credentials configured",
+			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: regURL, Credentials: models.RegistryCredentials{Username: dummyUser, Password: dummyPass}},
+			status:     403,
+			wantErr:    true,
+			errContain: "authentication failed",
+			checkAuth:  true,
+		},
+		{
+			name:       "unexpected status 500",
+			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: regURL, Credentials: models.RegistryCredentials{Username: dummyUser, Password: dummyPass}},
+			status:     500,
+			wantErr:    true,
+			errContain: "unexpected status",
+			checkAuth:  true,
+		},
+		{
+			name:       "transport failure",
+			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: regURL, Credentials: models.RegistryCredentials{Username: dummyUser, Password: dummyPass}},
+			transport:  true,
+			wantErr:    true,
+			errContain: "connection failed",
+			checkAuth:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := newFakeHTTPClient(func(req *http.Request) (*http.Response, error) {
+				if tt.checkAuth {
+					auth := req.Header.Get("Authorization")
+					assert.True(t, strings.HasPrefix(auth, "Basic "), "expected Basic auth header prefix")
+					assert.NotContains(t, auth, dummyPass, "raw password must not appear in Authorization header value checks via body; header is base64")
+				}
+				if tt.transport {
+					return transportError()
+				}
+				return httpResponse(tt.status, ""), nil
+			})
+			svc := newTestRegistryService(fake)
+			err := svc.testCustomRegistryConnection(context.Background(), tt.registry)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContain)
+				assert.Contains(t, err.Error(), regName)
+				assert.NotContains(t, err.Error(), dummyPass)
+				assert.NotContains(t, err.Error(), "Authorization")
+				assert.NotContains(t, err.Error(), "Basic ")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestAuthorizationHeaderFormat(t *testing.T) {
 	tests := []struct {
 		name     string
