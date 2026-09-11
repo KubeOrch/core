@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -212,12 +213,17 @@ func TestTestDockerHubConnection_UnexpectedStatus(t *testing.T) {
 }
 
 func TestTestCustomRegistryConnection_CredentialsRejectedOn401(t *testing.T) {
-	const dummyPass = "dummy-secret-password"
+	const (
+		dummyUser = "dummy-user"
+		dummyPass = "dummy-secret-password"
+	)
 	customURL := "https://registry.example.com"
 	fake := newFakeHTTPClient(func(req *http.Request) (*http.Response, error) {
 		auth := req.Header.Get("Authorization")
-		assert.True(t, strings.HasPrefix(auth, "Basic "), "credentials must send a Basic Authorization header")
-		assert.NotContains(t, auth, dummyPass)
+		require.True(t, strings.HasPrefix(auth, "Basic "), "credentials must send a Basic Authorization header")
+		decoded, decErr := base64.StdEncoding.DecodeString(strings.TrimPrefix(auth, "Basic "))
+		require.NoError(t, decErr)
+		assert.Equal(t, dummyUser+":"+dummyPass, string(decoded))
 		return httpResponse(401, ""), nil
 	})
 	svc := newTestRegistryService(fake)
@@ -225,7 +231,7 @@ func TestTestCustomRegistryConnection_CredentialsRejectedOn401(t *testing.T) {
 		Name:         "my-custom-registry",
 		RegistryType: models.RegistryTypeCustom,
 		RegistryURL:  customURL,
-		Credentials:  models.RegistryCredentials{Username: "dummy-user", Password: dummyPass},
+		Credentials:  models.RegistryCredentials{Username: dummyUser, Password: dummyPass},
 	}
 	err := svc.testCustomRegistryConnection(context.Background(), registry)
 	require.Error(t, err)
@@ -410,18 +416,25 @@ func TestTestCustomRegistryConnection_CredentialValidation(t *testing.T) {
 			wantNoAuth: true,
 		},
 		{
-			name:       "username only is treated as unauthenticated 401 success",
+			name:       "username only is incomplete credentials",
 			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: regURL, Credentials: models.RegistryCredentials{Username: dummyUser}},
-			status:     401,
-			wantErr:    false,
-			wantNoAuth: true,
+			wantErr:    true,
+			errContain: "incomplete credentials",
+			skipHTTP:   true,
 		},
 		{
-			name:       "password only is treated as unauthenticated 401 success",
+			name:       "password only is incomplete credentials",
 			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: regURL, Credentials: models.RegistryCredentials{Password: dummyPass}},
-			status:     401,
-			wantErr:    false,
-			wantNoAuth: true,
+			wantErr:    true,
+			errContain: "incomplete credentials",
+			skipHTTP:   true,
+		},
+		{
+			name:       "credentials over http rejected",
+			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: "http://registry.example.com", Credentials: models.RegistryCredentials{Username: dummyUser, Password: dummyPass}},
+			wantErr:    true,
+			errContain: "require HTTPS",
+			skipHTTP:   true,
 		},
 		{
 			name:       "empty registry URL",
@@ -437,8 +450,10 @@ func TestTestCustomRegistryConnection_CredentialValidation(t *testing.T) {
 			fake := newFakeHTTPClient(func(req *http.Request) (*http.Response, error) {
 				if tt.checkAuth {
 					auth := req.Header.Get("Authorization")
-					assert.True(t, strings.HasPrefix(auth, "Basic "), "expected Basic auth header prefix")
-					assert.NotContains(t, auth, dummyPass)
+					require.True(t, strings.HasPrefix(auth, "Basic "), "expected Basic auth header prefix")
+					decoded, decErr := base64.StdEncoding.DecodeString(strings.TrimPrefix(auth, "Basic "))
+					require.NoError(t, decErr)
+					assert.Equal(t, dummyUser+":"+dummyPass, string(decoded))
 				}
 				if tt.wantNoAuth {
 					assert.Equal(t, "", req.Header.Get("Authorization"))
@@ -496,4 +511,11 @@ func TestAuthorizationHeaderFormat(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCustomRegistryLabel_RedactsURL(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "my-registry", customRegistryLabel(&models.Registry{Name: "my-registry", RegistryURL: "https://user:pass@registry.example.com/v2?token=secret#frag"}))
+	assert.Equal(t, "https://registry.example.com/v2", sanitizeRegistryURLForLabel("https://user:pass@registry.example.com/v2?token=secret#frag"))
+	assert.Equal(t, "http://registry.example.com", sanitizeRegistryURLForLabel("http://alice:s3cret@registry.example.com"))
 }

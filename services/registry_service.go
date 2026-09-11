@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -393,12 +394,28 @@ func (s *RegistryService) testCustomRegistryConnection(ctx context.Context, regi
 		return fmt.Errorf("registry URL is required")
 	}
 
+	hasUsername := registry.Credentials.Username != ""
+	hasPassword := registry.Credentials.Password != ""
+	if hasUsername != hasPassword {
+		return fmt.Errorf("incomplete credentials: registry %q requires both username and password, or neither", customRegistryLabel(registry))
+	}
+	credentialsConfigured := hasUsername && hasPassword
+
+	if credentialsConfigured {
+		parsed, err := url.Parse(registry.RegistryURL)
+		if err != nil {
+			return fmt.Errorf("invalid registry URL for %q: %w", customRegistryLabel(registry), err)
+		}
+		if !strings.EqualFold(parsed.Scheme, "https") {
+			return fmt.Errorf("insecure registry URL: credentials for registry %q require HTTPS", customRegistryLabel(registry))
+		}
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "GET", registry.RegistryURL+"/v2/", nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	credentialsConfigured := registry.Credentials.Username != "" && registry.Credentials.Password != ""
 	if credentialsConfigured {
 		auth := base64.StdEncoding.EncodeToString([]byte(registry.Credentials.Username + ":" + registry.Credentials.Password))
 		req.Header.Set("Authorization", "Basic "+auth)
@@ -432,7 +449,29 @@ func customRegistryLabel(registry *models.Registry) string {
 	if registry.Name != "" {
 		return registry.Name
 	}
-	return registry.RegistryURL
+	return sanitizeRegistryURLForLabel(registry.RegistryURL)
+}
+
+// sanitizeRegistryURLForLabel strips userinfo, query, and fragment before using a URL as an error label.
+func sanitizeRegistryURLForLabel(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		sanitized := raw
+		if i := strings.IndexAny(sanitized, "?#"); i >= 0 {
+			sanitized = sanitized[:i]
+		}
+		if scheme := strings.Index(sanitized, "://"); scheme >= 0 {
+			rest := sanitized[scheme+3:]
+			if at := strings.LastIndex(rest, "@"); at >= 0 {
+				sanitized = sanitized[:scheme+3] + rest[at+1:]
+			}
+		}
+		return sanitized
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 // getECRAuthToken retrieves a temporary auth token from AWS ECR
