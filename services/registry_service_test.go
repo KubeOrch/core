@@ -317,12 +317,41 @@ func TestInjectedClientIsUsed(t *testing.T) {
 // NewRegistryService() requires Mongo, so we verify the same construction it uses
 // (&http.Client{Timeout: 10*time.Second}) implements httpClient.
 func TestNewRegistryService_HasDefaultClient(t *testing.T) {
-	client := &http.Client{Timeout: 10 * time.Second}
+	// Mirror NewRegistryService client construction without touching Mongo.
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) == 0 {
+				return nil
+			}
+			if via[0].Header.Get("Authorization") != "" {
+				return fmt.Errorf("redirect not allowed for credentialed registry checks")
+			}
+			if !strings.EqualFold(req.URL.Scheme, "https") {
+				return fmt.Errorf("redirect to non-HTTPS not allowed")
+			}
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			return nil
+		},
+	}
 	var hc httpClient = client
 	require.NotNil(t, hc)
 	_, ok := hc.(*http.Client)
 	assert.True(t, ok, "production client should be *http.Client")
 	assert.Equal(t, 10*time.Second, client.Timeout)
+	require.NotNil(t, client.CheckRedirect)
+
+	orig, err := http.NewRequest(http.MethodGet, "https://registry.example.com/v2/", nil)
+	require.NoError(t, err)
+	orig.Header.Set("Authorization", "Basic dXNlcjpwYXNz")
+	redir, err := http.NewRequest(http.MethodGet, "http://registry.example.com/v2/", nil)
+	require.NoError(t, err)
+	err = client.CheckRedirect(redir, []*http.Request{orig})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "redirect not allowed for credentialed registry checks")
+
 	svc := newTestRegistryService(client)
 	require.NotNil(t, svc.httpClient)
 }
