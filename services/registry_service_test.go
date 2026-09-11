@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"encoding/json"
 	"errors"
 	"io"
@@ -437,6 +438,20 @@ func TestTestCustomRegistryConnection_CredentialValidation(t *testing.T) {
 			skipHTTP:   true,
 		},
 		{
+			name:       "URL userinfo rejected",
+			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: "http://user:password@registry.example.com", Credentials: models.RegistryCredentials{}},
+			wantErr:    true,
+			errContain: "must not be embedded in the URL",
+			skipHTTP:   true,
+		},
+		{
+			name:       "malformed URL with userinfo does not leak",
+			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: "https://user:pass@registry.example/%zz", Credentials: models.RegistryCredentials{Username: dummyUser, Password: dummyPass}},
+			wantErr:    true,
+			errContain: "invalid registry URL",
+			skipHTTP:   true,
+		},
+		{
 			name:       "empty registry URL",
 			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, Credentials: models.RegistryCredentials{Username: dummyUser, Password: dummyPass}},
 			wantErr:    true,
@@ -467,6 +482,8 @@ func TestTestCustomRegistryConnection_CredentialValidation(t *testing.T) {
 			err := svc.testCustomRegistryConnection(context.Background(), tt.registry)
 			if tt.skipHTTP {
 				assert.Equal(t, 0, fake.callCount)
+			} else {
+				assert.Equal(t, 1, fake.callCount)
 			}
 			if tt.wantErr {
 				require.Error(t, err)
@@ -518,4 +535,23 @@ func TestCustomRegistryLabel_RedactsURL(t *testing.T) {
 	assert.Equal(t, "my-registry", customRegistryLabel(&models.Registry{Name: "my-registry", RegistryURL: "https://user:pass@registry.example.com/v2?token=secret#frag"}))
 	assert.Equal(t, "https://registry.example.com/v2", sanitizeRegistryURLForLabel("https://user:pass@registry.example.com/v2?token=secret#frag"))
 	assert.Equal(t, "http://registry.example.com", sanitizeRegistryURLForLabel("http://alice:s3cret@registry.example.com"))
+	assert.Equal(t, "invalid registry URL", sanitizeRegistryURLForLabel("user:secret@registry.example.com"))
+	assert.Equal(t, "invalid registry URL", sanitizeRegistryURLForLabel("//user:secret@registry.example.com"))
+}
+
+func TestTestCustomRegistryConnection_TransportErrorDoesNotLeakURL(t *testing.T) {
+	sensitive := "https://leaked-user:leaked-pass@registry.example.com/v2?token=abc"
+	fake := newFakeHTTPClient(func(req *http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("Get %q: connection reset", sensitive)
+	})
+	svc := newTestRegistryService(fake)
+	registry := &models.Registry{Name: "safe-name", RegistryType: models.RegistryTypeCustom, RegistryURL: "https://registry.example.com", Credentials: models.RegistryCredentials{Username: "u", Password: "p"}}
+	err := svc.testCustomRegistryConnection(context.Background(), registry)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "connection failed")
+	assert.Contains(t, err.Error(), "safe-name")
+	assert.NotContains(t, err.Error(), "leaked-user")
+	assert.NotContains(t, err.Error(), "leaked-pass")
+	assert.NotContains(t, err.Error(), "token=abc")
+	assert.NotContains(t, err.Error(), sensitive)
 }

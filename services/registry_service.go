@@ -394,6 +394,15 @@ func (s *RegistryService) testCustomRegistryConnection(ctx context.Context, regi
 		return fmt.Errorf("registry URL is required")
 	}
 
+	// Parse first so URL userinfo cannot bypass credential classification / HTTPS checks.
+	parsed, err := url.Parse(registry.RegistryURL)
+	if err != nil {
+		return fmt.Errorf("invalid registry URL for %q", customRegistryLabel(registry))
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("invalid registry URL for %q: credentials must not be embedded in the URL", customRegistryLabel(registry))
+	}
+
 	hasUsername := registry.Credentials.Username != ""
 	hasPassword := registry.Credentials.Password != ""
 	if hasUsername != hasPassword {
@@ -402,10 +411,6 @@ func (s *RegistryService) testCustomRegistryConnection(ctx context.Context, regi
 	credentialsConfigured := hasUsername && hasPassword
 
 	if credentialsConfigured {
-		parsed, err := url.Parse(registry.RegistryURL)
-		if err != nil {
-			return fmt.Errorf("invalid registry URL for %q: %w", customRegistryLabel(registry), err)
-		}
 		if !strings.EqualFold(parsed.Scheme, "https") {
 			return fmt.Errorf("insecure registry URL: credentials for registry %q require HTTPS", customRegistryLabel(registry))
 		}
@@ -413,7 +418,7 @@ func (s *RegistryService) testCustomRegistryConnection(ctx context.Context, regi
 
 	req, err := http.NewRequestWithContext(ctx, "GET", registry.RegistryURL+"/v2/", nil)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return fmt.Errorf("failed to create request for registry %q", customRegistryLabel(registry))
 	}
 
 	if credentialsConfigured {
@@ -423,7 +428,8 @@ func (s *RegistryService) testCustomRegistryConnection(ctx context.Context, regi
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("connection failed: unable to reach registry %q: %w", customRegistryLabel(registry), err)
+		// Do not wrap the transport error: *http.Client may include URL userinfo/query.
+		return fmt.Errorf("connection failed: unable to reach registry %q", customRegistryLabel(registry))
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -456,17 +462,7 @@ func customRegistryLabel(registry *models.Registry) string {
 func sanitizeRegistryURLForLabel(raw string) string {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		sanitized := raw
-		if i := strings.IndexAny(sanitized, "?#"); i >= 0 {
-			sanitized = sanitized[:i]
-		}
-		if scheme := strings.Index(sanitized, "://"); scheme >= 0 {
-			rest := sanitized[scheme+3:]
-			if at := strings.LastIndex(rest, "@"); at >= 0 {
-				sanitized = sanitized[:scheme+3] + rest[at+1:]
-			}
-		}
-		return sanitized
+		return "invalid registry URL"
 	}
 	parsed.User = nil
 	parsed.RawQuery = ""
