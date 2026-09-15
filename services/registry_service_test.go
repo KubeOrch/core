@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"encoding/base64"
+	"fmt"
 	"encoding/json"
 	"errors"
 	"io"
@@ -211,15 +213,33 @@ func TestTestDockerHubConnection_UnexpectedStatus(t *testing.T) {
 	assert.Contains(t, err.Error(), "unexpected status code: 500")
 }
 
-func TestTestCustomRegistryConnection_NoAuthHeader(t *testing.T) {
+func TestTestCustomRegistryConnection_CredentialsRejectedOn401(t *testing.T) {
+	const (
+		dummyUser = "dummy-user"
+		dummyPass = "dummy-secret-password"
+	)
 	customURL := "https://registry.example.com"
 	fake := newFakeHTTPClient(func(req *http.Request) (*http.Response, error) {
-		assert.Equal(t, "", req.Header.Get("Authorization"))
+		auth := req.Header.Get("Authorization")
+		require.True(t, strings.HasPrefix(auth, "Basic "), "credentials must send a Basic Authorization header")
+		decoded, decErr := base64.StdEncoding.DecodeString(strings.TrimPrefix(auth, "Basic "))
+		require.NoError(t, decErr)
+		assert.Equal(t, dummyUser+":"+dummyPass, string(decoded))
 		return httpResponse(401, ""), nil
 	})
 	svc := newTestRegistryService(fake)
-	registry := &models.Registry{RegistryType: models.RegistryTypeCustom, RegistryURL: customURL}
-	require.NoError(t, svc.testCustomRegistryConnection(context.Background(), registry))
+	registry := &models.Registry{
+		Name:         "my-custom-registry",
+		RegistryType: models.RegistryTypeCustom,
+		RegistryURL:  customURL,
+		Credentials:  models.RegistryCredentials{Username: dummyUser, Password: dummyPass},
+	}
+	err := svc.testCustomRegistryConnection(context.Background(), registry)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "authentication failed")
+	assert.Contains(t, err.Error(), "my-custom-registry")
+	assert.NotContains(t, err.Error(), dummyPass)
+	assert.NotContains(t, err.Error(), "Authorization")
 }
 
 func TestTestGCRConnection_Success(t *testing.T) {
@@ -297,14 +317,218 @@ func TestInjectedClientIsUsed(t *testing.T) {
 // NewRegistryService() requires Mongo, so we verify the same construction it uses
 // (&http.Client{Timeout: 10*time.Second}) implements httpClient.
 func TestNewRegistryService_HasDefaultClient(t *testing.T) {
-	client := &http.Client{Timeout: 10 * time.Second}
+	// Mirror NewRegistryService client construction without touching Mongo.
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) == 0 {
+				return nil
+			}
+			if via[0].Header.Get("Authorization") != "" {
+				return fmt.Errorf("redirect not allowed for credentialed registry checks")
+			}
+			if !strings.EqualFold(req.URL.Scheme, "https") {
+				return fmt.Errorf("redirect to non-HTTPS not allowed")
+			}
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			return nil
+		},
+	}
 	var hc httpClient = client
 	require.NotNil(t, hc)
 	_, ok := hc.(*http.Client)
 	assert.True(t, ok, "production client should be *http.Client")
 	assert.Equal(t, 10*time.Second, client.Timeout)
+	require.NotNil(t, client.CheckRedirect)
+
+	orig, err := http.NewRequest(http.MethodGet, "https://registry.example.com/v2/", nil)
+	require.NoError(t, err)
+	orig.Header.Set("Authorization", "Basic dXNlcjpwYXNz")
+	redir, err := http.NewRequest(http.MethodGet, "http://registry.example.com/v2/", nil)
+	require.NoError(t, err)
+	err = client.CheckRedirect(redir, []*http.Request{orig})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "redirect not allowed for credentialed registry checks")
+
 	svc := newTestRegistryService(client)
 	require.NotNil(t, svc.httpClient)
+}
+
+// --- Custom registry credential validation (issue #131) ---
+
+func TestTestCustomRegistryConnection_CredentialValidation(t *testing.T) {
+	const (
+		dummyUser = "dummy-user"
+		dummyPass = "dummy-secret-password"
+		regURL    = "https://registry.example.com"
+		regName   = "my-custom-registry"
+	)
+
+	tests := []struct {
+		name       string
+		registry   *models.Registry
+		status     int
+		transport  bool
+		wantErr    bool
+		errContain string
+		checkAuth  bool
+		wantNoAuth bool
+		skipHTTP   bool
+	}{
+		{
+			name:      "2xx success with credentials",
+			registry:  &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: regURL, Credentials: models.RegistryCredentials{Username: dummyUser, Password: dummyPass}},
+			status:    200,
+			wantErr:   false,
+			checkAuth: true,
+		},
+		{
+			name:      "204 success with credentials",
+			registry:  &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: regURL, Credentials: models.RegistryCredentials{Username: dummyUser, Password: dummyPass}},
+			status:    204,
+			wantErr:   false,
+			checkAuth: true,
+		},
+		{
+			name:       "401 auth failure when credentials configured",
+			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: regURL, Credentials: models.RegistryCredentials{Username: dummyUser, Password: dummyPass}},
+			status:     401,
+			wantErr:    true,
+			errContain: "authentication failed",
+			checkAuth:  true,
+		},
+		{
+			name:       "403 auth failure when credentials configured",
+			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: regURL, Credentials: models.RegistryCredentials{Username: dummyUser, Password: dummyPass}},
+			status:     403,
+			wantErr:    true,
+			errContain: "authentication failed",
+			checkAuth:  true,
+		},
+		{
+			name:       "unexpected status 500",
+			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: regURL, Credentials: models.RegistryCredentials{Username: dummyUser, Password: dummyPass}},
+			status:     500,
+			wantErr:    true,
+			errContain: "unexpected status",
+			checkAuth:  true,
+		},
+		{
+			name:       "transport failure",
+			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: regURL, Credentials: models.RegistryCredentials{Username: dummyUser, Password: dummyPass}},
+			transport:  true,
+			wantErr:    true,
+			errContain: "connection failed",
+			checkAuth:  true,
+		},
+		{
+			name:       "no credentials 401 is reachability success",
+			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: regURL},
+			status:     401,
+			wantErr:    false,
+			wantNoAuth: true,
+		},
+		{
+			name:       "no credentials 2xx succeeds",
+			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: regURL},
+			status:     200,
+			wantErr:    false,
+			wantNoAuth: true,
+		},
+		{
+			name:       "no credentials 403 is unexpected status",
+			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: regURL},
+			status:     403,
+			wantErr:    true,
+			errContain: "unexpected status",
+			wantNoAuth: true,
+		},
+		{
+			name:       "username only is incomplete credentials",
+			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: regURL, Credentials: models.RegistryCredentials{Username: dummyUser}},
+			wantErr:    true,
+			errContain: "incomplete credentials",
+			skipHTTP:   true,
+		},
+		{
+			name:       "password only is incomplete credentials",
+			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: regURL, Credentials: models.RegistryCredentials{Password: dummyPass}},
+			wantErr:    true,
+			errContain: "incomplete credentials",
+			skipHTTP:   true,
+		},
+		{
+			name:       "credentials over http rejected",
+			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: "http://registry.example.com", Credentials: models.RegistryCredentials{Username: dummyUser, Password: dummyPass}},
+			wantErr:    true,
+			errContain: "require HTTPS",
+			skipHTTP:   true,
+		},
+		{
+			name:       "URL userinfo rejected",
+			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: "http://user:password@registry.example.com", Credentials: models.RegistryCredentials{}},
+			wantErr:    true,
+			errContain: "must not be embedded in the URL",
+			skipHTTP:   true,
+		},
+		{
+			name:       "malformed URL with userinfo does not leak",
+			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, RegistryURL: "https://user:pass@registry.example/%zz", Credentials: models.RegistryCredentials{Username: dummyUser, Password: dummyPass}},
+			wantErr:    true,
+			errContain: "invalid registry URL",
+			skipHTTP:   true,
+		},
+		{
+			name:       "empty registry URL",
+			registry:   &models.Registry{Name: regName, RegistryType: models.RegistryTypeCustom, Credentials: models.RegistryCredentials{Username: dummyUser, Password: dummyPass}},
+			wantErr:    true,
+			errContain: "registry URL is required",
+			skipHTTP:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := newFakeHTTPClient(func(req *http.Request) (*http.Response, error) {
+				if tt.checkAuth {
+					auth := req.Header.Get("Authorization")
+					require.True(t, strings.HasPrefix(auth, "Basic "), "expected Basic auth header prefix")
+					decoded, decErr := base64.StdEncoding.DecodeString(strings.TrimPrefix(auth, "Basic "))
+					require.NoError(t, decErr)
+					assert.Equal(t, dummyUser+":"+dummyPass, string(decoded))
+				}
+				if tt.wantNoAuth {
+					assert.Equal(t, "", req.Header.Get("Authorization"))
+				}
+				if tt.transport {
+					return transportError()
+				}
+				return httpResponse(tt.status, ""), nil
+			})
+			svc := newTestRegistryService(fake)
+			err := svc.testCustomRegistryConnection(context.Background(), tt.registry)
+			if tt.skipHTTP {
+				assert.Equal(t, 0, fake.callCount)
+			} else {
+				assert.Equal(t, 1, fake.callCount)
+			}
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContain)
+				if tt.errContain != "registry URL is required" {
+					assert.Contains(t, err.Error(), regName)
+				}
+				assert.NotContains(t, err.Error(), dummyPass)
+				assert.NotContains(t, err.Error(), dummyUser)
+				assert.NotContains(t, err.Error(), "Authorization")
+				assert.NotContains(t, err.Error(), "Basic ")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestAuthorizationHeaderFormat(t *testing.T) {
@@ -333,4 +557,30 @@ func TestAuthorizationHeaderFormat(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCustomRegistryLabel_RedactsURL(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "my-registry", customRegistryLabel(&models.Registry{Name: "my-registry", RegistryURL: "https://user:pass@registry.example.com/v2?token=secret#frag"}))
+	assert.Equal(t, "https://registry.example.com/v2", sanitizeRegistryURLForLabel("https://user:pass@registry.example.com/v2?token=secret#frag"))
+	assert.Equal(t, "http://registry.example.com", sanitizeRegistryURLForLabel("http://alice:s3cret@registry.example.com"))
+	assert.Equal(t, "invalid registry URL", sanitizeRegistryURLForLabel("user:secret@registry.example.com"))
+	assert.Equal(t, "invalid registry URL", sanitizeRegistryURLForLabel("//user:secret@registry.example.com"))
+}
+
+func TestTestCustomRegistryConnection_TransportErrorDoesNotLeakURL(t *testing.T) {
+	sensitive := "https://leaked-user:leaked-pass@registry.example.com/v2?token=abc"
+	fake := newFakeHTTPClient(func(req *http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("Get %q: connection reset", sensitive)
+	})
+	svc := newTestRegistryService(fake)
+	registry := &models.Registry{Name: "safe-name", RegistryType: models.RegistryTypeCustom, RegistryURL: "https://registry.example.com", Credentials: models.RegistryCredentials{Username: "u", Password: "p"}}
+	err := svc.testCustomRegistryConnection(context.Background(), registry)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "connection failed")
+	assert.Contains(t, err.Error(), "safe-name")
+	assert.NotContains(t, err.Error(), "leaked-user")
+	assert.NotContains(t, err.Error(), "leaked-pass")
+	assert.NotContains(t, err.Error(), "token=abc")
+	assert.NotContains(t, err.Error(), sensitive)
 }

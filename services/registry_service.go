@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -33,9 +34,28 @@ type RegistryService struct {
 
 func NewRegistryService() *RegistryService {
 	return &RegistryService{
-		repo:       repositories.NewRegistryRepository(),
-		logger:     logrus.New(),
-		httpClient: &http.Client{Timeout: 10 * time.Second},
+		repo:   repositories.NewRegistryRepository(),
+		logger: logrus.New(),
+		httpClient: &http.Client{
+			Timeout: 10 * time.Second,
+			// Credentialed probes must not follow redirects: default Go policy can keep
+			// Authorization across same-host/subdomain redirects including HTTPS→HTTP.
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) == 0 {
+					return nil
+				}
+				if via[0].Header.Get("Authorization") != "" {
+					return fmt.Errorf("redirect not allowed for credentialed registry checks")
+				}
+				if !strings.EqualFold(req.URL.Scheme, "https") {
+					return fmt.Errorf("redirect to non-HTTPS not allowed")
+				}
+				if len(via) >= 10 {
+					return fmt.Errorf("stopped after 10 redirects")
+				}
+				return nil
+			},
+		},
 	}
 }
 
@@ -393,27 +413,80 @@ func (s *RegistryService) testCustomRegistryConnection(ctx context.Context, regi
 		return fmt.Errorf("registry URL is required")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", registry.RegistryURL+"/v2/", nil)
+	// Parse first so URL userinfo cannot bypass credential classification / HTTPS checks.
+	parsed, err := url.Parse(registry.RegistryURL)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return fmt.Errorf("invalid registry URL for %q", customRegistryLabel(registry))
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("invalid registry URL for %q: credentials must not be embedded in the URL", customRegistryLabel(registry))
 	}
 
-	if registry.Credentials.Username != "" && registry.Credentials.Password != "" {
+	hasUsername := registry.Credentials.Username != ""
+	hasPassword := registry.Credentials.Password != ""
+	if hasUsername != hasPassword {
+		return fmt.Errorf("incomplete credentials: registry %q requires both username and password, or neither", customRegistryLabel(registry))
+	}
+	credentialsConfigured := hasUsername && hasPassword
+
+	if credentialsConfigured {
+		if !strings.EqualFold(parsed.Scheme, "https") {
+			return fmt.Errorf("insecure registry URL: credentials for registry %q require HTTPS", customRegistryLabel(registry))
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", registry.RegistryURL+"/v2/", nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request for registry %q", customRegistryLabel(registry))
+	}
+
+	if credentialsConfigured {
 		auth := base64.StdEncoding.EncodeToString([]byte(registry.Credentials.Username + ":" + registry.Credentials.Password))
 		req.Header.Set("Authorization", "Basic "+auth)
 	}
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("connection failed: %w", err)
+		// Do not wrap the transport error: *http.Client may include URL userinfo/query.
+		return fmt.Errorf("connection failed: unable to reach registry %q", customRegistryLabel(registry))
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode == 200 || resp.StatusCode == 401 {
+	// Success requires an authenticated 2xx when credentials are configured.
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
 	}
 
-	return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	if credentialsConfigured && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+		return fmt.Errorf("authentication failed: registry %q rejected credentials with HTTP %d", customRegistryLabel(registry), resp.StatusCode)
+	}
+
+	// Without credentials, 401 indicates the /v2/ endpoint is reachable (auth challenge).
+	if !credentialsConfigured && resp.StatusCode == http.StatusUnauthorized {
+		return nil
+	}
+
+	return fmt.Errorf("unexpected status: registry %q returned HTTP %d", customRegistryLabel(registry), resp.StatusCode)
+}
+
+// customRegistryLabel identifies a registry in errors without credential material.
+func customRegistryLabel(registry *models.Registry) string {
+	if registry.Name != "" {
+		return registry.Name
+	}
+	return sanitizeRegistryURLForLabel(registry.RegistryURL)
+}
+
+// sanitizeRegistryURLForLabel strips userinfo, query, and fragment before using a URL as an error label.
+func sanitizeRegistryURLForLabel(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "invalid registry URL"
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 // getECRAuthToken retrieves a temporary auth token from AWS ECR
