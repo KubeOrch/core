@@ -42,18 +42,6 @@ func NewWorkflowExecutor() *WorkflowExecutor {
 	}
 }
 
-// toSlice converts a value to []interface{}, handling both primitive.A (from MongoDB)
-// and plain []interface{} types. Returns nil if the value is neither type.
-func toSlice(v interface{}) []interface{} {
-	if a, ok := v.(primitive.A); ok {
-		return []interface{}(a)
-	}
-	if s, ok := v.([]interface{}); ok {
-		return s
-	}
-	return nil
-}
-
 // ExecuteWorkflow executes a workflow with optional runtime data (e.g., secret values)
 func (e *WorkflowExecutor) ExecuteWorkflow(ctx context.Context, workflowID primitive.ObjectID, userID primitive.ObjectID, runtimeData map[string]interface{}) (*models.WorkflowRun, error) {
 	// Get workflow
@@ -1004,7 +992,7 @@ func (e *WorkflowExecutor) prepareIngressTemplateValues(node *models.WorkflowNod
 	if tlsSecretName, ok := ingressData["tlsSecretName"].(string); ok {
 		values["TLSSecretName"] = tlsSecretName
 	}
-	if tlsHosts := toSlice(ingressData["tlsHosts"]); tlsHosts != nil {
+	if tlsHosts := toBsonSlice(ingressData["tlsHosts"]); tlsHosts != nil {
 		values["TLSHosts"] = tlsHosts
 	}
 
@@ -1052,7 +1040,7 @@ func (e *WorkflowExecutor) prepareServiceTemplateValues(node *models.WorkflowNod
 	if targetPort, ok := serviceData["targetPort"]; ok {
 		values["TargetPort"] = targetPort
 	}
-	if ports := toSlice(serviceData["ports"]); ports != nil {
+	if ports := toBsonSlice(serviceData["ports"]); ports != nil {
 		values["Ports"] = ports
 	}
 	if selector, ok := serviceData["selector"].(map[string]interface{}); ok {
@@ -1072,7 +1060,7 @@ func (e *WorkflowExecutor) prepareServiceTemplateValues(node *models.WorkflowNod
 	if loadBalancerIP, ok := serviceData["loadBalancerIP"].(string); ok {
 		values["LoadBalancerIP"] = loadBalancerIP
 	}
-	if sourceRanges := toSlice(serviceData["loadBalancerSourceRanges"]); sourceRanges != nil {
+	if sourceRanges := toBsonSlice(serviceData["loadBalancerSourceRanges"]); sourceRanges != nil {
 		values["LoadBalancerSourceRanges"] = sourceRanges
 	}
 	if externalTrafficPolicy, ok := serviceData["externalTrafficPolicy"].(string); ok {
@@ -2714,148 +2702,6 @@ func (e *WorkflowExecutor) updateIngressNodeStatus(workflowID primitive.ObjectID
 	return nil
 }
 
-// SyncWorkflowStatuses updates the status of all workflow nodes based on current K8s state
-func (e *WorkflowExecutor) SyncWorkflowStatuses(ctx context.Context, userID primitive.ObjectID, cluster *models.Cluster) error {
-	// Get all published workflows for this user and cluster (ClusterID in workflow is the cluster Name)
-	workflows, err := GetWorkflowsByUserAndCluster(userID, cluster.Name)
-	if err != nil {
-		return fmt.Errorf("failed to get workflows: %w", err)
-	}
-
-	e.logger.WithFields(logrus.Fields{
-		"user_id":        userID.Hex(),
-		"cluster_name":   cluster.Name,
-		"workflow_count": len(workflows),
-	}).Debug("Syncing workflow statuses")
-
-	auth := e.clusterService.ClusterToAuthConfig(cluster)
-	config, err := auth.BuildRESTConfig()
-	if err != nil {
-		return fmt.Errorf("failed to build K8s config: %w", err)
-	}
-
-	manifestApplier, err := applier.NewManifestApplier(config, "default")
-	if err != nil {
-		return fmt.Errorf("failed to create manifest applier: %w", err)
-	}
-
-	for _, workflow := range workflows {
-		// Only sync published workflows that have been run
-		if workflow.Status != models.WorkflowStatusPublished || workflow.RunCount == 0 {
-			e.logger.WithFields(logrus.Fields{
-				"workflow_id": workflow.ID.Hex(),
-				"status":      workflow.Status,
-				"run_count":   workflow.RunCount,
-			}).Debug("Skipping workflow - not published or not run")
-			continue
-		}
-
-		e.logger.WithFields(logrus.Fields{
-			"workflow_id": workflow.ID.Hex(),
-			"name":        workflow.Name,
-			"node_count":  len(workflow.Nodes),
-		}).Info("Syncing workflow status")
-
-		updated := false
-		for i, node := range workflow.Nodes {
-			nodeType, _ := node.Data["templateId"].(string)
-			name, _ := node.Data["name"].(string)
-			namespace, _ := node.Data["namespace"].(string)
-			if namespace == "" {
-				namespace = "default"
-			}
-
-			if nodeType == "core/deployment" {
-				status, err := manifestApplier.GetDeploymentStatus(ctx, name, namespace)
-				if err != nil {
-					continue // Resource might not exist
-				}
-				workflow.Nodes[i].Data["_status"] = map[string]interface{}{
-					"state":         status.State,
-					"replicas":      status.Replicas,
-					"readyReplicas": status.ReadyReplicas,
-					"message":       status.Message,
-				}
-				updated = true
-			} else if nodeType == "core/service" {
-				status, err := manifestApplier.GetServiceStatus(ctx, name, namespace)
-				if err != nil {
-					continue // Resource might not exist
-				}
-				workflow.Nodes[i].Data["_status"] = map[string]interface{}{
-					"state":      status.State,
-					"clusterIP":  status.ClusterIP,
-					"externalIP": status.ExternalIP,
-					"nodePort":   status.NodePort,
-					"message":    status.Message,
-				}
-				updated = true
-			} else if nodeType == "core/ingress" {
-				status, err := manifestApplier.GetIngressStatus(ctx, name, namespace)
-				if err != nil {
-					continue // Resource might not exist
-				}
-				workflow.Nodes[i].Data["_status"] = map[string]interface{}{
-					"state":                status.State,
-					"loadBalancerIP":       status.LoadBalancerIP,
-					"loadBalancerHostname": status.LoadBalancerHostname,
-					"rulesCount":           status.RulesCount,
-					"message":              status.Message,
-				}
-				updated = true
-			} else if nodeType == "core/statefulset" {
-				status, err := manifestApplier.GetStatefulSetStatus(ctx, name, namespace)
-				if err != nil {
-					continue // Resource might not exist
-				}
-				workflow.Nodes[i].Data["_status"] = map[string]interface{}{
-					"state":           status.State,
-					"replicas":        status.Replicas,
-					"readyReplicas":   status.ReadyReplicas,
-					"currentReplicas": status.CurrentReplicas,
-					"message":         status.Message,
-				}
-				updated = true
-			}
-		}
-
-		if updated {
-			// Save updated workflow
-			filter := bson.M{"_id": workflow.ID}
-			update := bson.M{
-				"$set": bson.M{
-					"nodes":      workflow.Nodes,
-					"updated_at": time.Now(),
-				},
-			}
-			_, err = database.WorkflowColl.UpdateOne(ctx, filter, update)
-			if err != nil {
-				e.logger.WithError(err).Warnf("Failed to update workflow %s status", workflow.ID.Hex())
-			} else {
-				e.logger.WithFields(logrus.Fields{
-					"workflow_id": workflow.ID.Hex(),
-					"node_count":  len(workflow.Nodes),
-				}).Info("Workflow status updated, broadcasting to SSE subscribers")
-
-				// Publish workflow sync event to SSE subscribers
-				broadcaster := GetSSEBroadcaster()
-				broadcaster.Publish(StreamEvent{
-					Type:      "workflow",
-					StreamKey: fmt.Sprintf("workflow:%s", workflow.ID.Hex()),
-					EventType: "workflow_sync",
-					Data: map[string]interface{}{
-						"nodes": workflow.Nodes,
-					},
-				})
-			}
-		} else {
-			e.logger.WithField("workflow_id", workflow.ID.Hex()).Debug("No status changes detected for workflow")
-		}
-	}
-
-	return nil
-}
-
 // CleanupWorkflowResources deletes all Kubernetes resources created by a workflow
 func (e *WorkflowExecutor) CleanupWorkflowResources(ctx context.Context, workflow *models.Workflow, userID primitive.ObjectID) error {
 	e.logger.WithFields(logrus.Fields{
@@ -3352,11 +3198,11 @@ func (e *WorkflowExecutor) prepareJobTemplateValues(node *models.WorkflowNode, j
 		values["Image"] = image
 	}
 
-	if command := toSlice(jobData["command"]); command != nil {
+	if command := toBsonSlice(jobData["command"]); command != nil {
 		values["Command"] = command
 	}
 
-	if args := toSlice(jobData["args"]); args != nil {
+	if args := toBsonSlice(jobData["args"]); args != nil {
 		values["Args"] = args
 	}
 
@@ -3392,7 +3238,7 @@ func (e *WorkflowExecutor) prepareJobTemplateValues(node *models.WorkflowNode, j
 		values["Resources"] = resources
 	}
 
-	if volumeMounts := toSlice(jobData["volumeMounts"]); volumeMounts != nil {
+	if volumeMounts := toBsonSlice(jobData["volumeMounts"]); volumeMounts != nil {
 		values["VolumeMounts"] = volumeMounts
 	}
 
@@ -3504,11 +3350,11 @@ func (e *WorkflowExecutor) prepareCronJobTemplateValues(node *models.WorkflowNod
 		values["Image"] = image
 	}
 
-	if command := toSlice(cronJobData["command"]); command != nil {
+	if command := toBsonSlice(cronJobData["command"]); command != nil {
 		values["Command"] = command
 	}
 
-	if args := toSlice(cronJobData["args"]); args != nil {
+	if args := toBsonSlice(cronJobData["args"]); args != nil {
 		values["Args"] = args
 	}
 
@@ -3544,7 +3390,7 @@ func (e *WorkflowExecutor) prepareCronJobTemplateValues(node *models.WorkflowNod
 		values["Resources"] = resources
 	}
 
-	if volumeMounts := toSlice(cronJobData["volumeMounts"]); volumeMounts != nil {
+	if volumeMounts := toBsonSlice(cronJobData["volumeMounts"]); volumeMounts != nil {
 		values["VolumeMounts"] = volumeMounts
 	}
 
@@ -3668,7 +3514,7 @@ func (e *WorkflowExecutor) prepareDaemonSetTemplateValues(node *models.WorkflowN
 		values["NodeSelector"] = nodeSelector
 	}
 
-	if tolerations := toSlice(daemonSetData["tolerations"]); tolerations != nil {
+	if tolerations := toBsonSlice(daemonSetData["tolerations"]); tolerations != nil {
 		values["Tolerations"] = tolerations
 	}
 
@@ -3688,7 +3534,7 @@ func (e *WorkflowExecutor) prepareDaemonSetTemplateValues(node *models.WorkflowN
 		values["Resources"] = resources
 	}
 
-	if volumeMounts := toSlice(daemonSetData["volumeMounts"]); volumeMounts != nil {
+	if volumeMounts := toBsonSlice(daemonSetData["volumeMounts"]); volumeMounts != nil {
 		values["VolumeMounts"] = volumeMounts
 	}
 
@@ -3938,15 +3784,15 @@ func (e *WorkflowExecutor) prepareNetworkPolicyTemplateValues(node *models.Workf
 		values["PodSelector"] = podSelector
 	}
 
-	if policyTypes := toSlice(npData["policyTypes"]); policyTypes != nil {
+	if policyTypes := toBsonSlice(npData["policyTypes"]); policyTypes != nil {
 		values["PolicyTypes"] = policyTypes
 	}
 
-	if ingressRules := toSlice(npData["ingressRules"]); ingressRules != nil {
+	if ingressRules := toBsonSlice(npData["ingressRules"]); ingressRules != nil {
 		values["IngressRules"] = ingressRules
 	}
 
-	if egressRules := toSlice(npData["egressRules"]); egressRules != nil {
+	if egressRules := toBsonSlice(npData["egressRules"]); egressRules != nil {
 		values["EgressRules"] = egressRules
 	}
 

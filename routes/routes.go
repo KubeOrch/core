@@ -48,7 +48,6 @@ func SetupRouter() *gin.Engine {
 	v1 := r.Group("/v1")
 	{
 		v1.Use(middleware.LogsMiddleware())
-		v1.GET("", handlers.HelloHandler)
 
 		// Auth routes
 		auth := v1.Group("/api/auth")

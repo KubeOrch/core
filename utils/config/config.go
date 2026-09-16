@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/KubeOrch/core/models"
 	"github.com/fsnotify/fsnotify"
@@ -50,10 +49,6 @@ func GetPort() string {
 
 func GetGinMode() string {
 	return viper.GetString("GIN_MODE")
-}
-
-func GetEnv(key string) string {
-	return os.Getenv(key)
 }
 
 func GetMongoURI() string {

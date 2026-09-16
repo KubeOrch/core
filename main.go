@@ -96,10 +96,6 @@ func main() {
 	alertEvaluator := services.NewAlertEvaluator(60 * time.Second)
 	alertEvaluator.Start()
 
-	// Resource sync monitor disabled - real-time watchers now handle status updates
-	// resourceSyncMonitor := services.NewResourceSyncMonitor(5 * time.Minute)
-	// resourceSyncMonitor.Start()
-
 	// Initialize unified SSE broadcaster for real-time updates (workflows, pod logs, etc.)
 	broadcaster := services.GetSSEBroadcaster()
 	defer broadcaster.Close()
